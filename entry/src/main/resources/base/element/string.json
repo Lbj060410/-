@@ -1,0 +1,32 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "SaveScreenshot",
+      "value": "用于保存截图到本地相册"
+    },
+    {
+      "name": "readScreenshot",
+      "value": "用于读取本地相册"
+    },
+    {
+      "name": "writeScreenshot",
+      "value": "用于写入本地相册"
+    },
+    {
+      "name": "outputScreenshot",
+      "value": "用于读取本地相册"
+    }
+  ]
+}

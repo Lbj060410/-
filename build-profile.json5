@@ -1,0 +1,49 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\来不及捂手\\.ohos\\config\\auto_debug_car_com.example.car_10086000832401215.cer",
+          "storePassword": "0000001BA8CA3BDB0BE7AC0F861F314F5DFB2A88368888390272B5E076105272CBFA0891497E2C79E75125",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B81C0B4F3FEEB98C8C7D3930F38131782C50A5ADC7AB0C8B81CB563DC198E0DA390B019A891B7DB",
+          "profile": "C:\\Users\\来不及捂手\\.ohos\\config\\auto_debug_car_com.example.car_10086000832401215.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\来不及捂手\\.ohos\\config\\auto_debug_car_com.example.car_10086000832401215.p12"
+        }
+      }
+    ],
+    "compileSdkVersion": 9,
+    "compatibleSdkVersion": 9,
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

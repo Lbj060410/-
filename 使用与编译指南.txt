@@ -1,0 +1,488 @@
+﻿HarmonyOS 小车项目 使用与编译指南（TXT）
+==================================================
+
+适用项目目录：F:\HarmonyOs\car
+适用模块：entry
+
+--------------------------------------------------
+0. 当前代码状态（先看这个）
+--------------------------------------------------
+1) 页面结构（4 个 tab）
+- Page1: Home（小车路径规划 + 控制）
+- Page2: Video（纯视频预览 + 云台，不做识别任务）
+- Page3: 3D（进度展示页）
+- Page4: Reserved（空白预留页）
+
+2) 识别能力状态
+- 识别框架代码仍在：services/recognition/*
+- 目前 Page2 已移除识别任务触发，Page4 为空白，所以默认不会持续喂帧到识别调度器。
+- 也就是说：即使你导入了模型，不接入“识别触发入口”也不会真正跑识别。
+
+3) 离线引擎状态
+- RecognitionFactory 当前可用类型：MOCK / HTTP_YOLO / OFFLINE_NCNN
+- ONNX、MindSpore 相关服务代码与模型文件（.onnx/.ms）已移除
+
+--------------------------------------------------
+1. 目录速查（加功能先定位）
+--------------------------------------------------
+
+A. 页面与路由
+- pages/Index.ets
+  作用：四个页面的入口与 tab 排序
+  你要改：新增页面、重命名 tab、调整 tab 顺序
+
+B. Page1（车控主流程）
+- pages/page1/Page1View.ets
+  作用：页面布局、目标输入、绑定 coordinator
+
+- pages/page1/app/Page1Coordinator.ets
+  作用：核心业务（TCP 收发、路径规划、自动跟随、泊车、超声波分支）
+  你要改：
+  - 行驶逻辑/策略
+  - 指令发送时序
+  - 到站行为、泊车行为
+  - 收到主车帧后的行为
+
+- pages/page1/app/PathPlannerAStar.ets
+  作用：黑线路网节点/边 + A*最短路径
+  你要改：
+  - 黑线拓扑（能走哪些边）
+  - 最短路规则
+
+- pages/page1/app/Page1UiStore.ets
+  作用：Page1 全部状态（路径、姿态、障碍、风险、连接态）
+  你要改：
+  - 新增状态字段
+  - 阈值参数
+  - 状态读写逻辑
+
+C. 控制通信层
+- services/control/CarProtocolService.ets
+  作用：动作 -> 协议码 -> 发包
+  你要改：新增动作指令、协议子命令、语音命令
+
+- services/control/CarTcpService.ets
+  作用：TCP 连接、重连、心跳、收发
+  你要改：重连策略、超时策略、网络行为
+
+- config/DeviceNetworkConfig.ets
+  作用：设备 IP / 端口默认值（含 CAR_TCP_PORT）
+  你要改：更换默认通信端口、默认设备地址
+
+D. 视频与摄像头
+- pages/page2/Page2View.ets
+- pages/page2/Page2Coordinator.ets
+- services/source/*
+- services/camera/*
+
+E. 识别框架
+- services/recognition/RecognitionFactory.ets
+- services/recognition/RecognitionScheduler.ets
+- services/recognition/NcnnRecognitionService.ets
+- state/RecogStore.ets
+
+--------------------------------------------------
+2. 常见“要加功能”该改哪里
+--------------------------------------------------
+
+场景 1：新增一个小车动作按钮（例如“鸣笛”）
+- 第一步：在 pages/page1/types/Page1Types.ets 增加 Page1Action 枚举
+- 第二步：在 pages/page1/components/ControlPanel.ets 增加按钮并触发 page1Coordinator.onAction()
+- 第三步：在 pages/page1/app/Page1Coordinator.ets 的 onAction()/sendDriveActionDirect() 增加分支
+- 第四步：在 services/control/CarProtocolService.ets 增加对应协议发送函数
+//////////////////////////////////////////////////////////
+实例：
+
+一个按钮从 UI 到小车的完整流程是：
+
+Button
+ ↓
+ControlPanel
+ ↓
+Page1View
+ ↓
+Page1Coordinator.onAction()
+ ↓
+CarProtocolService
+ ↓
+TCP发送
+ ↓
+小车执行
+
+也就是：
+
+UI -> Coordinator -> Protocol -> TCP -> Car
+示例：新增一个按钮
+
+假设你想加一个按钮 鸣笛
+
+第一步
+
+在 ControlPanel.ets 加按钮
+
+示例：
+
+Button('鸣笛')
+  .onClick(() => {
+    this.onAction(Page1Action.HORN)
+  })
+第二步
+
+在 Page1Types.ets 增加动作
+
+export enum Page1Action {
+  GO,
+  BACK,
+  LEFT,
+  RIGHT,
+  STOP,
+  HORN
+}
+第三步
+
+在 Page1Coordinator 里处理逻辑
+
+在 onAction() 里增加：
+
+if (a === Page1Action.HORN) {
+  s.setAction('鸣笛')
+  s.bumpTx()
+  await this.proto.horn()
+  return
+}
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+场景 2：修改路径规划规则（必须沿黑线）
+- 改 pages/page1/app/PathPlannerAStar.ets 的 ROUTE_EDGES
+- 不要只改 UI；A* 的真实路网定义只在这里
+- 若涉及障碍边规则，联动 Page1UiStore 的 blockedEdges 与 PathPlannerAStar 的 blockedEdgeSet 判断
+
+场景 3：修改自动跟随/转向时序
+- 改 pages/page1/app/Page1Coordinator.ets
+  重点函数：
+  - followPathOnce()
+  - sendCommandWithInterval()
+  - updateSegmentMotion()
+
+场景 4：修改“到站前超声波分支”
+- 改 pages/page1/app/Page1Coordinator.ets
+  重点函数：
+  - maybeRunParkingBeforeFinalEdgeArrival()
+  - logFrame55()（p1=0x01/0x02 解析）
+
+场景 5：新增主车下发帧类型
+- 改 pages/page1/net/CarRx55StreamDecoder.ets（解帧）
+- 改 pages/page1/app/Page1Coordinator.ets（帧语义处理）
+
+场景 6：Page2 增加识别功能（当前已移除）
+- 先在 pages/page2/Page2Coordinator.ets 的 frames.setOnFrame(...) 中重新接入识别触发
+- 使用 services/recognition/RecognitionCenter + RecognitionScheduler
+- 识别结果展示可放在 Page2View 或写入 RecogStore 后由其他页面读取
+
+场景 7：新增页面（比如未来启用 Page4）
+- pages/page4/Page4View.ets：实现页面
+- pages/Index.ets：保持 tab 对应关系
+
+场景 8：调整地图“红点”移动速度/平滑度
+- 改 pages/page1/app/Page1Coordinator.ets
+  重点变量/函数：
+  - STEP_TRAVEL_MS：红点从一个节点移动到下一个节点的总时长（核心速度变量）
+  - SIM_TICK_MS：红点插值刷新周期（核心平滑度变量）
+  - startSegmentMotion()：每段起步时把 segmentDurationMs 设为 STEP_TRAVEL_MS
+  - updateSegmentMotion()：按 t=elapsed/segmentDurationMs 做插值，实时更新红点位置
+- 经验值：
+  - 想更快：先把 STEP_TRAVEL_MS 从 1500 改到 1000，再观察
+  - 想更丝滑：把 SIM_TICK_MS 从 100 改到 60~80（CPU 占用会升高）
+
+场景 9：修改通信端口（TCP）
+方式 A（推荐，改全局默认端口）：
+- 改 config/DeviceNetworkConfig.ets 的 CAR_TCP_PORT
+- 影响范围：
+  - Page1UiStore.connPort 默认值
+  - CarTcpService.currentPort 默认值
+- 适用：项目里所有默认 TCP 连接统一改端口
+
+方式 B（只改 Page1 当前连接端口）：
+- 改 pages/page1/app/Page1UiStore.ets 的 connPort 初始值，或在运行前给 store.connPort 赋值
+- 实际生效点：pages/page1/app/Page1Coordinator.ets 的 connectTcp(s.connIp, s.connPort)
+- 适用：只想改 Page1 的连接端口，不动全局默认配置
+
+注意：
+- 端口修改后要“重新连接”才会生效（重新进出 Page1 或断开后重连）
+- 端口范围建议 1~65535，需与车端监听端口一致
+
+--------------------------------------------------
+3. 关键变量怎么改、会发生什么
+--------------------------------------------------
+
+完整变量表请看：entry/src/main/ets/VARIABLE_GUIDE.md
+下面是最常改的一组：
+
+A. Page1Coordinator（行为时序）
+- STEP_TRAVEL_MS（红点移动速度）
+  调大：红点跨节点更慢（看起来更稳）
+  调小：红点跨节点更快（看起来更灵敏）
+  关联逻辑：startSegmentMotion() / updateSegmentMotion()
+
+- SIM_TICK_MS（红点刷新平滑度）
+  调大：刷新变稀，动画更“跳”
+  调小：刷新更密，动画更平滑，但 CPU 占用更高
+  关联逻辑：startSimulator() -> simulateOnce() -> updateSegmentMotion()
+
+- COMMAND_INTERVAL_MS
+  调大：更稳但慢
+  调小：更快但可能动作叠加
+
+- REPLAN_COOLDOWN_MS
+  调大：重规划少、稳
+  调小：响应快但可能频繁重规划
+
+- ULTRASONIC_WAIT_MS
+  调大：更容易收到超声波返回
+  调小：流程快，但容易超时后走旧流程
+
+- PARK_STEP_DELAY_MS
+  调大：转向更充分
+  调小：快，但可能车头没对齐就继续
+
+B. Page1UiStore（阈值）
+- carDotSize（红点显示大小，仅UI）
+  调大：红点更大，更容易看
+  调小：红点更小，不遮挡地图
+  注意：不影响路径规划与真实控制
+
+- gridSnapThresholdNorm
+  调大：更容易吸附节点
+  调小：更精细但更难点中
+
+- obstaclePointTriggerThresholdNorm
+  调大：点障碍更容易触发
+  调小：更严格，可能漏触发
+
+- autoFollowCooldownMs
+  调大：执行更稳
+  调小：动作更密，节奏更快
+
+C. CarTcpService（链路）
+- CAR_TCP_PORT（默认通信端口，定义在 config/DeviceNetworkConfig.ets）
+  改大/改小本身无性能差异；关键是必须与车端端口一致
+  改错现象：TCP 一直 CONNECTING/FAILED，无法下发控制指令
+
+- connPort（Page1 当前使用端口，定义在 pages/page1/app/Page1UiStore.ets）
+  改这个值可以覆盖默认端口，用于单页面调试
+  注意：修改后需重连才生效
+
+- maxReconnect
+  调大：容错更强
+  调小：更快失败上抛
+
+- heartbeatIntervalMs
+  调大：开销小但断链发现慢
+  调小：发现快但网络/日志开销大
+
+--------------------------------------------------
+4. 模型导入与启用（重点）
+--------------------------------------------------
+
+--------------------------------------------------
+4.1 先确认“模型放哪里”
+--------------------------------------------------
+
+NCNN 识别服务会按下面两个路径找模型：
+1) entry/src/main/resources/rawfile/<model>.param/.bin
+2) entry/src/main/resources/rawfile/ncnn_models/<model>.param/.bin
+
+建议使用路径 2（更清晰）：
+entry/src/main/resources/rawfile/ncnn_models/
+  best-sim-opt.param
+  best-sim-opt.bin
+  ...
+
+注意：当前仓库里 rawfile 模型目录已被清理过，默认只有 sandbox_map.png。
+你必须自己补齐模型文件。
+
+--------------------------------------------------
+4.2 模型命名如何与代码对齐
+--------------------------------------------------
+
+你放进去的模型名（不含扩展名）必须与代码一致：
+- services/recognition/RecognitionFactory.ets
+  - MODEL_LABELS: 模型名 -> 标签列表
+  - SUBTYPE_MODEL: 任务子类 -> 模型名
+
+例如你新增模型 `my_new_model.param/.bin`：
+1) 在 MODEL_LABELS 增加：'my_new_model': ['class1','class2',...]
+2) 在 SUBTYPE_MODEL 把某个 subtype 指向 'my_new_model'
+
+--------------------------------------------------
+4.3 模型格式要求
+--------------------------------------------------
+
+当前离线引擎走 NCNN：
+- 必须是 .param + .bin
+- ONNX 文件不能直接给 NcnnRecognitionService 用
+
+常见转换流程（在有 ncnn 工具环境中）：
+- onnx2ncnn model.onnx model.param model.bin
+- 可选 ncnnoptimize
+
+--------------------------------------------------
+4.4 识别引擎如何选择
+--------------------------------------------------
+
+在 state/RecogStore.ets：
+- recogEngineType
+- recogOfflineModelName
+- recogOfflineConfThresh
+
+可选：
+- RecogEngineType.OFFLINE_NCNN
+- RecogEngineType.HTTP_YOLO
+- RecogEngineType.MOCK
+
+建议离线：OFFLINE_NCNN
+
+--------------------------------------------------
+4.5 只导入模型还不够：你还要“喂帧”
+--------------------------------------------------
+
+当前代码里：
+- Page2 是纯视频页，不触发识别
+- Page4 是空白页，不触发识别
+
+因此模型即使导入成功，也不会自动执行识别。
+
+你需要任选一种触发方式：
+1) 在 Page2Coordinator 的 frames.setOnFrame(...) 中调用 RecognitionScheduler 的 live/snapshot 接口
+2) 在未来 Page4 中恢复实时识别入口（pushLiveFrame）
+
+--------------------------------------------------
+4.6 新模型跑不起来时怎么查
+--------------------------------------------------
+
+看日志关键词：
+- NCNNLOAD|model=...|ok=1/0
+- detectNcnn model not loaded
+- extract outputs failed: ...
+
+若出现输出层名不匹配（extract outputs failed）：
+- 改 entry/src/main/cpp/ncnn_detector.cpp
+  - kOutputs354 / kOutputs364
+  - GuessOutputs(modelName)
+
+说明：不同 YOLO 导出版本输出节点名可能不同，不改这里会推理失败。
+
+--------------------------------------------------
+5. 底层 C++/NAPI 扩展规则
+--------------------------------------------------
+
+1) 新增 native 导出函数
+- 在 entry/src/main/cpp/*.cpp 实现 napi callback
+- 在对应 RegisterExports 里注册属性
+- 在 hello.cpp 的 Init() 中调用对应 RegisterExports
+
+2) JS/TS 侧调用
+- 推荐通过 services/recognition/LibEntryBridge.ets 做动态能力探测
+- 避免直接强依赖未注册函数（防止崩溃）
+
+3) 类型声明
+- entry/src/main/cpp/types/libentry/index.d.ts
+- 若你新增了稳定导出 API，建议同步补类型声明
+
+--------------------------------------------------
+6. 编译与打包指南
+--------------------------------------------------
+
+--------------------------------------------------
+6.1 DevEco Studio（推荐）
+--------------------------------------------------
+
+前置检查：
+1) local.properties 有效
+- hwsdk.dir=F:/HarmonyOs/Sdk
+- nodejs.dir=F:/HarmonyOs/nodejs
+
+2) 证书有效
+- build-profile.json5 的 signingConfigs 指向本机证书路径
+
+编译步骤：
+1) 打开项目 F:\HarmonyOs\car
+2) Sync Project
+3) Build -> Clean Project
+4) Build -> Build Hap(s) / Build Project
+
+产物路径：
+- entry/build/default/outputs/default/entry-default-signed.hap
+- entry/build/default/outputs/default/entry-default-unsigned.hap
+
+--------------------------------------------------
+6.2 命令行编译（可选）
+--------------------------------------------------
+
+当前仓库直接运行 hvigorw 可能报：
+- "The hvigor depends on the npmrc file. Configure the npmrc file first."
+
+原因：hvigor wrapper 要求存在 .npmrc（项目目录或用户目录）。
+
+修复方法（任选一种）：
+1) 用 DevEco Studio 先完成一次同步，自动生成/配置 npm 环境
+2) 手工创建 %USERPROFILE%\.npmrc（或项目根目录 .npmrc）
+
+示例（最小模板，按你的网络环境调整）：
+- registry=https://repo.harmonyos.com/npm/
+- strict-ssl=true
+
+完成后再运行：
+- .\hvigorw.bat clean
+- .\hvigorw.bat assembleHap
+
+注意：不同 hvigor 版本任务名可能略有差异，若命令不识别，以 DevEco 菜单构建为准。
+
+--------------------------------------------------
+7. NCNN 库编译/替换（仅当你要更新 ncnn）
+--------------------------------------------------
+
+当前仓库已存在：
+- third_party/ncnn/include/*.h
+- third_party/ncnn/lib/arm64-v8a/libncnn.a
+
+如果要重编译 NCNN：
+- 可用脚本：build_ncnn_ohos.sh（WSL）
+- 编译后覆盖 third_party/ncnn 下的 include/lib
+
+同时检查：
+- entry/src/main/cpp/CMakeLists.txt
+  - NCNN_INCLUDE_DIR
+  - NCNN_LIB_DIR
+  - NCNN_LIB
+  - target_link_libraries(entry PUBLIC ${NCNN_LIB})
+
+--------------------------------------------------
+8. 你后续最常用的 4 份参考文档
+--------------------------------------------------
+
+1) entry/src/main/ets/CODE_MAP.md
+- 功能 -> 文件入口 对照
+
+2) entry/src/main/ets/VARIABLE_GUIDE.md
+- 变量含义 + 调大/调小影响
+
+3) entry/src/main/ets/pages/page1/app/Page1Coordinator.ets
+- 实车控制与路径执行主逻辑
+
+4) entry/src/main/ets/services/recognition/RecognitionFactory.ets
+- 模型名映射与标签映射核心
+
+--------------------------------------------------
+9. 最短上手路径（建议）
+--------------------------------------------------
+
+如果你是新同事，按这个顺序：
+1) 先看 CODE_MAP.md 和 VARIABLE_GUIDE.md
+2) 跑通 DevEco Build Hap(s)
+3) 在 Page1 手动输入目标（如 D7）验证路径规划
+4) 再改功能：先改上层（View/Coordinator），最后再动 Protocol/C++
+5) 要做识别时，先接“喂帧触发”，再导模型，再调阈值
+
+--------------------------------------------------
+END
+--------------------------------------------------

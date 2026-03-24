@@ -1,0 +1,35 @@
+﻿F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\ActionTimingRegistry.ets:29	    // depart鍚庡皬杞︾浼氳嚜鍔ㄥ紑闂稿苟鍓嶈繘锛?    // - preMs 涓嬭皟鍒?3000 浠ヨ创杩戠湡瀹炲惎鍔?    // - sendGapMs 鎻愬崌鍒?7000锛岄伩鍏嶄笅涓€鏉O琚皬杞︾鍚炴帀
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\FusionEngineC0.ets:36	    // 1) RFID 校正（只在变化时触发）
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorControlTcpOps.ets:61	    s.pushLog(`TCP 触发重连，count=${s.reconnectCount}`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:173	  s.pushLog(`PARK_MAP_ANIM: ${arrivedId}->${goalId} 鍊掕溅鍏ュ簱`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:378	    s.pushLog(`璺绂佽杞偣绂佽锛?{nodeId} edges=[${touchingEdges.join(',')}]`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:620	  s.setAction('鍓嶈鍙戠幇闅滅锛岀瓑寰呴噸瑙勫垝')
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:640	  if (mergedNodes.length > 0) s.pushLog(`鍓嶈闅滅杞偣绂佽锛?{mergedNodes.join(',')}`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorPlanMotionOps.ets:107	      s.setPath([], 'A*闂稿彛澶辫触')
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorPlanMotionOps.ets:142	    s.setPath([], 'A*澶辫触')
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:98	  // - 调小：误触少，但更难点中
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:100	  // 点障碍新增/删除/触发阈值：
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:101	  // - 调大：更敏感，更容易新增/删除/触发
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:102	  // - 调小：更严格，误触少但可能漏触发
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:138	  // 自动避障触发条件：开关开启 + 非编辑态 + 冷却时间到
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:197	  // 自动跟随触发条件：有可执行路径 + 非编辑态 + 冷却时间到
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:519	  // 把某个点障碍标记为已触发（保留记录，不直接删除）
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1UiStore.ets:762	  // - 越高越危险；>=70 触发高风险分支
+F:\HarmonyOs\car\entry\src\main\ets\pages\page2\Page2Coordinator.ets:37	  // 第二阶段：当 barrier 命中交通灯立体标志物后，触发 traffic-light 细分类。
+F:\HarmonyOs\car\entry\src\main\ets\pages\page4\Page4View.ets:754	        this.pushAssistant(`已设置目的地 ${dest} 并触发路径规划。`)
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarProtocolService.ets:35	  // - DRY_RUN: 只记日志，不触发真实车辆动作
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarProtocolService.ets:117	    // 0x0A: 车辆控制类命令（运动、灯光、超声波触发等）
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:66	  // true 表示“用户主动断开”，此时 close/error 事件不应触发重连
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:289	      this.logError(TAG_CONNECTSS, '连接关闭事件触发')
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:293	      // 被动断开：触发重连；主动断开：只回到 IDLE
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:395	    // 标记为主动断连，防止 close/error 触发自动重连
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:408	   * - 任何发送失败都转为 FAILED，并触发重连流程。
+F:\HarmonyOs\car\entry\src\main\ets\services\control\CarTcpService.ets:442	  // 心跳包定时发送 0x00，异常时触发 failed -> reconnect
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionCenter.ets:18	 * - Page4 推实时帧 / 点击 ROI 触发 snapshot
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionCenter.ets:19	 * - Page2 触发 snapshot / gallery 任务
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionFactory.ets:61	  /** 根据 subtype 直接创建对应离线服务（Page2 快捷触发用） */
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionScheduler.ets:233	   * Page2：手动触发一次 LIVE 任务（支持 subtype）
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionScheduler.ets:272	   * Page4：点击 bbox 触发一次 Snapshot 高精识别（带 ROI）
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionScheduler.ets:346	   * 指令常驻触发：AutoSnapshot（中优先级）
+F:\HarmonyOs\car\entry\src\main\ets\services\recognition\RecognitionScheduler.ets:367	   * 图库触发：把 PixelMap 直接作为输入（无需 HTTP）
+F:\HarmonyOs\car\entry\src\main\ets\state\VideoStore.ets:118	    // 强制触发状态更新

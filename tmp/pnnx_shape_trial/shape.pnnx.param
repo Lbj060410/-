@@ -1,0 +1,198 @@
+7767517
+196 195
+pnnx.Input               in0                      0 1 0 #0=(1,640,640,3)f32
+Pad                      Pad_0                    1 1 0 1 pads=(0,2,2,0,0,2,2,0) #0=(1,640,640,3)f32 #1=(1,644,644,3)f32
+Tensor.permute           Tensor.permute_17        1 1 1 2 dims=(0,3,1,2) $input=1 #1=(1,644,644,3)f32 #2=(1,3,644,644)f32
+nn.Conv2d                conv2d_0                 1 1 2 3 bias=True dilation=(1,1) groups=1 in_channels=3 kernel_size=(6,6) out_channels=32 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(32)f32 @weight=(32,3,6,6)f32 $input=2 #2=(1,3,644,644)f32 #3=(1,32,320,320)f32
+F.silu                   silu_0                   1 1 3 4 $input=3 #3=(1,32,320,320)f32 #4=(1,32,320,320)f32
+Pad                      Pad_5                    1 1 4 5 pads=(0,0,1,1,0,0,1,1) #4=(1,32,320,320)f32 #5=(1,32,322,322)f32
+nn.Conv2d                conv2d_1                 1 1 5 6 bias=True dilation=(1,1) groups=1 in_channels=32 kernel_size=(3,3) out_channels=64 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(64)f32 @weight=(64,32,3,3)f32 $input=5 #5=(1,32,322,322)f32 #6=(1,64,160,160)f32
+F.silu                   silu_1                   1 1 6 7 $input=6 #6=(1,64,160,160)f32 #7=(1,64,160,160)f32
+nn.Conv2d                conv2d_2                 1 1 7 8 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=32 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(32)f32 @weight=(32,64,1,1)f32 $input=7 #7=(1,64,160,160)f32 #8=(1,32,160,160)f32
+F.silu                   silu_2                   1 1 8 9 $input=8 #8=(1,32,160,160)f32 #9=(1,32,160,160)f32
+nn.Conv2d                conv2d_3                 1 1 7 10 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=32 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(32)f32 @weight=(32,64,1,1)f32 $input=7 #7=(1,64,160,160)f32 #10=(1,32,160,160)f32
+F.silu                   silu_3                   1 1 10 11 $input=10 #10=(1,32,160,160)f32 #11=(1,32,160,160)f32
+nn.Conv2d                conv2d_4                 1 1 9 12 bias=True dilation=(1,1) groups=1 in_channels=32 kernel_size=(1,1) out_channels=32 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(32)f32 @weight=(32,32,1,1)f32 $input=9 #9=(1,32,160,160)f32 #12=(1,32,160,160)f32
+F.silu                   silu_4                   1 1 12 13 $input=12 #12=(1,32,160,160)f32 #13=(1,32,160,160)f32
+nn.Conv2d                conv2d_5                 1 1 13 14 bias=True dilation=(1,1) groups=1 in_channels=32 kernel_size=(3,3) out_channels=32 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(32)f32 @weight=(32,32,3,3)f32 $input=13 #13=(1,32,160,160)f32 #14=(1,32,160,160)f32
+F.sigmoid                F.sigmoid_41             1 1 14 15 $input=14 #14=(1,32,160,160)f32 #15=(1,32,160,160)f32
+pnnx.Expression          pnnx_expr_84             3 1 9 14 15 16 expr=add(@0,mul(@1,@2)) #9=(1,32,160,160)f32 #14=(1,32,160,160)f32 #15=(1,32,160,160)f32 #16=(1,32,160,160)f32
+torch.cat                torch.cat_0              2 1 16 11 17 dim=1 #16=(1,32,160,160)f32 #11=(1,32,160,160)f32 #17=(1,64,160,160)f32
+nn.Conv2d                conv2d_6                 1 1 17 18 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,1,1)f32 $input=17 #17=(1,64,160,160)f32 #18=(1,64,160,160)f32
+F.silu                   silu_5                   1 1 18 19 $input=18 #18=(1,64,160,160)f32 #19=(1,64,160,160)f32
+Pad                      Pad_26                   1 1 19 20 pads=(0,0,1,1,0,0,1,1) #19=(1,64,160,160)f32 #20=(1,64,162,162)f32
+nn.Conv2d                conv2d_7                 1 1 20 21 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(3,3) out_channels=128 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(128)f32 @weight=(128,64,3,3)f32 $input=20 #20=(1,64,162,162)f32 #21=(1,128,80,80)f32
+F.silu                   silu_6                   1 1 21 22 $input=21 #21=(1,128,80,80)f32 #22=(1,128,80,80)f32
+nn.Conv2d                conv2d_8                 1 1 22 23 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,128,1,1)f32 $input=22 #22=(1,128,80,80)f32 #23=(1,64,80,80)f32
+F.silu                   silu_7                   1 1 23 24 $input=23 #23=(1,64,80,80)f32 #24=(1,64,80,80)f32
+nn.Conv2d                conv2d_9                 1 1 24 25 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,1,1)f32 $input=24 #24=(1,64,80,80)f32 #25=(1,64,80,80)f32
+F.silu                   silu_8                   1 1 25 26 $input=25 #25=(1,64,80,80)f32 #26=(1,64,80,80)f32
+nn.Conv2d                conv2d_10                1 1 26 27 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(3,3) out_channels=64 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,3,3)f32 $input=26 #26=(1,64,80,80)f32 #27=(1,64,80,80)f32
+F.sigmoid                F.sigmoid_46             1 1 27 28 $input=27 #27=(1,64,80,80)f32 #28=(1,64,80,80)f32
+pnnx.Expression          pnnx_expr_78             3 1 24 27 28 29 expr=add(@0,mul(@1,@2)) #24=(1,64,80,80)f32 #27=(1,64,80,80)f32 #28=(1,64,80,80)f32 #29=(1,64,80,80)f32
+nn.Conv2d                conv2d_11                1 1 29 30 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,1,1)f32 $input=29 #29=(1,64,80,80)f32 #30=(1,64,80,80)f32
+F.silu                   silu_9                   1 1 30 31 $input=30 #30=(1,64,80,80)f32 #31=(1,64,80,80)f32
+nn.Conv2d                conv2d_12                1 1 31 32 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(3,3) out_channels=64 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,3,3)f32 $input=31 #31=(1,64,80,80)f32 #32=(1,64,80,80)f32
+F.sigmoid                F.sigmoid_48             1 1 32 33 $input=32 #32=(1,64,80,80)f32 #33=(1,64,80,80)f32
+pnnx.Expression          pnnx_expr_75             3 1 29 32 33 34 expr=add(@0,mul(@1,@2)) #29=(1,64,80,80)f32 #32=(1,64,80,80)f32 #33=(1,64,80,80)f32 #34=(1,64,80,80)f32
+nn.Conv2d                conv2d_13                1 1 22 35 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,128,1,1)f32 $input=22 #22=(1,128,80,80)f32 #35=(1,64,80,80)f32
+F.silu                   silu_10                  1 1 35 36 $input=35 #35=(1,64,80,80)f32 #36=(1,64,80,80)f32
+torch.cat                torch.cat_1              2 1 34 36 37 dim=1 #34=(1,64,80,80)f32 #36=(1,64,80,80)f32 #37=(1,128,80,80)f32
+nn.Conv2d                conv2d_14                1 1 37 38 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=37 #37=(1,128,80,80)f32 #38=(1,128,80,80)f32
+F.silu                   silu_11                  1 1 38 39 $input=38 #38=(1,128,80,80)f32 #39=(1,128,80,80)f32
+Pad                      Pad_54                   1 1 39 40 pads=(0,0,1,1,0,0,1,1) #39=(1,128,80,80)f32 #40=(1,128,82,82)f32
+nn.Conv2d                conv2d_15                1 1 40 41 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=256 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(256)f32 @weight=(256,128,3,3)f32 $input=40 #40=(1,128,82,82)f32 #41=(1,256,40,40)f32
+F.silu                   silu_12                  1 1 41 42 $input=41 #41=(1,256,40,40)f32 #42=(1,256,40,40)f32
+nn.Conv2d                conv2d_16                1 1 42 43 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,256,1,1)f32 $input=42 #42=(1,256,40,40)f32 #43=(1,128,40,40)f32
+F.silu                   silu_13                  1 1 43 44 $input=43 #43=(1,128,40,40)f32 #44=(1,128,40,40)f32
+nn.Conv2d                conv2d_17                1 1 42 45 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,256,1,1)f32 $input=42 #42=(1,256,40,40)f32 #45=(1,128,40,40)f32
+F.silu                   silu_14                  1 1 45 46 $input=45 #45=(1,128,40,40)f32 #46=(1,128,40,40)f32
+nn.Conv2d                conv2d_18                1 1 46 47 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=46 #46=(1,128,40,40)f32 #47=(1,128,40,40)f32
+F.silu                   silu_15                  1 1 47 48 $input=47 #47=(1,128,40,40)f32 #48=(1,128,40,40)f32
+nn.Conv2d                conv2d_19                1 1 48 49 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=48 #48=(1,128,40,40)f32 #49=(1,128,40,40)f32
+F.sigmoid                F.sigmoid_55             1 1 49 50 $input=49 #49=(1,128,40,40)f32 #50=(1,128,40,40)f32
+pnnx.Expression          pnnx_expr_67             3 1 46 49 50 51 expr=add(@0,mul(@1,@2)) #46=(1,128,40,40)f32 #49=(1,128,40,40)f32 #50=(1,128,40,40)f32 #51=(1,128,40,40)f32
+nn.Conv2d                conv2d_20                1 1 51 52 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=51 #51=(1,128,40,40)f32 #52=(1,128,40,40)f32
+F.silu                   silu_16                  1 1 52 53 $input=52 #52=(1,128,40,40)f32 #53=(1,128,40,40)f32
+nn.Conv2d                conv2d_21                1 1 53 54 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=53 #53=(1,128,40,40)f32 #54=(1,128,40,40)f32
+F.sigmoid                F.sigmoid_57             1 1 54 55 $input=54 #54=(1,128,40,40)f32 #55=(1,128,40,40)f32
+pnnx.Expression          pnnx_expr_64             3 1 51 54 55 56 expr=add(@0,mul(@1,@2)) #51=(1,128,40,40)f32 #54=(1,128,40,40)f32 #55=(1,128,40,40)f32 #56=(1,128,40,40)f32
+nn.Conv2d                conv2d_22                1 1 56 57 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=56 #56=(1,128,40,40)f32 #57=(1,128,40,40)f32
+F.silu                   silu_17                  1 1 57 58 $input=57 #57=(1,128,40,40)f32 #58=(1,128,40,40)f32
+nn.Conv2d                conv2d_23                1 1 58 59 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=58 #58=(1,128,40,40)f32 #59=(1,128,40,40)f32
+F.sigmoid                F.sigmoid_59             1 1 59 60 $input=59 #59=(1,128,40,40)f32 #60=(1,128,40,40)f32
+pnnx.Expression          pnnx_expr_61             3 1 56 59 60 61 expr=add(@0,mul(@1,@2)) #56=(1,128,40,40)f32 #59=(1,128,40,40)f32 #60=(1,128,40,40)f32 #61=(1,128,40,40)f32
+torch.cat                torch.cat_2              2 1 61 44 62 dim=1 #61=(1,128,40,40)f32 #44=(1,128,40,40)f32 #62=(1,256,40,40)f32
+nn.Conv2d                conv2d_24                1 1 62 63 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,1,1)f32 $input=62 #62=(1,256,40,40)f32 #63=(1,256,40,40)f32
+F.silu                   silu_18                  1 1 63 64 $input=63 #63=(1,256,40,40)f32 #64=(1,256,40,40)f32
+Pad                      Pad_89                   1 1 64 65 pads=(0,0,1,1,0,0,1,1) #64=(1,256,40,40)f32 #65=(1,256,42,42)f32
+nn.Conv2d                conv2d_25                1 1 65 66 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(3,3) out_channels=512 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(512)f32 @weight=(512,256,3,3)f32 $input=65 #65=(1,256,42,42)f32 #66=(1,512,20,20)f32
+F.silu                   silu_19                  1 1 66 67 $input=66 #66=(1,512,20,20)f32 #67=(1,512,20,20)f32
+nn.Conv2d                conv2d_26                1 1 67 68 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=67 #67=(1,512,20,20)f32 #68=(1,256,20,20)f32
+F.silu                   silu_20                  1 1 68 69 $input=68 #68=(1,256,20,20)f32 #69=(1,256,20,20)f32
+nn.Conv2d                conv2d_27                1 1 67 70 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=67 #67=(1,512,20,20)f32 #70=(1,256,20,20)f32
+F.silu                   silu_21                  1 1 70 71 $input=70 #70=(1,256,20,20)f32 #71=(1,256,20,20)f32
+nn.Conv2d                conv2d_28                1 1 71 72 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,1,1)f32 $input=71 #71=(1,256,20,20)f32 #72=(1,256,20,20)f32
+F.silu                   silu_22                  1 1 72 73 $input=72 #72=(1,256,20,20)f32 #73=(1,256,20,20)f32
+nn.Conv2d                conv2d_29                1 1 73 74 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(3,3) out_channels=256 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,3,3)f32 $input=73 #73=(1,256,20,20)f32 #74=(1,256,20,20)f32
+F.sigmoid                F.sigmoid_65             1 1 74 75 $input=74 #74=(1,256,20,20)f32 #75=(1,256,20,20)f32
+pnnx.Expression          pnnx_expr_54             3 1 71 74 75 76 expr=add(@0,mul(@1,@2)) #71=(1,256,20,20)f32 #74=(1,256,20,20)f32 #75=(1,256,20,20)f32 #76=(1,256,20,20)f32
+torch.cat                torch.cat_3              2 1 76 69 77 dim=1 #76=(1,256,20,20)f32 #69=(1,256,20,20)f32 #77=(1,512,20,20)f32
+nn.Conv2d                conv2d_30                1 1 77 78 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=512 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(512)f32 @weight=(512,512,1,1)f32 $input=77 #77=(1,512,20,20)f32 #78=(1,512,20,20)f32
+F.silu                   silu_23                  1 1 78 79 $input=78 #78=(1,512,20,20)f32 #79=(1,512,20,20)f32
+nn.Conv2d                conv2d_31                1 1 79 80 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=79 #79=(1,512,20,20)f32 #80=(1,256,20,20)f32
+F.silu                   silu_24                  1 1 80 81 $input=80 #80=(1,256,20,20)f32 #81=(1,256,20,20)f32
+F.max_pool2d             F.max_pool2d_104         1 1 81 82 ceil_mode=False kernel_size=(5,5) padding=(2,2) return_indices=False stride=(1,1) $input=81 #81=(1,256,20,20)f32 #82=(1,256,20,20)f32
+F.max_pool2d             F.max_pool2d_105         1 1 82 83 ceil_mode=False kernel_size=(5,5) padding=(2,2) return_indices=False stride=(1,1) $input=82 #82=(1,256,20,20)f32 #83=(1,256,20,20)f32
+F.max_pool2d             F.max_pool2d_106         1 1 83 84 ceil_mode=False kernel_size=(5,5) padding=(2,2) return_indices=False stride=(1,1) $input=83 #83=(1,256,20,20)f32 #84=(1,256,20,20)f32
+torch.cat                torch.cat_4              4 1 81 82 83 84 85 dim=1 #81=(1,256,20,20)f32 #82=(1,256,20,20)f32 #83=(1,256,20,20)f32 #84=(1,256,20,20)f32 #85=(1,1024,20,20)f32
+nn.Conv2d                conv2d_32                1 1 85 86 bias=True dilation=(1,1) groups=1 in_channels=1024 kernel_size=(1,1) out_channels=512 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(512)f32 @weight=(512,1024,1,1)f32 $input=85 #85=(1,1024,20,20)f32 #86=(1,512,20,20)f32
+F.silu                   silu_25                  1 1 86 87 $input=86 #86=(1,512,20,20)f32 #87=(1,512,20,20)f32
+nn.Conv2d                conv2d_33                1 1 87 88 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=87 #87=(1,512,20,20)f32 #88=(1,256,20,20)f32
+F.silu                   silu_26                  1 1 88 89 $input=88 #88=(1,256,20,20)f32 #89=(1,256,20,20)f32
+F.interpolate            F.interpolate_102        1 1 89 90 mode=nearest recompute_scale_factor=False scale_factor=(2.0,2.0) $input=89 #89=(1,256,20,20)f32 #90=(1,256,40,40)f32
+torch.cat                torch.cat_5              2 1 90 64 91 dim=1 #90=(1,256,40,40)f32 #64=(1,256,40,40)f32 #91=(1,512,40,40)f32
+nn.Conv2d                conv2d_34                1 1 91 92 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,512,1,1)f32 $input=91 #91=(1,512,40,40)f32 #92=(1,128,40,40)f32
+F.silu                   silu_27                  1 1 92 93 $input=92 #92=(1,128,40,40)f32 #93=(1,128,40,40)f32
+nn.Conv2d                conv2d_35                1 1 91 94 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,512,1,1)f32 $input=91 #91=(1,512,40,40)f32 #94=(1,128,40,40)f32
+F.silu                   silu_28                  1 1 94 95 $input=94 #94=(1,128,40,40)f32 #95=(1,128,40,40)f32
+nn.Conv2d                conv2d_36                1 1 95 96 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=95 #95=(1,128,40,40)f32 #96=(1,128,40,40)f32
+F.silu                   silu_29                  1 1 96 97 $input=96 #96=(1,128,40,40)f32 #97=(1,128,40,40)f32
+nn.Conv2d                conv2d_37                1 1 97 98 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=97 #97=(1,128,40,40)f32 #98=(1,128,40,40)f32
+F.silu                   silu_30                  1 1 98 99 $input=98 #98=(1,128,40,40)f32 #99=(1,128,40,40)f32
+torch.cat                torch.cat_6              2 1 99 93 100 dim=1 #99=(1,128,40,40)f32 #93=(1,128,40,40)f32 #100=(1,256,40,40)f32
+nn.Conv2d                conv2d_38                1 1 100 101 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,1,1)f32 $input=100 #100=(1,256,40,40)f32 #101=(1,256,40,40)f32
+F.silu                   silu_31                  1 1 101 102 $input=101 #101=(1,256,40,40)f32 #102=(1,256,40,40)f32
+nn.Conv2d                conv2d_39                1 1 102 103 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,256,1,1)f32 $input=102 #102=(1,256,40,40)f32 #103=(1,128,40,40)f32
+F.silu                   silu_32                  1 1 103 104 $input=103 #103=(1,128,40,40)f32 #104=(1,128,40,40)f32
+F.interpolate            F.interpolate_103        1 1 104 105 mode=nearest recompute_scale_factor=False scale_factor=(2.0,2.0) $input=104 #104=(1,128,40,40)f32 #105=(1,128,80,80)f32
+torch.cat                torch.cat_7              2 1 105 39 106 dim=1 #105=(1,128,80,80)f32 #39=(1,128,80,80)f32 #106=(1,256,80,80)f32
+nn.Conv2d                conv2d_40                1 1 106 107 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,256,1,1)f32 $input=106 #106=(1,256,80,80)f32 #107=(1,64,80,80)f32
+F.silu                   silu_33                  1 1 107 108 $input=107 #107=(1,64,80,80)f32 #108=(1,64,80,80)f32
+nn.Conv2d                conv2d_41                1 1 106 109 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,256,1,1)f32 $input=106 #106=(1,256,80,80)f32 #109=(1,64,80,80)f32
+F.silu                   silu_34                  1 1 109 110 $input=109 #109=(1,64,80,80)f32 #110=(1,64,80,80)f32
+nn.Conv2d                conv2d_42                1 1 110 111 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(1,1) out_channels=64 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,1,1)f32 $input=110 #110=(1,64,80,80)f32 #111=(1,64,80,80)f32
+F.silu                   silu_35                  1 1 111 112 $input=111 #111=(1,64,80,80)f32 #112=(1,64,80,80)f32
+nn.Conv2d                conv2d_43                1 1 112 113 bias=True dilation=(1,1) groups=1 in_channels=64 kernel_size=(3,3) out_channels=64 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(64)f32 @weight=(64,64,3,3)f32 $input=112 #112=(1,64,80,80)f32 #113=(1,64,80,80)f32
+F.silu                   silu_36                  1 1 113 114 $input=113 #113=(1,64,80,80)f32 #114=(1,64,80,80)f32
+torch.cat                torch.cat_8              2 1 114 108 115 dim=1 #114=(1,64,80,80)f32 #108=(1,64,80,80)f32 #115=(1,128,80,80)f32
+nn.Conv2d                conv2d_44                1 1 115 116 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=115 #115=(1,128,80,80)f32 #116=(1,128,80,80)f32
+F.silu                   silu_37                  1 1 116 117 $input=116 #116=(1,128,80,80)f32 #117=(1,128,80,80)f32
+nn.Conv2d                conv2d_45                1 1 117 118 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=30 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(30)f32 @weight=(30,128,1,1)f32 $input=117 #117=(1,128,80,80)f32 #118=(1,30,80,80)f32
+Tensor.permute           Tensor.permute_18        1 1 118 119 dims=(0,2,3,1) $input=118 #118=(1,30,80,80)f32 #119=(1,80,80,30)f32
+Tensor.reshape           Tensor.reshape_21        1 1 119 120 shape=(1,6400,3,10) $input=119 #119=(1,80,80,30)f32 #120=(1,6400,3,10)f32
+Tensor.slice             Tensor.slice_27          1 1 120 121 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,10) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,4) steps=(1,1,1,1) $input=120 #120=(1,6400,3,10)f32 #121=(1,6400,3,6)f32
+F.sigmoid                F.sigmoid_81             1 1 121 122 $input=121 #121=(1,6400,3,6)f32 #122=(1,6400,3,6)f32
+Tensor.slice             Tensor.slice_28          1 1 120 123 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,4) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,2) steps=(1,1,1,1) $input=120 #120=(1,6400,3,10)f32 #123=(1,6400,3,2)f32
+F.sigmoid                F.sigmoid_82             1 1 123 124 $input=123 #123=(1,6400,3,2)f32 #124=(1,6400,3,2)f32
+pnnx.Attribute           const_fold_opt__627      0 1 125 @data=(1,1,3,2)f32 #125=(1,1,3,2)f32
+pnnx.Attribute           const_fold_opt__581      0 1 126 @data=(1,2)f32 #126=(1,2)f32
+pnnx.Expression          pnnx_expr_36             3 1 124 125 126 127 expr=mul(mul(mul(@0,@0),@1),@2) #124=(1,6400,3,2)f32 #125=(1,1,3,2)f32 #126=(1,2)f32 #127=(1,6400,3,2)f32
+Tensor.slice             Tensor.slice_29          1 1 120 128 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,2) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,0) steps=(1,1,1,1) $input=120 #120=(1,6400,3,10)f32 #128=(1,6400,3,2)f32
+F.sigmoid                F.sigmoid_83             1 1 128 129 $input=128 #128=(1,6400,3,2)f32 #129=(1,6400,3,2)f32
+pnnx.Attribute           const_fold_opt__620      0 1 130 @data=(1,6400,1,2)f32 #130=(1,6400,1,2)f32
+pnnx.Expression          pnnx_expr_30             3 1 129 130 126 131 expr=mul(mul(add(mul(@0,2.0),@1),8.0),@2) #129=(1,6400,3,2)f32 #130=(1,6400,1,2)f32 #126=(1,2)f32 #131=(1,6400,3,2)f32
+torch.cat                torch.cat_9              3 1 131 127 122 132 dim=-1 #131=(1,6400,3,2)f32 #127=(1,6400,3,2)f32 #122=(1,6400,3,6)f32 #132=(1,6400,3,10)f32
+Tensor.reshape           Tensor.reshape_22        1 1 132 133 shape=(1,19200,10) $input=132 #132=(1,6400,3,10)f32 #133=(1,19200,10)f32
+Pad                      Pad_180                  1 1 117 134 pads=(0,0,1,1,0,0,1,1) #117=(1,128,80,80)f32 #134=(1,128,82,82)f32
+nn.Conv2d                conv2d_46                1 1 134 135 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=134 #134=(1,128,82,82)f32 #135=(1,128,40,40)f32
+F.silu                   silu_38                  1 1 135 136 $input=135 #135=(1,128,40,40)f32 #136=(1,128,40,40)f32
+torch.cat                torch.cat_10             2 1 136 104 137 dim=1 #136=(1,128,40,40)f32 #104=(1,128,40,40)f32 #137=(1,256,40,40)f32
+nn.Conv2d                conv2d_47                1 1 137 138 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,256,1,1)f32 $input=137 #137=(1,256,40,40)f32 #138=(1,128,40,40)f32
+F.silu                   silu_39                  1 1 138 139 $input=138 #138=(1,128,40,40)f32 #139=(1,128,40,40)f32
+nn.Conv2d                conv2d_48                1 1 137 140 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,256,1,1)f32 $input=137 #137=(1,256,40,40)f32 #140=(1,128,40,40)f32
+F.silu                   silu_40                  1 1 140 141 $input=140 #140=(1,128,40,40)f32 #141=(1,128,40,40)f32
+nn.Conv2d                conv2d_49                1 1 141 142 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(1,1) out_channels=128 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,1,1)f32 $input=141 #141=(1,128,40,40)f32 #142=(1,128,40,40)f32
+F.silu                   silu_41                  1 1 142 143 $input=142 #142=(1,128,40,40)f32 #143=(1,128,40,40)f32
+nn.Conv2d                conv2d_50                1 1 143 144 bias=True dilation=(1,1) groups=1 in_channels=128 kernel_size=(3,3) out_channels=128 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(128)f32 @weight=(128,128,3,3)f32 $input=143 #143=(1,128,40,40)f32 #144=(1,128,40,40)f32
+F.silu                   silu_42                  1 1 144 145 $input=144 #144=(1,128,40,40)f32 #145=(1,128,40,40)f32
+torch.cat                torch.cat_11             2 1 145 139 146 dim=1 #145=(1,128,40,40)f32 #139=(1,128,40,40)f32 #146=(1,256,40,40)f32
+nn.Conv2d                conv2d_51                1 1 146 147 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,1,1)f32 $input=146 #146=(1,256,40,40)f32 #147=(1,256,40,40)f32
+F.silu                   silu_43                  1 1 147 148 $input=147 #147=(1,256,40,40)f32 #148=(1,256,40,40)f32
+nn.Conv2d                conv2d_52                1 1 148 149 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=30 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(30)f32 @weight=(30,256,1,1)f32 $input=148 #148=(1,256,40,40)f32 #149=(1,30,40,40)f32
+Tensor.permute           Tensor.permute_19        1 1 149 150 dims=(0,2,3,1) $input=149 #149=(1,30,40,40)f32 #150=(1,40,40,30)f32
+Tensor.reshape           Tensor.reshape_23        1 1 150 151 shape=(1,1600,3,10) $input=150 #150=(1,40,40,30)f32 #151=(1,1600,3,10)f32
+Tensor.slice             Tensor.slice_30          1 1 151 152 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,10) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,4) steps=(1,1,1,1) $input=151 #151=(1,1600,3,10)f32 #152=(1,1600,3,6)f32
+F.sigmoid                F.sigmoid_90             1 1 152 153 $input=152 #152=(1,1600,3,6)f32 #153=(1,1600,3,6)f32
+Tensor.slice             Tensor.slice_31          1 1 151 154 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,4) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,2) steps=(1,1,1,1) $input=151 #151=(1,1600,3,10)f32 #154=(1,1600,3,2)f32
+F.sigmoid                F.sigmoid_91             1 1 154 155 $input=154 #154=(1,1600,3,2)f32 #155=(1,1600,3,2)f32
+pnnx.Attribute           const_fold_opt__624      0 1 156 @data=(1,1,3,2)f32 #156=(1,1,3,2)f32
+pnnx.Expression          pnnx_expr_21             3 1 155 156 126 157 expr=mul(mul(mul(@0,@0),@1),@2) #155=(1,1600,3,2)f32 #156=(1,1,3,2)f32 #126=(1,2)f32 #157=(1,1600,3,2)f32
+Tensor.slice             Tensor.slice_32          1 1 151 158 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,2) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,0) steps=(1,1,1,1) $input=151 #151=(1,1600,3,10)f32 #158=(1,1600,3,2)f32
+F.sigmoid                F.sigmoid_92             1 1 158 159 $input=158 #158=(1,1600,3,2)f32 #159=(1,1600,3,2)f32
+pnnx.Attribute           const_fold_opt__619      0 1 160 @data=(1,1600,1,2)f32 #160=(1,1600,1,2)f32
+pnnx.Expression          pnnx_expr_15             3 1 159 160 126 161 expr=mul(mul(add(mul(@0,2.0),@1),16.0),@2) #159=(1,1600,3,2)f32 #160=(1,1600,1,2)f32 #126=(1,2)f32 #161=(1,1600,3,2)f32
+torch.cat                torch.cat_12             3 1 161 157 153 162 dim=-1 #161=(1,1600,3,2)f32 #157=(1,1600,3,2)f32 #153=(1,1600,3,6)f32 #162=(1,1600,3,10)f32
+Tensor.reshape           Tensor.reshape_24        1 1 162 163 shape=(1,4800,10) $input=162 #162=(1,1600,3,10)f32 #163=(1,4800,10)f32
+Pad                      Pad_219                  1 1 148 164 pads=(0,0,1,1,0,0,1,1) #148=(1,256,40,40)f32 #164=(1,256,42,42)f32
+nn.Conv2d                conv2d_53                1 1 164 165 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(3,3) out_channels=256 padding=(0,0) padding_mode=zeros stride=(2,2) @bias=(256)f32 @weight=(256,256,3,3)f32 $input=164 #164=(1,256,42,42)f32 #165=(1,256,20,20)f32
+F.silu                   silu_44                  1 1 165 166 $input=165 #165=(1,256,20,20)f32 #166=(1,256,20,20)f32
+torch.cat                torch.cat_13             2 1 166 89 167 dim=1 #166=(1,256,20,20)f32 #89=(1,256,20,20)f32 #167=(1,512,20,20)f32
+nn.Conv2d                conv2d_54                1 1 167 168 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=167 #167=(1,512,20,20)f32 #168=(1,256,20,20)f32
+F.silu                   silu_45                  1 1 168 169 $input=168 #168=(1,256,20,20)f32 #169=(1,256,20,20)f32
+nn.Conv2d                conv2d_55                1 1 167 170 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,512,1,1)f32 $input=167 #167=(1,512,20,20)f32 #170=(1,256,20,20)f32
+F.silu                   silu_46                  1 1 170 171 $input=170 #170=(1,256,20,20)f32 #171=(1,256,20,20)f32
+nn.Conv2d                conv2d_56                1 1 171 172 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(1,1) out_channels=256 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,1,1)f32 $input=171 #171=(1,256,20,20)f32 #172=(1,256,20,20)f32
+F.silu                   silu_47                  1 1 172 173 $input=172 #172=(1,256,20,20)f32 #173=(1,256,20,20)f32
+nn.Conv2d                conv2d_57                1 1 173 174 bias=True dilation=(1,1) groups=1 in_channels=256 kernel_size=(3,3) out_channels=256 padding=(1,1) padding_mode=zeros stride=(1,1) @bias=(256)f32 @weight=(256,256,3,3)f32 $input=173 #173=(1,256,20,20)f32 #174=(1,256,20,20)f32
+F.silu                   silu_48                  1 1 174 175 $input=174 #174=(1,256,20,20)f32 #175=(1,256,20,20)f32
+torch.cat                torch.cat_14             2 1 175 169 176 dim=1 #175=(1,256,20,20)f32 #169=(1,256,20,20)f32 #176=(1,512,20,20)f32
+nn.Conv2d                conv2d_58                1 1 176 177 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=512 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(512)f32 @weight=(512,512,1,1)f32 $input=176 #176=(1,512,20,20)f32 #177=(1,512,20,20)f32
+F.silu                   silu_49                  1 1 177 178 $input=177 #177=(1,512,20,20)f32 #178=(1,512,20,20)f32
+nn.Conv2d                conv2d_59                1 1 178 179 bias=True dilation=(1,1) groups=1 in_channels=512 kernel_size=(1,1) out_channels=30 padding=(0,0) padding_mode=zeros stride=(1,1) @bias=(30)f32 @weight=(30,512,1,1)f32 $input=178 #178=(1,512,20,20)f32 #179=(1,30,20,20)f32
+Tensor.permute           Tensor.permute_20        1 1 179 180 dims=(0,2,3,1) $input=179 #179=(1,30,20,20)f32 #180=(1,20,20,30)f32
+Tensor.reshape           Tensor.reshape_25        1 1 180 181 shape=(1,400,3,10) $input=180 #180=(1,20,20,30)f32 #181=(1,400,3,10)f32
+Tensor.slice             Tensor.slice_33          1 1 181 182 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,10) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,4) steps=(1,1,1,1) $input=181 #181=(1,400,3,10)f32 #182=(1,400,3,6)f32
+F.sigmoid                F.sigmoid_99             1 1 182 183 $input=182 #182=(1,400,3,6)f32 #183=(1,400,3,6)f32
+Tensor.slice             Tensor.slice_34          1 1 181 184 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,4) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,2) steps=(1,1,1,1) $input=181 #181=(1,400,3,10)f32 #184=(1,400,3,2)f32
+F.sigmoid                F.sigmoid_100            1 1 184 185 $input=184 #184=(1,400,3,2)f32 #185=(1,400,3,2)f32
+pnnx.Attribute           const_fold_opt__626      0 1 186 @data=(1,1,3,2)f32 #186=(1,1,3,2)f32
+pnnx.Expression          pnnx_expr_6              3 1 185 186 126 187 expr=mul(mul(mul(@0,@0),@1),@2) #185=(1,400,3,2)f32 #186=(1,1,3,2)f32 #126=(1,2)f32 #187=(1,400,3,2)f32
+Tensor.slice             Tensor.slice_35          1 1 181 188 dims=(0,1,2,3) ends=(2147483647,2147483647,2147483647,2) selects=(2147483647,2147483647,2147483647,2147483647) starts=(0,0,0,0) steps=(1,1,1,1) $input=181 #181=(1,400,3,10)f32 #188=(1,400,3,2)f32
+F.sigmoid                F.sigmoid_101            1 1 188 189 $input=188 #188=(1,400,3,2)f32 #189=(1,400,3,2)f32
+pnnx.Attribute           const_fold_opt__618      0 1 190 @data=(1,400,1,2)f32 #190=(1,400,1,2)f32
+pnnx.Expression          pnnx_expr_0              3 1 189 190 126 191 expr=mul(mul(add(mul(@0,2.0),@1),32.0),@2) #189=(1,400,3,2)f32 #190=(1,400,1,2)f32 #126=(1,2)f32 #191=(1,400,3,2)f32
+torch.cat                torch.cat_15             3 1 191 187 183 192 dim=-1 #191=(1,400,3,2)f32 #187=(1,400,3,2)f32 #183=(1,400,3,6)f32 #192=(1,400,3,10)f32
+Tensor.reshape           Tensor.reshape_26        1 1 192 193 shape=(1,1200,10) $input=192 #192=(1,400,3,10)f32 #193=(1,1200,10)f32
+torch.cat                torch.cat_16             3 1 133 163 193 194 dim=1 #133=(1,19200,10)f32 #163=(1,4800,10)f32 #193=(1,1200,10)f32 #194=(1,25200,10)f32
+pnnx.Output              out0                     1 0 194 #194=(1,25200,10)f32

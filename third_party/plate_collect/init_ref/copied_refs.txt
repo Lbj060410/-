@@ -1,0 +1,9 @@
+﻿
+FullName                                                                                                     
+--------                                                                                                     
+F:\Androidcar\ML_lik_car (3)\ML_lik_car\app\src\main\java\com\example\ml_lik_car\BKRC_recognize\CarPlate.java
+F:\Androidcar\ML_lik_car (3)\ML_lik_car\app\src\main\java\com\example\ml_lik_car\yolov5\CarPlate.java        
+F:\Androidcar\ML_lik_car (3)\ML_lik_car\app\src\main\java\com\example\ml_lik_car\CarPlate1.java              
+
+
+

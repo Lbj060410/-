@@ -1,0 +1,6 @@
+no_pass
+no_straight
+turn_left
+go_straight
+turn_right
+turn_around

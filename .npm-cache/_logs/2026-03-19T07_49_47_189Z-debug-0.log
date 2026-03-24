@@ -1,0 +1,22 @@
+0 verbose cli F:\node\node.exe F:\node\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.9.0
+2 info using node@v24.14.0
+3 silly config load:file:F:\node\node_modules\npm\npmrc
+4 silly config load:file:F:\HarmonyOs\car\.npmrc
+5 silly config load:file:C:\Users\来不及捂手\.npmrc
+6 silly config load:file:C:\Users\来不及捂手\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm exec @gltf-transform/cli inspect entry/src/main/resources/rawfile/models/导出的小车模型.glb
+8 verbose argv "exec" "--yes" "--" "@gltf-transform/cli" "inspect" "entry/src/main/resources/rawfile/models/导出的小车模型.glb"
+9 verbose logfile logs-max:10 dir:F:\HarmonyOs\car\.npm-cache\_logs\2026-03-19T07_49_47_189Z-
+10 verbose logfile F:\HarmonyOs\car\.npm-cache\_logs\2026-03-19T07_49_47_189Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+13 http fetch GET 200 https://repo.huaweicloud.com/repository/npm/@gltf-transform%2fcli 2320ms (cache updated)
+14 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+15 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+16 verbose cwd F:\HarmonyOs\car
+17 verbose os Windows_NT 10.0.19045
+18 verbose node v24.14.0
+19 verbose npm  v11.9.0
+20 verbose exit 0
+21 info ok

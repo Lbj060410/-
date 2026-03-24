@@ -1,0 +1,9 @@
+﻿
+FullName                                                                                                                                                                                 Length
+--------                                                                                                                                                                                 ------
+C:\Users\来不及捂手\.gradle\caches\modules-2\files-2.1\com.github.HyperInspire\hyperlpr3-android-sdk\1.0.3\47b05c49a5311ad4a620d27cf26da48bb4bc7686\hyperlpr3-android-sdk-1.0.3-sources.jar     6588
+C:\Users\来不及捂手\.gradle\caches\modules-2\files-2.1\com.github.HyperInspire\hyperlpr3-android-sdk\1.0.3\c4b444a9ccf687963b4bcd1b1f5b299cb7372366\hyperlpr3-android-sdk-1.0.3.pom             1671
+C:\Users\来不及捂手\.gradle\caches\modules-2\files-2.1\com.github.HyperInspire\hyperlpr3-android-sdk\1.0.3\e5c2b005e00bf23ec9d03b777ef77e40ee0135be\hyperlpr3-android-sdk-1.0.3.aar         12558381
+
+
+

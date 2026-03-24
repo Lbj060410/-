@@ -1,0 +1,27 @@
+﻿您好，我们需要在 HarmonyOS 项目接入车牌识别能力，请提供以下材料：
+
+1) Harmony 版本 SDK
+- 形式：HAR/HSP，或 C/C++ 动态库（so）+ 头文件
+- 支持架构：arm64-v8a（如有其它架构请一并提供）
+
+2) 授权材料
+- license/key 文件或在线激活账号
+- 授权绑定规则（设备/包名/有效期）
+
+3) API 文档
+- 初始化（init）
+- 识别（recognize）
+- 资源释放（release）
+- 错误码说明
+
+4) 最小可运行 Demo
+- 包含一张图片识别与摄像头帧识别示例
+- 返回字段至少包含：识别文本、置信度、车牌类型
+
+5) 版本与兼容性说明
+- SDK 版本号
+- 依赖项列表
+- HarmonyOS 兼容版本范围
+
+我们当前已有 Android 侧参考依赖：com.github.HyperInspire:hyperlpr3-android-sdk:1.0.3。
+请确认 Harmony 侧对应版本与迁移说明。

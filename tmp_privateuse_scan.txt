@@ -1,0 +1,3 @@
+﻿F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:283	  if (mergedPointNodes.length > 0) s.pushLog(`鐐归殰纰嶈浆鐐圭琛岋細${mergedPointNodes.join(',')}`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorMapObstacleOps.ets:284	  s.pushLog(`鐐归殰纰嶅懡涓細${hit.id} edge=${hit.edgeId} t=${hit.t.toFixed(2)}`)
+F:\HarmonyOs\car\entry\src\main\ets\pages\page1\app\Page1CoordinatorPlanMotionOps.ets:89	    s.setPath([], '闈炴硶鐩爣')
