@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page2/Page2Coordinator.ets
- * 用途： Page2 business coordinator for video/control interactions.
- * 何时修改： adding page2 behaviors, polling, or action dispatch.
- * 相关文件： pages/page2/Page2View.ets, components/PtzControlPanel.ets, services/camera/*.
+ * 用途： Page2 用于视频 / 控制交互的业务协调器.
+ * 何时修改： 添加 Page2 行为、轮询或动作分发时.
+ * 相关文件： pages/page2/Page2View.ets、components/PtzControlPanel.ets、services/camera/*.
  */
 import resourceManager from '@ohos.resourceManager'
 import image from '@ohos.multimedia.image'

@@ -79,6 +79,12 @@ export struct ControlPanel {
           .onClick((): void => {
             this.onTargetPickBtn()
           })
+          .gesture(
+            LongPressGesture()
+              .onAction((): void => {
+                this.clearTargetSelection()
+              })
+          )
       }
       .width('100%')
 
@@ -237,6 +243,22 @@ export struct ControlPanel {
       return
     }
     this.store.toggleTargetPick()
+  }
+
+  private clearTargetSelection(): void {
+    const hadSelection: boolean =
+      this.store.targetPickEnabled ||
+      this.store.mapTargetPendingSend ||
+      this.store.destDraft.trim().length > 0 ||
+      this.store.destApplied.trim().length > 0
+    this.store.targetPickEnabled = false
+    this.store.mapTargetPendingSend = false
+    this.store.destDraft = ''
+    this.store.destApplied = ''
+    if (hadSelection) {
+      this.store.setAction('目标清空')
+      this.store.pushLog('目标点选：长按已清空')
+    }
   }
 
   private alarmBtnText(): string {

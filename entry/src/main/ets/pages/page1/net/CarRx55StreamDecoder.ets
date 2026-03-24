@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page1/net/CarRx55StreamDecoder.ets
- * 用途： Vehicle frame models/parsers/decoder utilities for 0x55AA protocol.
- * 何时修改： packet format changes, parser rules change, or telemetry decode needs update.
- * 相关文件： app/Page1Coordinator.ets and services/control/CarTcpService.ets.
+ * 用途： 用于 0x55AA 协议的车辆数据帧模型、解析器、解码工具
+ * 何时修改： 数据包格式变更、解析规则修改、遥测解码需要更新时
+ * 相关文件： app/Page1Coordinator.ets 以及 services/control/CarTcpService.ets.
  */
 // entry/src/main/ets/pages/page1/net/CarRx55StreamDecoder.ets
 //

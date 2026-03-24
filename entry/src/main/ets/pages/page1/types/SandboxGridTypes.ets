@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page1/types/SandboxGridTypes.ets
- * 用途： Shared type definitions used by page1 modules.
- * 何时修改： adding/changing TypeScript interfaces/enums for page1.
- * 相关文件： app/*, components/*, net/* in pages/page1/.
+ * 用途： Page1 模块所使用的共享类型定义。
+ * 何时修改： 为 Page1 添加或修改 TypeScript 接口、枚举时.
+ * 相关文件： pages/page1/ 目录下的 app/、components/、net/*.
  */
 export interface GridNode {
   id: string

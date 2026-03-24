@@ -60,8 +60,13 @@ export struct Page4View {
 
   private longPressTimerId: number = -1
   private readonly longPressThresholdMs: number = 320
+  private lastGoodOpenClawHost: string = ''
+  private openClawHostCooldownUntilMs: Record<string, number> = {}
+  private readonly openClawHostCooldownMs: number = 25000
+  private readonly openClawRetryConnectTimeoutMs: number = 2200
+  private readonly openClawRetryReadTimeoutMs: number = 16000
   private readonly openClawSystemPrompt: string =
-    '你是智能小车的车控助手。优先使用简洁中文回复；涉及行驶或安全动作时先给出明确、安全、可执行的步骤。'
+    '你是智能小车的车控助手。优先使用简洁中文回复；涉及行驶或安全动作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
 
   aboutToAppear(): void {
     installPage4TencentVoiceInputAdapter()
@@ -848,7 +853,7 @@ export struct Page4View {
     }
 
     const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
-    const hosts: Array<string> = resolveOpenClawHostCandidates(gatewayIp)
+    const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
     if (hosts.length <= 0) {
       this.pushAssistant('未检测到 OpenClaw 主机地址。请在 DeviceNetworkConfig.ets 设置 OPENCLAW_GATEWAY_HOST。')
       return
@@ -862,22 +867,28 @@ export struct Page4View {
       for (let i: number = 0; i < hosts.length; i++) {
         const host: string = hosts[i]
         const endpoint: string = buildOpenClawChatCompletionsUrl(host)
+        const connectTimeoutMs: number =
+          i <= 0 ? OPENCLAW_CONNECT_TIMEOUT_MS : Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.openClawRetryConnectTimeoutMs)
+        const readTimeoutMs: number =
+          i <= 0 ? OPENCLAW_READ_TIMEOUT_MS : Math.min(OPENCLAW_READ_TIMEOUT_MS, this.openClawRetryReadTimeoutMs)
         const client: OpenClawGatewayClient = new OpenClawGatewayClient({
           endpoint,
           bearerToken: token,
           model: OPENCLAW_CHAT_MODEL,
-          connectTimeoutMs: OPENCLAW_CONNECT_TIMEOUT_MS,
-          readTimeoutMs: OPENCLAW_READ_TIMEOUT_MS
+          connectTimeoutMs,
+          readTimeoutMs
         })
 
-        this.logInfo('sendOpenClawRequest', `host=${host}, model=${OPENCLAW_CHAT_MODEL}, messages=${reqMessages.length}`)
+        this.logInfo('sendOpenClawRequest', `host=${host}, model=${OPENCLAW_CHAT_MODEL}, messages=${reqMessages.length}, ct=${connectTimeoutMs}, rt=${readTimeoutMs}`)
         const result = await client.complete(reqMessages)
         if (result.ok) {
+          this.markOpenClawHostSuccess(host)
           this.logInfo('sendOpenClawSuccess', `host=${host}, chars=${result.text.length}`)
           this.pushAssistant(result.text)
           return
         }
 
+        this.markOpenClawHostFail(host)
         const codeText: string = result.responseCode > 0 ? `HTTP ${result.responseCode}` : 'NETWORK'
         this.logError('sendOpenClawFail', `host=${host}, code=${codeText}, reason=${result.errorText}`)
         errs.push(`${host} ${codeText} ${result.errorText}`)
@@ -888,6 +899,71 @@ export struct Page4View {
     } finally {
       this.assistantBusy = false
     }
+  }
+
+  private rankOpenClawHosts(inputHosts: Array<string>): Array<string> {
+    const out: Array<string> = []
+    const normal: Array<string> = []
+    const cooling: Array<string> = []
+    const nowMs: number = Date.now()
+    const pushUnique = (arr: Array<string>, host: string): void => {
+      for (let i: number = 0; i < arr.length; i++) {
+        if (arr[i] === host) return
+      }
+      arr.push(host)
+    }
+
+    for (let i: number = 0; i < inputHosts.length; i++) {
+      const host: string = inputHosts[i].trim()
+      if (host.length <= 0) continue
+      if (this.isOpenClawHostCooling(host, nowMs)) {
+        pushUnique(cooling, host)
+      } else {
+        pushUnique(normal, host)
+      }
+    }
+
+    const preferred: string = this.lastGoodOpenClawHost.trim()
+    if (preferred.length > 0) {
+      for (let i: number = 0; i < normal.length; i++) {
+        if (normal[i] === preferred) {
+          out.push(preferred)
+          break
+        }
+      }
+    }
+
+    for (let i: number = 0; i < normal.length; i++) {
+      const host: string = normal[i]
+      let exists: boolean = false
+      for (let j: number = 0; j < out.length; j++) {
+        if (out[j] === host) {
+          exists = true
+          break
+        }
+      }
+      if (!exists) out.push(host)
+    }
+
+    for (let i: number = 0; i < cooling.length; i++) {
+      out.push(cooling[i])
+    }
+
+    return out
+  }
+
+  private isOpenClawHostCooling(host: string, nowMs: number): boolean {
+    const untilMs: number | undefined = this.openClawHostCooldownUntilMs[host]
+    return typeof untilMs === 'number' && untilMs > nowMs
+  }
+
+  private markOpenClawHostSuccess(host: string): void {
+    this.lastGoodOpenClawHost = host
+    this.openClawHostCooldownUntilMs[host] = 0
+  }
+
+  private markOpenClawHostFail(host: string): void {
+    this.openClawHostCooldownUntilMs[host] = Date.now() + this.openClawHostCooldownMs
   }
 
   private async submitPrompt(raw: string): Promise<void> {

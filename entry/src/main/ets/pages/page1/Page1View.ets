@@ -58,7 +58,6 @@ export struct Page1View {
         Column({ space: 10 }) {
           Scroll() {
             Column({ space: 10 }) {
-              this.buildDestinationBar()
               CarStatusCard({})
               ControlPanel({ onDiag: (): void => { this.showDiag = true } })
               Column() {}.height(4)
@@ -145,48 +144,5 @@ export struct Page1View {
     .shadow({ radius: 10, color: '#00000008', offsetX: 0, offsetY: 2 })
   }
 
-  @Builder
-  private buildDestinationBar(): void {
-    Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        TextInput({ text: this.store.destDraft, placeholder: '输入目的地（例如：A2 / D4 / G6）' })
-          .layoutWeight(1)
-          .height(Page1Theme.INPUT_HEIGHT)
-          .backgroundColor('#F8FAFC')
-          .borderRadius(14)
-          .fontSize(14)
-          .fontColor(Page1Theme.TEXT_PRIMARY)
-          .placeholderColor(Page1Theme.TEXT_TERTIARY)
-          .padding({ left: 14, right: 14 })
-          .onChange((v: string): void => {
-            this.store.destDraft = v
-          })
-
-        Button('应用')
-          .height(Page1Theme.INPUT_HEIGHT)
-          .padding({ left: 20, right: 20 })
-          .borderRadius(14)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .backgroundColor(Page1Theme.PRIMARY)
-          .fontColor('#FFFFFF')
-          .onClick(async (): Promise<void> => {
-            await page1Coordinator.startManualRoute(this.store.destDraft)
-          })
-      }
-
-      Text(this.store.destApplied.length > 0 ? `目的地：${this.store.destApplied}` : '目的地：未设置')
-        .fontSize(12)
-        .fontColor(Page1Theme.TEXT_SECONDARY)
-        .margin({ left: 4 })
-
-    }
-    .padding(16)
-    .borderRadius(Page1Theme.RADIUS_L)
-    .backgroundColor(Page1Theme.CARD)
-    .shadow({ radius: 16, color: '#1E293B0A', offsetX: 0, offsetY: 4 })
-  }
 }
-
-
 

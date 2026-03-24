@@ -1,15 +1,22 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page1/components/SandboxMap.ets
- * 用途： Page1 visual components only (map/status/control rendering).
- * 何时修改： modifying view styles, control widgets, or display-only interactions.
- * 相关文件： state comes from app/Page1UiStore.ets, actions route to app/Page1Coordinator.ets.
+ * 用途： 仅用于 Page1 页面的可视化组件（地图 / 状态 / 控件渲染）
+ * 何时修改： 仅在需要修改视图样式、控件组件、纯展示类交互时编辑此文件
+ * 相关文件： 页面状态数据来源于 app/Page1UiStore.ets，操作事件转发至 app/Page1Coordinator.ets
  */
 // entry/src/main/ets/pages/page1/components/SandboxMap.ets
 
 import { page1Store, Page1UiStore, XYPos, RouteObstaclePoint } from '../app/Page1UiStore'
 import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
+import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
+
+type NodeBlockType = 'parking' | 'junction' | 'corridor'
+
+interface NodeBlockRule {
+  fullBlockThreshold: number
+}
 
 @Component
 export struct SandboxMap {
@@ -133,8 +140,10 @@ export struct SandboxMap {
             .objectFit(ImageFit.Fill)
 
           this.buildGridOverlay()
+          this.buildBlockedNodeMarkers()
           this.buildRouteObstaclePointMarkers()
           this.buildBlockedEdgeMarkers()
+          this.buildDestinationMarker()
           this.buildCarDot()
           this.buildCarHeadingArrow()
           this.buildCurrentNodeBadge()
@@ -277,20 +286,20 @@ export struct SandboxMap {
   @Builder
   private buildRouteObstaclePointMarkers(): void {
     ForEach(this.store.routeObstaclePoints, (p: RouteObstaclePoint): void => {
-      Column() {}
-      .width(14)
-      .height(14)
-      .borderRadius(7)
-      .backgroundColor(p.triggered ? '#FF3B30' : '#FFCC00')
-      .border({ width: 2, color: '#FFFFFF' })
-      .position(this.routeObstaclePointPos(p))
-      .zIndex(4)
+      if (!this.edgeMarkerSuppressedByNodeBlock(p.edgeId)) {
+        Image($rawfile('icon/障碍物.png'))
+          .width(18)
+          .height(18)
+          .objectFit(ImageFit.Contain)
+          .position(this.routeObstaclePointPos(p))
+          .zIndex(4)
+      }
     }, (p: RouteObstaclePoint): string => p.id)
   }
 
   private routeObstaclePointPos(p: RouteObstaclePoint): XYPos {
-    const x: number = p.xNorm * this.store.mapW - 7
-    const y: number = p.yNorm * this.store.mapH - 7
+    const x: number = p.xNorm * this.store.mapW - 9
+    const y: number = p.yNorm * this.store.mapH - 9
     return { x: x, y: y }
   }
 
@@ -298,15 +307,10 @@ export struct SandboxMap {
   private buildBlockedEdgeMarkers(): void {
     ForEach(this.store.blockedEdges, (edgeId: string): void => {
       if (this.edgeMarkerVisible(edgeId)) {
-        Text('X')
-          .fontSize(10)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-          .width(16)
-          .height(16)
-          .textAlign(TextAlign.Center)
-          .backgroundColor('#FF3B30')
-          .borderRadius(8)
+        Image($rawfile('icon/障碍物.png'))
+          .width(18)
+          .height(18)
+          .objectFit(ImageFit.Contain)
           .position(this.edgeMarkerPos(edgeId))
           .zIndex(3)
       }
@@ -314,6 +318,7 @@ export struct SandboxMap {
   }
 
   private edgeMarkerVisible(edgeId: string): boolean {
+    if (this.edgeMarkerSuppressedByNodeBlock(edgeId)) return false
     return this.store.blockedEdgeMidPos(edgeId) !== undefined
   }
 
@@ -322,7 +327,68 @@ export struct SandboxMap {
     if (!p) {
       return { x: -1000, y: -1000 }
     }
-    return { x: p.x - 8, y: p.y - 8 }
+    return { x: p.x - 9, y: p.y - 9 }
+  }
+
+  @Builder
+  private buildBlockedNodeMarkers(): void {
+    ForEach(this.store.gridNodes, (n: GridNode): void => {
+      if (this.shouldShowBlockedNodeMarker(n.id)) {
+        Image(this.blockedNodeMarkerResource(n.id))
+        .width(20)
+        .height(20)
+        .objectFit(ImageFit.Contain)
+        .position(this.store.gridNodeDotPos(n, 20))
+        .zIndex(6)
+      }
+    }, (n: GridNode): string => `blocked-node-${n.id}`)
+  }
+
+  @Builder
+  private buildDestinationMarker(): void {
+    if (this.hasDestinationMarker()) {
+      Image($rawfile('icon/目的地.png'))
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+        .position(this.destinationMarkerPos())
+        .zIndex(8)
+    }
+  }
+
+  private hasDestinationMarker(): boolean {
+    return this.destinationMarkerNode() !== undefined
+  }
+
+  private destinationMarkerPos(): XYPos {
+    const node: GridNode | undefined = this.destinationMarkerNode()
+    if (!node) return { x: -9999, y: -9999 }
+    return this.store.gridNodeDotPos(node, 24)
+  }
+
+  private destinationMarkerNode(): GridNode | undefined {
+    const targetId: string = this.displayTargetNodeId()
+    if (targetId.length <= 0) return undefined
+    return this.findGridNodeById(targetId)
+  }
+
+  private displayTargetNodeId(): string {
+    const pending: string = this.store.destDraft.trim().toUpperCase()
+    if (this.store.mapTargetPendingSend && pending.length > 0) return pending
+
+    const applied: string = this.store.destApplied.trim().toUpperCase()
+    if (applied.length > 0) return applied
+    return ''
+  }
+
+  private findGridNodeById(id: string): GridNode | undefined {
+    const x: string = id.trim().toUpperCase()
+    if (x.length <= 0) return undefined
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const n: GridNode = this.store.gridNodes[i]
+      if (n.id.toUpperCase() === x) return n
+    }
+    return undefined
   }
 
   @Builder
@@ -340,10 +406,16 @@ export struct SandboxMap {
   // 箭头相关
   @Builder
   private buildCarHeadingArrow(): void {
-    Text(this.carArrowGlyph())
-      .fontSize(this.carArrowFontSize())
-      .fontWeight(FontWeight.Bold)
-      .fontColor('#1677FF')
+    Image($rawfile('icon/方向箭头.png'))
+      .width(this.carArrowSize())
+      .height(this.carArrowSize())
+      .objectFit(ImageFit.Contain)
+      .rotate({
+        z: 1,
+        angle: this.carArrowDisplayDeg(),
+        centerX: '50%',
+        centerY: '50%'
+      })
       .position(this.carArrowPos())
       .zIndex(11)
   }
@@ -361,12 +433,7 @@ export struct SandboxMap {
     return Math.round(headingDeg / 45) % 8
   }
 
-  private carArrowGlyph(): string {
-    const glyphs: Array<string> = ['\u2192', '\u2198', '\u2193', '\u2199', '\u2190', '\u2196', '\u2191', '\u2197']
-    return glyphs[this.carArrowSectorIndex()]
-  }
-
-  private carArrowFontSize(): number {
+  private carArrowSize(): number {
     return 18
   }
 
@@ -375,15 +442,130 @@ export struct SandboxMap {
     const size: number = this.store.carDotSize
     const centerX: number = dot.x + size / 2
     const centerY: number = dot.y + size / 2
-    const headingDeg: number = this.carArrowSectorIndex() * 45
+    const headingDeg: number = this.carArrowHeadingDeg()
     const rad: number = headingDeg * Math.PI / 180
     const radius: number = size / 2 + 10
-    const arrowSize: number = this.carArrowFontSize()
+    const arrowSize: number = this.carArrowSize()
 
     return {
       x: centerX + Math.cos(rad) * radius - arrowSize / 2,
       y: centerY + Math.sin(rad) * radius - arrowSize / 2
     }
+  }
+
+  private carArrowHeadingDeg(): number {
+    // 边框优先规则：
+    // - 红点贴左边框：箭头强制朝右
+    // - 红点贴右边框：箭头强制朝左
+    if (this.isCarNearLeftBorder()) return 0
+    if (this.isCarNearRightBorder()) return 180
+    return this.carArrowSectorIndex() * 45
+  }
+
+  private carArrowDisplayDeg(): number {
+    // 假设方向箭头.png 的“0度”朝向为右（与旧版文本箭头一致）。
+    // 若素材默认朝上，可改成：return this.carArrowHeadingDeg() + 90
+    return this.carArrowHeadingDeg()
+  }
+
+  private isCarNearLeftBorder(): boolean {
+    const dot: XYPos = this.store.carDotPos()
+    const size: number = this.store.carDotSize
+    const centerX: number = dot.x + size / 2
+    const thresholdPx: number = Math.max(8, size * 0.7)
+    return centerX <= thresholdPx
+  }
+
+  private isCarNearRightBorder(): boolean {
+    const dot: XYPos = this.store.carDotPos()
+    const size: number = this.store.carDotSize
+    const mw: number = this.store.mapW
+    if (mw <= 0) return false
+    const centerX: number = dot.x + size / 2
+    const thresholdPx: number = Math.max(8, size * 0.7)
+    return centerX >= mw - thresholdPx
+  }
+
+  private edgeMarkerSuppressedByNodeBlock(edgeId: string): boolean {
+    const parsed = RouteEdgeCodec.parse(edgeId)
+    if (!parsed) return false
+    return this.isNodeFullyBlocked(parsed.a) || this.isNodeFullyBlocked(parsed.b)
+  }
+
+  private isNodeFullyBlocked(nodeId: string): boolean {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length <= 0) return false
+
+    let blockedIncident: number = 0
+    for (let i: number = 0; i < this.store.blockedEdges.length; i++) {
+      const parsed = RouteEdgeCodec.parse(this.store.blockedEdges[i])
+      if (!parsed) continue
+      if (parsed.a === x || parsed.b === x) blockedIncident += 1
+    }
+
+    const rule: NodeBlockRule = this.nodeBlockRuleFor(x)
+    return blockedIncident >= rule.fullBlockThreshold
+  }
+
+  private shouldShowBlockedNodeMarker(nodeId: string): boolean {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length <= 0) return false
+    return this.store.isBlocked(x) || this.isNodeFullyBlocked(x)
+  }
+
+  private blockedNodeMarkerResource(nodeId: string): any {
+    if (this.isNodeFullyBlocked(nodeId) && !this.isParkingNode(nodeId)) {
+      return $rawfile('icon/堵塞.png')
+    }
+    return $rawfile('icon/堵塞占用.png')
+  }
+
+  private nodeBlockTypeOf(nodeId: string): NodeBlockType {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length <= 0) return 'corridor'
+
+    // 停车位：顶行/底行停车节点统一按停车类型处理（堵塞图固定为占用图）。
+    if (x === 'B1' || x === 'D1' || x === 'F1' || x === 'B7' || x === 'D7' || x === 'F7') {
+      return 'parking'
+    }
+
+    const degree: number = this.nodeDegree(x)
+    if (degree >= 3) return 'junction'
+    return 'corridor'
+  }
+
+  private nodeBlockRuleFor(nodeId: string): NodeBlockRule {
+    const t: NodeBlockType = this.nodeBlockTypeOf(nodeId)
+    if (t === 'parking') {
+      return {
+        fullBlockThreshold: 999
+      }
+    }
+    if (t === 'junction') {
+      return {
+        fullBlockThreshold: 3
+      }
+    }
+    return {
+      fullBlockThreshold: 2
+    }
+  }
+
+  private isParkingNode(nodeId: string): boolean {
+    return this.nodeBlockTypeOf(nodeId) === 'parking'
+  }
+
+  private nodeDegree(nodeId: string): number {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length <= 0) return 0
+
+    const edges = PathPlannerAStar.routeEdges()
+    let degree: number = 0
+    for (let i: number = 0; i < edges.length; i++) {
+      const e = edges[i]
+      if (e.a === x || e.b === x) degree += 1
+    }
+    return degree
   }
 
   @Builder
@@ -412,9 +594,14 @@ export struct SandboxMap {
 
     const bw: number = 34
     const bh: number = 18
+    const centerX: number = dot.x + size / 2
+    const centerY: number = dot.y + size / 2
+    const oppositeDeg: number = (this.carArrowHeadingDeg() + 180) % 360
+    const oppositeRad: number = oppositeDeg * Math.PI / 180
+    const radius: number = size / 2 + 16
 
-    let x: number = dot.x + (size / 2) - (bw / 2)
-    let y: number = dot.y - bh - 6
+    let x: number = centerX + Math.cos(oppositeRad) * radius - bw / 2
+    let y: number = centerY + Math.sin(oppositeRad) * radius - bh / 2
 
     const mw: number = this.store.mapW
     const mh: number = this.store.mapH
@@ -426,9 +613,7 @@ export struct SandboxMap {
       x = mw - bw - 2
     }
 
-    if (y < 2) {
-      y = dot.y + size + 4
-    }
+    if (y < 2) y = 2
     if (mh > 0 && y + bh > mh - 2) {
       y = mh - bh - 2
     }
@@ -565,9 +750,7 @@ export struct SandboxMap {
   }
 
   private nodeDotBg(id: string): string {
-    if (this.isBlockedNode(id)) {
-      return '#FF3B30'
-    }
+    if (this.isBlockedNode(id)) return '#00000025'
     if (this.isPathCurrent(id)) {
       return '#1677FF'
     }
@@ -587,9 +770,7 @@ export struct SandboxMap {
   }
 
   private nodeLabelColor(id: string): string {
-    if (this.isBlockedNode(id)) {
-      return '#FF3B30'
-    }
+    if (this.isBlockedNode(id)) return '#00000070'
     if (this.isPathCurrent(id)) {
       return '#1677FF'
     }

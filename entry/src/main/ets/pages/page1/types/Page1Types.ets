@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page1/types/Page1Types.ets
- * 用途： Shared type definitions used by page1 modules.
- * 何时修改： adding/changing TypeScript interfaces/enums for page1.
- * 相关文件： app/*, components/*, net/* in pages/page1/.
+ * 用途： Page1 各模块共用的类型定义
+ * 何时修改： 为 Page1 新增或修改 TypeScript 接口、枚举时.
+ * 相关文件： pages/page1/ 目录下的 app/、components/、net/*.
  */
 export enum Page1Action {
   GO = 0,

@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page2/components/PtzControlPanel.ets
- * 用途： Page2 reusable UI controls (PTZ and related widgets).
- * 何时修改： adding PTZ buttons, control panels, or style updates.
- * 相关文件： services/control/CameraPtzService.ets and page2 coordinator.
+ * 用途：Page2 可复用 UI 控件（云台及相关组件）.
+ * 何时修改： 添加云台按钮、控制面板或进行样式更新时.
+ * 相关文件： services/control/CameraPtzService.ets 以及 Page2 协调器.
  */
 import { CameraPtzService, PtzResult } from '../../../services/control/CameraPtzService'
 import { videoStore } from '../../../state/VideoStore'

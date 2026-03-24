@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： pages/page2/Page2View.ets
- * 用途： Page2 UI view (video page).
- * 何时修改： adjusting page2 layout or section visibility.
- * 相关文件： pages/page2/Page2Coordinator.ets and services/source/*.
+ * 用途： Page2 UI 视图（视频页面）.
+ * 何时修改： 调整 Page2 布局或区域可见性时.
+ * 相关文件： pages/page2/Page2Coordinator.ets 以及 services/source/*.
  */
 
 import resourceManager from '@ohos.resourceManager'
