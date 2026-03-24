@@ -8,4 +8,10 @@
 /.clangd
 /.clang-format
 /.clang-tidy
-**/.test
+**/.testnode_modules/
+.npm-cache/
+oh_modules/
+build/
+.hvigor/
+*.hap
+*.app
