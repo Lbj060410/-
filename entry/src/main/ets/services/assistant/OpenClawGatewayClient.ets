@@ -1,9 +1,9 @@
 /**
  * 代码指南：
  * 文件： services/assistant/OpenClawGatewayClient.ets
- * 用途： Call OpenClaw gateway OpenAI-compatible HTTP endpoint for chat responses.
- * 何时修改： adjusting auth, request payload, timeout, or response parsing.
- * 相关文件： pages/page4/Page4View.ets, config/DeviceNetworkConfig.ets.
+ * 用途： 调用 OpenClaw 网关中兼容 OpenAI 的 HTTP 接口获取聊天回复.
+ * 何时修改： 调整认证方式、请求参数、超时时间或响应解析逻辑时.
+ * 相关文件： pages/page4/Page4View.ets、config/DeviceNetworkConfig.ets.
  */
 import http from '@ohos.net.http'
 

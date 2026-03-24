@@ -1,8 +1,8 @@
 ﻿/**
  * 代码指南：
  * 文件： services/assistant/Page4TencentLocalTtsService.ets
- * 用途： Tencent Cloud TTS (V3 API) + local phone playback for page4 assistant.
- * 何时修改： TTS request parameters, signing, or playback behavior changes.
+ * 用途： 为 page4 助手提供腾讯云语音合成（V3 API）+ 本地手机播放功能.
+ * 何时修改： 腾讯云语音合成请求参数、签名算法或播放逻辑发生变更时.
  */
 import http from '@ohos.net.http'
 import media from '@ohos.multimedia.media'

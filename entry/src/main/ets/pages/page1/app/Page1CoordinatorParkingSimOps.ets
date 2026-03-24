@@ -251,6 +251,10 @@ export async function runHandleGateDepartOnArrival(ctx: any, arrivedId: string):
       s.setAction(`闸口放行=${flow} | 去重`)
       s.pushLog(`GATE_DEPART_DEDUP: ${curId}->${nextId} flow=${flow} key=${departKey}`)
     } else {
+      if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('GATE_DEPART', 'GARAGE_FLOW')) {
+        s.setAction(`闸口放行=${flow} | 熔断中`)
+        return true
+      }
       sentInRealMode = ctx.canRealSend()
       ctx.proto.setMode(sentInRealMode ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
       s.bumpTx()
@@ -371,7 +375,6 @@ export async function simulateOnceLoop(ctx: any): Promise<void> {
     ctx.simLoopBusy = false
   }
 }
-
 
 
 

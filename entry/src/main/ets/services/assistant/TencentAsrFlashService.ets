@@ -1,8 +1,8 @@
 /**
  * 代码指南：
  * 文件： services/assistant/TencentAsrFlashService.ets
- * 用途： Call Tencent Cloud Flash ASR API with HMAC-SHA1 authorization.
- * 何时修改： API signing rules or response schema changes.
+ * 用途： 通过 HMAC-SHA1 鉴权调用腾讯云极速语音识别 API.
+ * 何时修改： API 签名规则或响应格式发生变更时.
  * 相关文件： services/assistant/Page4TencentVoiceInputAdapter.ets.
  */
 import http from '@ohos.net.http'

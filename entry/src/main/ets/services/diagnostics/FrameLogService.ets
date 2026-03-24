@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/diagnostics/FrameLogService.ets
- * 用途： Diagnostics and frame logging support.
- * 何时修改： log persistence/format/filtering behavior changes.
- * 相关文件： Page1 diagnostics panel and protocol services.
+ * 用途： 提供诊断信息与数据帧日志记录功能。
+ * 何时修改： 日志持久化、格式或过滤逻辑发生变更时。
+ * 相关文件： Page1 诊断面板及协议相关服务。
  */
 // entry/src/main/ets/services/diagnostics/FrameLogService.ets
 

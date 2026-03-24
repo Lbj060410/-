@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/control/CarProtocolService.ets
- * 用途： Command-level protocol sender (encodes and sends control/voice/special commands).
- * 何时修改： adding a new car command code or changing command payload format.
- * 相关文件： services/control/CarFrameCodec.ets, services/control/CarTcpService.ets, page1 coordinator callers.
+ * 用途： 指令级协议发送器（编码并发送控制、语音、特殊指令）。
+ * 何时修改： 新增车辆指令码或修改指令载荷格式时。
+ * 相关文件： services/control/CarFrameCodec.ets & services/control/CarTcpService.ets & page1 协调器调用方。
  */
 // entry/src/main/ets/services/control/CarProtocolService.ets
 
@@ -247,8 +247,11 @@ export class CarProtocolService {
     await this.sendControl0A(0x1B,"LED标志物结束计时")
   }
 
+  // 注意：
+  // stopTask(0xBB) 只会终止小车端部分任务（如警报/播报等非运动任务），
+  // 不能可靠停止小车行动任务（行驶/转向）。业务层应尽量不要用它做“停车”。
   async stopTask(): Promise<void> {
-    await this.sendControl0A(0xBB, '终止任务，但不停止小车运行')
+    await this.sendControl0A(0xBB, '终止非行动任务（不保证停止运动）')
   }
 
   //=====0x0B 特定语音发送=====
@@ -391,4 +394,3 @@ export class CarProtocolService {
     return payloads
   }
 }
-

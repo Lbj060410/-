@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/network/DeviceNetworkResolver.ets
- * 用途： Device/network environment resolver helpers.
- * 何时修改： gateway/ip detection strategy changes.
- * 相关文件： page coordinators that auto-fill target endpoints.
+ * 用途： 设备/网络环境解析辅助工具。
+ * 何时修改： 网关/IP检测策略发生变更时。
+ * 相关文件： 自动填充目标接口的页面协调器。
  */
 import wifi from '@ohos.wifi'
 

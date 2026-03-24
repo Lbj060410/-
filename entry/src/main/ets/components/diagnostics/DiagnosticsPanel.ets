@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： components/diagnostics/DiagnosticsPanel.ets
- * 用途： Reusable diagnostics UI panel.
- * 何时修改： diagnostics display fields/actions are changed.
- * 相关文件： services/diagnostics/FrameLogService.ets and page1 view.
+ * 用途： 可复用的诊断信息用户界面面板。.
+ * 何时修改： 诊断信息展示字段 / 操作发生变更时.
+ * 相关文件： services/diagnostics/FrameLogService.ets 以及 page1 视图.
  */
 // entry/src/main/ets/components/diagnostics/DiagnosticsPanel.ets
 import wifi from '@ohos.wifi'

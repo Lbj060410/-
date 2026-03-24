@@ -159,6 +159,10 @@ import {
   planPath as planPathOp,
   schedulerDeps as schedulerDepsOp
 } from './Page1CoordinatorPlanMotionOps'
+import {
+  isShigongBarrierLabelKey,
+  normalizeBarrierLabelKey
+} from './TrafficBarrierLabelPolicy'
 
 export class Page1Coordinator {
   private store?: Page1UiStore
@@ -249,6 +253,13 @@ export class Page1Coordinator {
   private gateBillingRunning: boolean = false
   private gateBillingStartAtMs: number = 0
   private gateBillingElapsedMs: number = 0
+  private motionCommandBlockUntilMs: number = 0
+  private motionCommandBlockReason: string = ''
+  private motionCommandBlockLastLogAtMs: number = 0
+  private emergencyAlarmTimerId: number = -1
+  private barrierEmergencyBusy: boolean = false
+  private lastBarrierEmergencyTaskId: string = ''
+  private lastBarrierEmergencyTsMs: number = 0
   private started: boolean = false
   private starting: boolean = false
 
@@ -344,6 +355,8 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.clearEmergencyAlarmTimer()
+    this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
     this.stopSimulator()
@@ -369,6 +382,8 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.clearEmergencyAlarmTimer()
+    this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
     this.stopSimulator()
@@ -896,6 +911,9 @@ export class Page1Coordinator {
       s.pushLog(`GARAGE_CARPORT_RETRY: 2s未收到0xBD/0x01，重发 carport(${level})`)
       s.setAction(`garage carport retry level=${level}`)
     }
+    if (!this.canSendMotionCommand(`CARPORT_${level}`, 'GARAGE_RETRY')) {
+      return
+    }
     await this.proto.carport(level)
     this.garageCarportAckSentAtMs = Date.now()
   }
@@ -961,6 +979,9 @@ export class Page1Coordinator {
       s.setAction(`garage depart wait(BC/03) from ${startId}`)
       if (this.canRealSend()) {
         s.bumpTx()
+        if (!this.canSendMotionCommand('LOWCARPORT', 'GARAGE_DEPART')) {
+          return true
+        }
         await this.proto.lowcarport()
         s.pushLog(`GARAGE_DEPART: lowcarport sent at ${startId}, wait BC/03`)
       } else {
@@ -1027,6 +1048,9 @@ export class Page1Coordinator {
       s.pushLog(`GARAGE_PARK_DONE: BC/04 -> carport(${targetLevel})`)
       s.setAction(`garage carport level=${targetLevel}`)
       s.bumpTx()
+    }
+    if (!this.canSendMotionCommand(`CARPORT_${targetLevel}`, 'GARAGE_PARK_DONE')) {
+      return
     }
     await this.proto.carport(targetLevel)
     if (this.canRealSend()) this.armGarageCarportAckRetry(targetLevel)
@@ -1111,7 +1135,96 @@ export class Page1Coordinator {
     return peekNextActionAfterCurrentStep(this as object)
   }
 
-  async emergencyStopAndHold(): Promise<void> {
+  private clearEmergencyAlarmTimer(): void {
+    if (this.emergencyAlarmTimerId >= 0) {
+      clearTimeout(this.emergencyAlarmTimerId)
+      this.emergencyAlarmTimerId = -1
+    }
+  }
+
+  private setMotionCommandBlock(reason: string, holdMs: number): void {
+    const nowMs: number = Date.now()
+    const safeHoldMs: number = Math.max(0, Math.round(holdMs))
+    const untilMs: number = nowMs + safeHoldMs
+    if (untilMs > this.motionCommandBlockUntilMs) {
+      this.motionCommandBlockUntilMs = untilMs
+    }
+    this.motionCommandBlockReason = reason
+  }
+
+  private clearMotionCommandBlock(): void {
+    this.motionCommandBlockUntilMs = 0
+    this.motionCommandBlockReason = ''
+    this.motionCommandBlockLastLogAtMs = 0
+  }
+
+  isMotionCommandBlocked(nowMs: number = Date.now()): boolean {
+    return nowMs < this.motionCommandBlockUntilMs
+  }
+
+  canSendMotionCommand(commandKey: string, sourceTag: string): boolean {
+    const nowMs: number = Date.now()
+    if (!this.isMotionCommandBlocked(nowMs)) return true
+
+    const s: Page1UiStore | undefined = this.store
+    if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
+      this.motionCommandBlockLastLogAtMs = nowMs
+      const remainMs: number = Math.max(0, this.motionCommandBlockUntilMs - nowMs)
+      s.pushLog(
+        `MOTION_BLOCKED: ${sourceTag}:${commandKey} skipped, remain=${remainMs}ms reason=${this.motionCommandBlockReason}`
+      )
+    }
+    return false
+  }
+
+  private armAlarmEnable(delayMs: number, reason: string): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (s.alarmEnabled) return
+    if (this.emergencyAlarmTimerId >= 0) return
+    const safeDelayMs: number = Math.max(0, Math.round(delayMs))
+    this.emergencyAlarmTimerId = setTimeout((): void => {
+      this.emergencyAlarmTimerId = -1
+      if (s.alarmEnabled) return
+      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+      s.alarmEnabled = true
+      s.bumpTx()
+      void this.proto.setAlarm(true)
+      s.pushLog(`EMERGENCY_ALARM: ON reason=${reason}`)
+    }, safeDelayMs) as number
+  }
+
+  private hasShigongBarrierFromLatestRecog(): boolean {
+    const r: RecognitionResult | undefined = recogStore.lastRecog
+    if (!r || !r.ok || r.subtype !== RecognitionSubtype.BARRIER || r.boxes.length <= 0) return false
+    for (let i: number = 0; i < r.boxes.length; i++) {
+      const box: BBoxNorm = r.boxes[i]
+      if (box.score < 0.18) continue
+      const key: string = normalizeBarrierLabelKey(box.label)
+      if (isShigongBarrierLabelKey(key)) return true
+    }
+    return false
+  }
+
+  maybeHandleBarrierEmergencyStop(nowMs: number): boolean {
+    const r: RecognitionResult | undefined = recogStore.lastRecog
+    if (!r || !r.ok || r.subtype !== RecognitionSubtype.BARRIER) return false
+    if (!this.hasShigongBarrierFromLatestRecog()) return false
+    if (this.barrierEmergencyBusy) return true
+    if (r.taskId.length > 0 && r.taskId === this.lastBarrierEmergencyTaskId) return false
+    if (r.tsMs > 0 && r.tsMs <= this.lastBarrierEmergencyTsMs) return false
+
+    this.barrierEmergencyBusy = true
+    this.lastBarrierEmergencyTaskId = r.taskId
+    this.lastBarrierEmergencyTsMs = Math.max(this.lastBarrierEmergencyTsMs, r.tsMs)
+
+    void this.emergencyStopAndHold('BARRIER', 5000, 0).finally((): void => {
+      this.barrierEmergencyBusy = false
+    })
+    return true
+  }
+
+  async emergencyStopAndHold(reason: string = 'MANUAL_SCRAM', holdMs: number = 5000, alarmDelayMs: number = 1000): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
 
@@ -1123,14 +1236,16 @@ export class Page1Coordinator {
     this.resetPathAckState()
     this.stopActiveMotion()
     this.actionScheduler.reset()
+    this.setMotionCommandBlock(reason, holdMs)
 
     s.autoFollowEnabled = false
     s.lastAutoFollowAtMs = Date.now()
 
     await this.sendDriveActionDirect(Page1Action.STOP)
+    this.armAlarmEnable(alarmDelayMs, reason)
 
     s.setAction('紧急停止')
-    s.pushLog('EMERGENCY STOP: 手动终止自动运行')
+    s.pushLog(`EMERGENCY STOP: reason=${reason}, hold=${holdMs}ms, alarmDelay=${alarmDelayMs}ms`)
   }
 
   private canSendNextCommand(nowMs: number): boolean {

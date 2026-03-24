@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： state/AppStore.ets
- * 用途： Shared app-level store/state module.
- * 何时修改： adding cross-page state or adjusting global data shape.
- * 相关文件： page views/coordinators and services that read/write store values.
+ * 用途： 应用级共享状态/存储模块。
+ * 何时修改： 新增跨页面状态或调整全局数据结构时。
+ * 相关文件： 读写状态存储值的页面视图、协调器及各类服务。
  */
 // entry/src/main/ets/state/AppStore.ets
 // Barrel re-export — 向后兼容：重新导出各子 Store

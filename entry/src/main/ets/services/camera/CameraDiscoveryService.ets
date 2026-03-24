@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/camera/CameraDiscoveryService.ets
- * 用途： Camera device discovery/health/http service integrations.
- * 何时修改： camera source config, detection, or request handling changes.
- * 相关文件： pages/page2/* and services/source/*.
+ * 用途： 摄像头设备发现 / 状态检测 / HTTP 服务集成.
+ * 何时修改： 摄像头源配置、设备检测或请求处理逻辑发生变更时.
+ * 相关文件： pages/page2/* 以及 services/source/* 下的所有文件.
  */
 import socket from '@ohos.net.socket'
 

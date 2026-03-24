@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/control/CarConnectionState.ets
- * 用途： Module implementation for this project layer.
- * 何时修改： the feature owned by this file needs behavior updates.
- * 相关文件： search usages of exported symbols to find callers and impact scope.
+ * 用途： 本项目层的模块功能实现。
+ * 何时修改： 本文件所属功能需要更新行为逻辑时。
+ * 相关文件： 搜索导出符号的使用处，以查找调用方及影响范围。
  */
 export enum CarConnectionState {
   IDLE = 0,

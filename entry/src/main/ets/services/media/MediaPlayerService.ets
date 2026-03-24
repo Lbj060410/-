@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/media/MediaPlayerService.ets
- * 用途： Media playback helper service.
- * 何时修改： playback controls or media lifecycle behavior changes.
- * 相关文件： page views that trigger media output.
+ * 用途： 媒体播放辅助服务。
+ * 何时修改： 播放控制或媒体生命周期逻辑发生变更时。
+ * 相关文件： 触发媒体输出的页面视图。
  */
 import media from '@ohos.multimedia.media'
 import resourceManager from '@ohos.resourceManager'

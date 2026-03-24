@@ -453,8 +453,9 @@ export function maybeReplanOnObstacle(ctx: any): void {
   const s = ctx.store
   if (!s) return
   if (ctx.trafficGateWaiting || ctx.aheadVisionPending || ctx.parkingInProgress) return
-  if (s.destApplied.length === 0) return
   const now = Date.now()
+  if (typeof ctx.maybeHandleBarrierEmergencyStop === 'function' && ctx.maybeHandleBarrierEmergencyStop(now)) return
+  if (s.destApplied.length === 0) return
   if (now < ctx.pauseUntilMs) return
   if (now - ctx.lastReplanAtMs < P1C.REPLAN_COOLDOWN_MS) return
   if (s.riskScore >= 95) commStore.bumpEStop()
@@ -675,6 +676,5 @@ export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
   ctx.planPath(goal)
   return true
 }
-
 
 

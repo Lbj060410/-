@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： services/source/LocalVideoService.ets
- * 用途： Video/frame source management (HTTP snapshot, RTSP, local video switch).
- * 何时修改： changing source pipeline or adding a new source type.
- * 相关文件： services/recognition/* and page2 view/coordinator.
+ * 用途： 视频/帧源管理（HTTP截图、RTSP、本地视频切换）。
+ * 何时修改： 修改源处理流程或新增源类型时。
+ * 相关文件： services/recognition/* 及 page2 视图/协调器。
  */
 import media from '@ohos.multimedia.media'
 import resourceManager from '@ohos.resourceManager'

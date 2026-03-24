@@ -1,9 +1,9 @@
 /**
  * 代码指南：
  * 文件： services/assistant/Page4TencentVoiceInputAdapter.ets
- * 用途： Page4 hold-to-talk adapter using AudioCapturer + Tencent Realtime ASR.
- * 何时修改： recorder behavior or ASR pipeline changes.
- * 相关文件： pages/page4/Page4View.ets, services/assistant/TencentAsrRealtimeService.ets.
+ * 用途： 基于 AudioCapturer（音频采集器）+ 腾讯云实时语音识别实现的 Page4 长按说话适配器.
+ * 何时修改： 录音器行为或语音识别流程发生变更时.
+ * 相关文件： pages/page4/Page4View.ets、services/assistant/TencentAsrRealtimeService.ets.
  */
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
 import type common from '@ohos.app.ability.common'

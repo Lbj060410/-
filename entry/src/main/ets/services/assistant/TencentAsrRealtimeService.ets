@@ -1,8 +1,8 @@
 /**
  * 代码指南：
  * 文件： services/assistant/TencentAsrRealtimeService.ets
- * 用途： Tencent Cloud realtime ASR over WebSocket for low-latency voice text.
- * 何时修改： websocket protocol/response schema/signing rules change.
+ * 用途： 基于 WebSocket 实现腾讯云实时语音识别，用于低延迟语音转文字.
+ * 何时修改： WebSocket 协议、响应格式或签名规则发生变更时.
  * 相关文件： services/assistant/Page4TencentVoiceInputAdapter.ets.
  */
 import webSocket from '@ohos.net.webSocket'

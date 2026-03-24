@@ -1,8 +1,8 @@
 /**
  * 代码指南：
  * 文件： services/assistant/TencentSignUtil.ets
- * 用途： Pure ArkTS HMAC-SHA1 signing helper for Tencent ASR APIs.
- * 何时修改： Tencent signing rule changes.
+ * 用途： 纯 ArkTS 语言实现的 HMAC-SHA1 签名工具类，用于腾讯云语音识别 API 鉴权.
+ * 何时修改： 腾讯云签名规则发生变更时.
  */
 import util from '@ohos.util'
 

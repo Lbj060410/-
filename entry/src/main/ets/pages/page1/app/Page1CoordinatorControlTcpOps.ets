@@ -374,6 +374,16 @@ export function canRealSend(ctx: any): boolean {
   return s.connState === CarConnState.CONNECTED
 }
 
+function isMotionAction(a: Page1Action): boolean {
+  return a === Page1Action.GO ||
+    a === Page1Action.BACK ||
+    a === Page1Action.LEFT ||
+    a === Page1Action.RIGHT ||
+    a === Page1Action.LEFT_HALF ||
+    a === Page1Action.RIGHT_HALF ||
+    a === Page1Action.UTURN
+}
+
 export async function sendManualGoCommand(ctx: any, actionText: string): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
@@ -388,9 +398,23 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
 
+  // 急停优先级最高：立即中断自动运行并执行统一急停流程。
+  if (a === Page1Action.SCRAM) {
+    if (typeof ctx.emergencyStopAndHold === 'function') {
+      await ctx.emergencyStopAndHold()
+      return
+    }
+  }
+
   if (a !== Page1Action.GO) {
     ctx.manualGoGateToken += 1
     ctx.manualGoGateActive = false
+  }
+
+  if (isMotionAction(a)) {
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'MANUAL')) {
+      return
+    }
   }
 
   ctx.proto.setMode(canRealSend(ctx) ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
@@ -501,8 +525,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
 
   if (a === Page1Action.STOP) {
     s.setAction('停止')
-    s.bumpTx()
-    await ctx.proto.stopTask()
+    s.pushLog('STOP: 已忽略 stopTask 下发（该指令无法停止行动任务）')
     return
   }
 
@@ -555,5 +578,3 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     return
   }
 }
-
-

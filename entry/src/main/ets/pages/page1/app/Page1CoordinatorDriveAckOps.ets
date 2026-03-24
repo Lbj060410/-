@@ -46,6 +46,18 @@ async function sendPathAckCommandByKey(ctx: any, key: string): Promise<boolean> 
   const s = ctx.store
   if (!s) return false
   if (!ctx.canRealSend()) return false
+  const isMotionKey: boolean =
+    key === 'GO' ||
+    key === 'BACK' ||
+    key === 'LEFT' ||
+    key === 'RIGHT' ||
+    key === 'LEFT_HALF' ||
+    key === 'RIGHT_HALF' ||
+    key === 'UTURN' ||
+    key === 'GATE_DEPART'
+  if (isMotionKey && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(key, 'PATH_ACK_RETRY')) {
+    return false
+  }
   ctx.proto.setMode(CarSendMode.REAL_SEND)
 
   s.bumpTx()
@@ -130,6 +142,18 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   const s = ctx.store
   if (!s) return false
 
+  const isBlockedMotionAction: boolean =
+    a === Page1Action.GO ||
+    a === Page1Action.BACK ||
+    a === Page1Action.LEFT ||
+    a === Page1Action.RIGHT ||
+    a === Page1Action.LEFT_HALF ||
+    a === Page1Action.RIGHT_HALF ||
+    a === Page1Action.UTURN
+  if (isBlockedMotionAction && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'AUTO')) {
+    return false
+  }
+
   ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
 
   if (a === Page1Action.GO) {
@@ -197,7 +221,8 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
     return true
   }
   if (a === Page1Action.STOP) {
-    await ctx.proto.stopTask()
+    const s2 = ctx.store
+    if (s2) s2.pushLog('AUTO_STOP: 已忽略 stopTask 下发（该指令无法停止行动任务）')
     return true
   }
 
@@ -504,5 +529,3 @@ export function resetGateDepartDedupState(ctx: any): void {
 export function gateDepartSendKey(curId: string, nextId: string): string {
   return `${curId}->${nextId}`
 }
-
-

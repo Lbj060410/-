@@ -1,9 +1,9 @@
 ﻿/**
  * 代码指南：
  * 文件： entryability/EntryAbility.ts
- * 用途： HarmonyOS entry ability bootstrap lifecycle.
- * 何时修改： app startup/ability lifecycle integration changes.
- * 相关文件： pages/Index.ets app root.
+ * 用途： 鸿蒙 OS 入口 Ability 启动生命周期.
+ * 何时修改： 应用启动 / Ability 生命周期集成发生变更时.
+ * 相关文件： pages/Index.ets（应用根节点）.
  */
 import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import UIAbility from '@ohos.app.ability.UIAbility';
