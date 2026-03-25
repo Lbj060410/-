@@ -15,7 +15,7 @@ Page1 coordination/scheduling helper logic.
 import { Page1Action } from '../types/Page1Types'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { P1C } from './Page1CoordinatorDefs'
-import { RouteEdgeCodec } from './PathPlannerAStar'
+import { RouteEdgeCodec, GridIdCodec } from './PathPlannerAStar'
 
 async function alignToParkingGoal(ctx: any, arrivedId: string, goalId: string): Promise<boolean> {
   const s = ctx.store
@@ -322,7 +322,9 @@ export function stopSimulatorLoop(ctx: any): void {
 }
 
 export function simAmbientFrontCm(ctx: any): number {
-  return 80 + (ctx.simTick % 15)
+  const edge: { fromId: string, toId: string } | undefined = resolveDisplayEdge(ctx)
+  if (!edge) return 57
+  return edgeDistanceCm(edge.fromId, edge.toId)
 }
 
 export function simAmbientBackCm(ctx: any): number {
@@ -334,7 +336,11 @@ export function simAmbientIrCm(ctx: any): number {
 }
 
 export function simAmbientLux(ctx: any): number {
-  return 300 + (ctx.simTick % 50)
+  const baseLuxRaw: number = Number(ctx.simLightBaseLux)
+  const baseLux: number = Number.isFinite(baseLuxRaw) ? Math.max(0, Math.round(baseLuxRaw)) : 0
+  const delta: number = Math.floor(Math.random() * 41) - 20
+  const v: number = baseLux + delta
+  return v < 0 ? 0 : v
 }
 
 export async function sleepMs(ms: number): Promise<void> {
@@ -357,17 +363,42 @@ export async function simulateOnceLoop(ctx: any): Promise<void> {
       ? (ctx.motionPlayer.usesReverseSpeed() || liveMotionAction === Page1Action.BACK ? -20 : 20)
       : 0
 
+    const frontCm: number = simAmbientFrontCm(ctx)
+    const lightQueryEnabled: boolean = !!ctx.lightMetricQueryEnabled
+    const lightReady: boolean = !!ctx.lightMetricReady
+    const lightLux: number = (lightQueryEnabled && lightReady) ? simAmbientLux(ctx) : 0
     s.setTelemetry({
       tsMs: now,
       speed: idleSpeed,
       headingDeg: s.pose.headingDeg,
       odomMm: s.telemetry.odomMm,
-      ultraFrontCm: simAmbientFrontCm(ctx),
+      ultraFrontCm: frontCm,
       ultraBackCm: simAmbientBackCm(ctx),
       irDistCm: simAmbientIrCm(ctx),
-      lightLux: simAmbientLux(ctx),
+      lightLux: lightLux,
       rfid: s.telemetry.rfid
     })
+    const realSendNow: boolean = !!(ctx.store && ctx.store.realSendEnabled)
+    if (!realSendNow) {
+      s.setMetricSpeedCms(0)
+      s.setMetricHeadingDeg(0)
+      s.setMetricDistanceCm(0)
+      s.setMetricLightLux(0)
+    }
+    if (realSendNow) {
+      s.setMetricHeadingDeg(s.telemetry.headingDeg)
+      s.setMetricLightLux(lightQueryEnabled && lightReady ? Math.max(0, Math.round(s.telemetry.lightLux)) : 0)
+    }
+    const lastMetricLogAtMs: number = Number(ctx.metricDebugLastLogAtMs) || 0
+    if (now - lastMetricLogAtMs >= 1000) {
+      ctx.metricDebugLastLogAtMs = now
+      const line: string =
+        `METRIC_DBG rs=${realSendNow ? 1 : 0} conn=${s.connText} `
+        + `m=[${s.metricSpeedCms},${Math.round(s.metricHeadingDeg)}/${s.metricHeadingText},${s.metricDistanceCm},${s.metricLightLux}] `
+        + `t=[${s.telemetry.speed},${Math.round(s.telemetry.headingDeg)},${s.telemetry.ultraFrontCm},${s.telemetry.lightLux}]`
+      s.metricDebugLine = line
+      s.pushLog(line)
+    }
     s.updateRisk()
     if (ctx.maybeTriggerRoutePointObstacle()) return
     ctx.maybeReplanOnObstacle()
@@ -376,5 +407,56 @@ export async function simulateOnceLoop(ctx: any): Promise<void> {
   }
 }
 
+function resolveDisplayEdge(ctx: any): { fromId: string, toId: string } | undefined {
+  const req = ctx.pendingAckMotion
+  if (req && typeof req.fromId === 'string' && typeof req.toId === 'string') {
+    const a: string = req.fromId.trim().toUpperCase()
+    const b: string = req.toId.trim().toUpperCase()
+    if (GridIdCodec.isValidId(a) && GridIdCodec.isValidId(b)) return { fromId: a, toId: b }
+  }
 
+  const motionFrom: string = ctx.motionPlayer.currentFromId().trim().toUpperCase()
+  const motionTo: string = ctx.motionPlayer.currentToId().trim().toUpperCase()
+  if (GridIdCodec.isValidId(motionFrom) && GridIdCodec.isValidId(motionTo)) {
+    return { fromId: motionFrom, toId: motionTo }
+  }
 
+  const s = ctx.store
+  if (!s) return undefined
+  const idx: number = s.pathIndex
+  if (idx >= 0 && idx + 1 < s.pathNodes.length) {
+    const fromId: string = s.pathNodes[idx].trim().toUpperCase()
+    const toId: string = s.pathNodes[idx + 1].trim().toUpperCase()
+    if (GridIdCodec.isValidId(fromId) && GridIdCodec.isValidId(toId)) return { fromId: fromId, toId: toId }
+  }
+  return undefined
+}
+
+function edgeDistanceCm(aId: string, bId: string): number {
+  const a: string = aId.trim().toUpperCase()
+  const b: string = bId.trim().toUpperCase()
+  const ac = GridIdCodec.parse(a)
+  const bc = GridIdCodec.parse(b)
+  if (!ac || !bc) return 57
+
+  const rowA: number = Number.parseInt(a.slice(1), 10)
+  const rowB: number = Number.parseInt(b.slice(1), 10)
+  const colA: string = a[0]
+  const colB: string = b[0]
+
+  if (ac.col === bc.col) {
+    const topBottom: boolean =
+      (rowA === 1 && rowB === 2) || (rowA === 2 && rowB === 1) ||
+      (rowA === 7 && rowB === 6) || (rowA === 6 && rowB === 7)
+    return topBottom ? 37 : 57
+  }
+
+  if (ac.row === bc.row) {
+    const sideEdge: boolean =
+      (colA === 'A' && colB === 'B') || (colA === 'B' && colB === 'A') ||
+      (colA === 'G' && colB === 'F') || (colA === 'F' && colB === 'G')
+    return sideEdge ? 47 : 71
+  }
+
+  return 57
+}

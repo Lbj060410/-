@@ -16,7 +16,7 @@ import { CarConnectionState } from '../../../services/control/CarConnectionState
 
 import { CarRx55StreamDecoder, CarFrame55 } from '../net/CarRx55StreamDecoder'
 
-import { AStarPlanResult } from './PathPlannerAStar'
+import { AStarPlanResult, GridIdCodec } from './PathPlannerAStar'
 import { GridNode } from '../types/SandboxGridTypes'
 import { ensureRecognitionCenter } from '../../../services/recognition/RecognitionCenter'
 import { RecognitionResult, BBoxNorm } from '../../../services/recognition/RecognitionResult'
@@ -258,6 +258,21 @@ export class Page1Coordinator {
   private motionCommandBlockLastLogAtMs: number = 0
   private emergencyAlarmTimerId: number = -1
   private barrierEmergencyBusy: boolean = false
+  private metricSpeedAnimTimerId: number = -1
+  private metricSpeedAnimToken: number = 0
+  private metricHeadingAnimTimerId: number = -1
+  private metricHeadingAnimToken: number = 0
+  private metricHeadingTargetDeg: number = 0
+  private metricDistanceAckAnimTimerId: number = -1
+  private metricDistanceAckAnimToken: number = 0
+  private metricDistanceTotalCm: number = 0
+  private metricDistanceAckKey: string = ''
+  private metricDistanceAckTargetCm: number = 0
+  private metricDistanceMotionKey: string = ''
+  private metricDistanceMotionBaseCm: number = 0
+  private simLightBaseLux: number = 0
+  private lightMetricQueryEnabled: boolean = false
+  private lightMetricReady: boolean = false
   private lastBarrierEmergencyTaskId: string = ''
   private lastBarrierEmergencyTsMs: number = 0
   private started: boolean = false
@@ -298,8 +313,289 @@ export class Page1Coordinator {
     })
   }
 
+  private clearMetricSpeedAnimation(): void {
+    this.metricSpeedAnimToken += 1
+    if (this.metricSpeedAnimTimerId >= 0) {
+      clearTimeout(this.metricSpeedAnimTimerId)
+      this.metricSpeedAnimTimerId = -1
+    }
+  }
+
+  private clearMetricHeadingAnimation(): void {
+    this.metricHeadingAnimToken += 1
+    if (this.metricHeadingAnimTimerId >= 0) {
+      clearTimeout(this.metricHeadingAnimTimerId)
+      this.metricHeadingAnimTimerId = -1
+    }
+  }
+
+  private clearMetricDistanceAckAnimation(): void {
+    this.metricDistanceAckAnimToken += 1
+    if (this.metricDistanceAckAnimTimerId >= 0) {
+      clearTimeout(this.metricDistanceAckAnimTimerId)
+      this.metricDistanceAckAnimTimerId = -1
+    }
+  }
+
+  private edgeDistanceCm(fromId: string, toId: string): number {
+    const a: string = fromId.trim().toUpperCase()
+    const b: string = toId.trim().toUpperCase()
+    const ac = GridIdCodec.parse(a)
+    const bc = GridIdCodec.parse(b)
+    if (!ac || !bc) return 57
+
+    const rowA: number = Number.parseInt(a.slice(1), 10)
+    const rowB: number = Number.parseInt(b.slice(1), 10)
+    const colA: string = a[0]
+    const colB: string = b[0]
+
+    if (ac.col === bc.col) {
+      const topBottom: boolean =
+        (rowA === 1 && rowB === 2) || (rowA === 2 && rowB === 1) ||
+        (rowA === 7 && rowB === 6) || (rowA === 6 && rowB === 7)
+      return topBottom ? 37 : 57
+    }
+
+    if (ac.row === bc.row) {
+      const sideEdge: boolean =
+        (colA === 'A' && colB === 'B') || (colA === 'B' && colB === 'A') ||
+        (colA === 'G' && colB === 'F') || (colA === 'F' && colB === 'G')
+      return sideEdge ? 47 : 71
+    }
+    return 57
+  }
+
+  private pendingAckDistanceInfo(): { key: string, segCm: number } | undefined {
+    const req: PendingAckMotion | undefined = this.pendingAckMotion
+    if (!req) return undefined
+    const fromId: string = req.fromId.trim().toUpperCase()
+    const toId: string = req.toId.trim().toUpperCase()
+    if (!GridIdCodec.isValidId(fromId) || !GridIdCodec.isValidId(toId)) return undefined
+    const segCm: number = this.edgeDistanceCm(fromId, toId)
+    return { key: `${fromId}->${toId}`, segCm: segCm }
+  }
+
+  private startMetricDistanceAckRise(key: string, segCm: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (segCm <= 0) return
+    if (this.metricDistanceAckKey === key && this.metricDistanceAckAnimTimerId >= 0) return
+
+    this.clearMetricDistanceAckAnimation()
+    this.metricDistanceAckKey = key
+    this.metricDistanceAckTargetCm = this.metricDistanceTotalCm + segCm
+    const token: number = this.metricDistanceAckAnimToken
+    const startAtMs: number = Date.now()
+    const durationMs: number = 900
+    const startCm: number = this.metricDistanceTotalCm
+
+    const tick = (): void => {
+      if (token !== this.metricDistanceAckAnimToken) return
+      const ss: Page1UiStore | undefined = this.store
+      if (!ss) return
+      const tRaw: number = (Date.now() - startAtMs) / durationMs
+      const t: number = tRaw < 0 ? 0 : (tRaw > 1 ? 1 : tRaw)
+      const cur: number = startCm + (this.metricDistanceAckTargetCm - startCm) * t
+      ss.setMetricDistanceCm(cur)
+      if (t >= 1) {
+        this.metricDistanceAckAnimTimerId = -1
+        return
+      }
+      this.metricDistanceAckAnimTimerId = setTimeout(tick, 40) as number
+    }
+
+    tick()
+  }
+
+  private finalizeMetricDistanceAck(): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (this.metricDistanceAckKey.length <= 0) {
+      const info = this.pendingAckDistanceInfo()
+      if (!info) return
+      this.metricDistanceTotalCm += info.segCm
+      s.setMetricDistanceCm(this.metricDistanceTotalCm)
+      return
+    }
+
+    this.clearMetricDistanceAckAnimation()
+    this.metricDistanceTotalCm = this.metricDistanceAckTargetCm
+    s.setMetricDistanceCm(this.metricDistanceTotalCm)
+    this.metricDistanceAckKey = ''
+    this.metricDistanceAckTargetCm = this.metricDistanceTotalCm
+  }
+
+  private normToEightHeading(v: number): number {
+    const n: number = this.norm360(v)
+    return this.norm360(Math.round(n / 45) * 45)
+  }
+
+  private startMetricSpeedRiseAndHoldFromAck01(targetSpeedCms: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const target: number = Number.isFinite(targetSpeedCms) ? Math.max(0, targetSpeedCms) : 0
+    if (target <= 0) return
+
+    this.clearMetricSpeedAnimation()
+    const token: number = this.metricSpeedAnimToken
+    const startAtMs: number = Date.now()
+    const riseMs: number = 420
+
+    const tick = (): void => {
+      if (token !== this.metricSpeedAnimToken) return
+      const ss: Page1UiStore | undefined = this.store
+      if (!ss) return
+
+      const elapsedMs: number = Date.now() - startAtMs
+      let speedCms: number = 0
+      if (elapsedMs < riseMs) {
+        speedCms = target * (elapsedMs / riseMs)
+      } else {
+        speedCms = target
+      }
+      if (speedCms < 0) speedCms = 0
+      ss.setMetricSpeedCms(speedCms)
+
+      this.metricSpeedAnimTimerId = setTimeout(tick, 40) as number
+    }
+
+    tick()
+  }
+
+  private animateMetricHeadingTo(headingDeg: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+
+    this.metricHeadingTargetDeg = this.normToEightHeading(headingDeg)
+    if (this.metricHeadingAnimTimerId >= 0) return
+
+    const token: number = this.metricHeadingAnimToken
+    const tick = (): void => {
+      if (token !== this.metricHeadingAnimToken) return
+      const ss: Page1UiStore | undefined = this.store
+      if (!ss) return
+
+      const cur: number = ss.metricHeadingDeg
+      const target: number = this.metricHeadingTargetDeg
+      const err: number = this.headingErrorDeg(cur, target)
+      const absErr: number = Math.abs(err)
+      if (absErr <= 1) {
+        ss.setMetricHeadingDeg(target)
+        this.metricHeadingAnimTimerId = -1
+        return
+      }
+
+      const maxStepDeg: number = 10
+      const stepDeg: number = absErr <= maxStepDeg ? err : (err > 0 ? maxStepDeg : -maxStepDeg)
+      ss.setMetricHeadingDeg(this.norm360(cur + stepDeg))
+      this.metricHeadingAnimTimerId = setTimeout(tick, 40) as number
+    }
+
+    this.metricHeadingAnimTimerId = setTimeout(tick, 40) as number
+  }
+
+  private onPathAckStatusForDashboard(status: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (!s.realSendEnabled) {
+      s.setMetricSpeedCms(0)
+      s.setMetricDistanceCm(0)
+      return
+    }
+    const cmd: string = this.pathAckLastCommandText
+    const isMoveCmd: boolean = cmd === '前进' || cmd === '后退'
+    const isTurnCmd: boolean =
+      cmd === '左转' || cmd === '右转' || cmd === '左半转' || cmd === '右半转' || cmd === '掉头'
+    if (!isMoveCmd && !isTurnCmd) return
+
+    if (status === 0x01) {
+      this.startMetricSpeedRiseAndHoldFromAck01(isMoveCmd ? 20 : 10)
+      const info = this.pendingAckDistanceInfo()
+      if (isMoveCmd && info) this.startMetricDistanceAckRise(info.key, info.segCm)
+      return
+    }
+    if (status === 0x02) {
+      this.clearMetricSpeedAnimation()
+      s.setMetricSpeedCms(0)
+      if (isMoveCmd) this.finalizeMetricDistanceAck()
+    }
+  }
+
+  private initialHeadingByPoseAndPath(s: Page1UiStore): number {
+    if (s.pathNodes.length > 1 && s.pathIndex >= 0 && s.pathIndex < s.pathNodes.length - 1) {
+      const fromId: string = s.pathNodes[s.pathIndex].trim().toUpperCase()
+      const toId: string = s.pathNodes[s.pathIndex + 1].trim().toUpperCase()
+      return this.normToEightHeading(this.segmentHeadingDeg(fromId, toId))
+    }
+
+    let minY: number = s.pose.yNorm
+    let maxY: number = s.pose.yNorm
+    if (s.gridNodes.length > 0) {
+      minY = s.gridNodes[0].yNorm
+      maxY = s.gridNodes[0].yNorm
+      for (let i: number = 1; i < s.gridNodes.length; i++) {
+        const y: number = s.gridNodes[i].yNorm
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    const edgeBand: number = Math.max(s.gridSnapThresholdNorm + 0.02, 0.075)
+    if (s.pose.yNorm >= maxY - edgeBand) return 270
+    if (s.pose.yNorm <= minY + edgeBand) return 90
+    const midY: number = (minY + maxY) / 2
+    return s.pose.yNorm <= midY ? 90 : 270
+  }
+
+  private armLightMetricQuery(): void {
+    this.lightMetricQueryEnabled = true
+    this.lightMetricReady = false
+    this.simLightBaseLux = 0
+    const s: Page1UiStore | undefined = this.store
+    if (s) s.setMetricLightLux(0)
+  }
+
+  private onLightLuxReceived(lux: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s || !s.realSendEnabled) return
+    if (!this.lightMetricQueryEnabled) return
+    if (!Number.isFinite(lux) || lux < 0) return
+    this.lightMetricReady = true
+    this.simLightBaseLux = Math.round(lux)
+    s.setMetricLightLux(this.simLightBaseLux)
+  }
+
+  private onSimTelemetryTick(speed: number, headingDeg: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (!s.realSendEnabled) {
+      s.setMetricSpeedCms(0)
+      s.setMetricHeadingDeg(0)
+      s.setMetricDistanceCm(0)
+      s.setMetricLightLux(0)
+      return
+    }
+    void speed
+    this.animateMetricHeadingTo(headingDeg)
+  }
+
   bind(store: Page1UiStore): void {
     this.store = store
+    this.clearMetricSpeedAnimation()
+    this.clearMetricHeadingAnimation()
+    this.clearMetricDistanceAckAnimation()
+    this.simLightBaseLux = 0
+    this.metricDistanceTotalCm = 0
+    this.metricDistanceAckKey = ''
+    this.metricDistanceAckTargetCm = 0
+    this.metricDistanceMotionKey = ''
+    this.metricDistanceMotionBaseCm = 0
+    this.lightMetricQueryEnabled = false
+    this.lightMetricReady = false
+    store.setMetricSpeedCms(0)
+    store.setMetricHeadingDeg(0)
+    store.setMetricDistanceCm(0)
+    store.setMetricLightLux(0)
+    this.metricHeadingTargetDeg = store.metricHeadingDeg
     this.proto.bindTcp(this.tcp)
     this.bindTcpCallbacks()
   }
@@ -355,6 +651,17 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.clearMetricSpeedAnimation()
+    this.clearMetricHeadingAnimation()
+    this.clearMetricDistanceAckAnimation()
+    this.lightMetricQueryEnabled = false
+    this.lightMetricReady = false
+    this.simLightBaseLux = 0
+    if (this.store) {
+      this.store.setMetricSpeedCms(0)
+      this.store.setMetricLightLux(0)
+      this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
+    }
     this.clearEmergencyAlarmTimer()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
@@ -382,6 +689,17 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.clearMetricSpeedAnimation()
+    this.clearMetricHeadingAnimation()
+    this.clearMetricDistanceAckAnimation()
+    this.lightMetricQueryEnabled = false
+    this.lightMetricReady = false
+    this.simLightBaseLux = 0
+    if (this.store) {
+      this.store.setMetricSpeedCms(0)
+      this.store.setMetricLightLux(0)
+      this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
+    }
     this.clearEmergencyAlarmTimer()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
@@ -654,6 +972,7 @@ export class Page1Coordinator {
       lightLux: s.telemetry.lightLux,
       rfid: s.telemetry.rfid
     })
+    this.animateMetricHeadingTo(headingDeg)
   }
 
   private updateHeadingOnlyAtCurrentPose(headingDeg: number): void {

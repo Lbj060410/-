@@ -182,6 +182,21 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
 
   if (isPathMotion && !canSendPathCommandNow(ctx, actionText)) return false
 
+  if (isPathMotion) {
+    if (!ctx.lightMetricReady) {
+      try {
+        if (typeof ctx.armLightMetricQuery === 'function') {
+          ctx.armLightMetricQuery()
+        }
+        s.bumpTx()
+        await ctx.proto.light()
+        s.pushLog('LIGHT: 出发前自动查询光照基准')
+      } catch (_) {
+        s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
+      }
+    }
+  }
+
   s.bumpTx()
   s.setAction(`自动动作=${actionText}`)
 
@@ -369,6 +384,9 @@ export function markPathCommandSent(ctx: any, actionText: string): void {
 
 export function onPathAckFrame(ctx: any, f: any): void {
   const status: number = f.p1 & 0xff
+  if (typeof ctx.onPathAckStatusForDashboard === 'function') {
+    ctx.onPathAckStatusForDashboard(status)
+  }
 
   if (status === 0x01) {
     ctx.pathAckLastStatusCode = 0x01

@@ -42,7 +42,7 @@ export enum RecognitionSubtype {
   // TFT 屏幕内容识别
   TRAFFIC_LIGHT = 10,
   COLOR = 11,
-  BARRIER = 12,
+    BARRIER = 12,
   VEHICLE = 13,
 
 }

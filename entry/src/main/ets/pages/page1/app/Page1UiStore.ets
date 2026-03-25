@@ -857,6 +857,47 @@ export class Page1UiStore {
     this.telemetry = t
   }
 
+  // ===== 状态栏显示（与底层遥测解耦）=====
+  metricSpeedCms: number = 0
+  metricHeadingDeg: number = 0
+  metricHeadingText: string = 'N'
+  metricDistanceCm: number = 0
+  metricLightLux: number = 0
+  metricDebugLine: string = ''
+
+  setMetricSpeedCms(v: number): void {
+    const safe: number = Number.isFinite(v) ? v : 0
+    const clamped: number = Math.max(0, Math.abs(safe))
+    this.metricSpeedCms = Math.round(clamped * 10) / 10
+  }
+
+  setMetricHeadingDeg(v: number): void {
+    this.metricHeadingDeg = this.normHeadingDeg(v)
+    this.metricHeadingText = this.headingTextFromDeg(this.metricHeadingDeg)
+  }
+
+  setMetricDistanceCm(v: number): void {
+    const safe: number = Number.isFinite(v) ? v : 0
+    this.metricDistanceCm = Math.max(0, Math.round(safe))
+  }
+
+  setMetricLightLux(v: number): void {
+    const safe: number = Number.isFinite(v) ? v : 0
+    this.metricLightLux = Math.max(0, Math.round(safe))
+  }
+
+  private headingTextFromDeg(v: number): string {
+    const idx: number = Math.round(this.normHeadingDeg(v) / 45) % 8
+    if (idx === 0) return 'N'
+    if (idx === 1) return 'NE'
+    if (idx === 2) return 'E'
+    if (idx === 3) return 'SE'
+    if (idx === 4) return 'S'
+    if (idx === 5) return 'SW'
+    if (idx === 6) return 'W'
+    return 'NW'
+  }
+
   batteryPct: number = 87
   logs: Array<string> = []
 
@@ -870,4 +911,3 @@ export class Page1UiStore {
 }
 
 export const page1Store: Page1UiStore = new Page1UiStore()
-

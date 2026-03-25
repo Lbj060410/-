@@ -157,6 +157,9 @@ export function parseTelemetryFrom55(ctx: any, prev: CarTelemetry, f: CarFrame55
   void ctx
   if (f.cmd === 0xBB) {
     const lux: number = decodeLuxFromBbFrame(f)
+    if (typeof ctx.onLightLuxReceived === 'function') {
+      ctx.onLightLuxReceived(lux)
+    }
     return {
       tsMs: Date.now(),
       speed: prev.speed,
@@ -384,6 +387,20 @@ function isMotionAction(a: Page1Action): boolean {
     a === Page1Action.UTURN
 }
 
+async function triggerLightBaselineBeforeMotion(ctx: any, s: Page1UiStore): Promise<void> {
+  if (!!ctx.lightMetricReady) return
+  try {
+    if (typeof ctx.armLightMetricQuery === 'function') {
+      ctx.armLightMetricQuery()
+    }
+    s.bumpTx()
+    await ctx.proto.light()
+    s.pushLog('LIGHT: 出发前自动查询光照基准')
+  } catch (_) {
+    s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
+  }
+}
+
 export async function sendManualGoCommand(ctx: any, actionText: string): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
@@ -433,7 +450,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   else if (a === Page1Action.LANGUAGE) actionText = '站台播报'
   else if (a === Page1Action.SCRAM) actionText = '紧急停止'
   else if (a === Page1Action.TFTA) actionText = 'TFTA发送'
-  else if (a === Page1Action.LIGHT) actionText = '光照查询已关闭'
+  else if (a === Page1Action.LIGHT) actionText = '光照查询'
   else if (a === Page1Action.TFTB) actionText = 'TFTB发送'
   else if (a === Page1Action.STROBE) actionText = '道闸发送'
 
@@ -447,6 +464,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.GO) {
+    ctx.pathAckLastCommandText = actionText
     if (await ctx.maybeHandleGarageDepartBeforeDrive(Date.now())) {
       return
     }
@@ -460,12 +478,15 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
       return
     }
 
+    await triggerLightBaselineBeforeMotion(ctx, s)
     await sendManualGoCommand(ctx, actionText)
     ctx.previewManualActionOnMap(Page1Action.GO)
     return
   }
 
   if (a === Page1Action.BACK) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('后退')
     s.bumpTx()
     await ctx.proto.back()
@@ -474,6 +495,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.LEFT) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('左转')
     s.bumpTx()
     await ctx.proto.left()
@@ -482,6 +505,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.RIGHT) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('右转')
     s.bumpTx()
     await ctx.proto.right()
@@ -490,6 +515,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.LEFT_HALF) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('左半转')
     s.bumpTx()
     await ctx.proto.leftHalf()
@@ -498,6 +525,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.RIGHT_HALF) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('右半转')
     s.bumpTx()
     await ctx.proto.rightHalf()
@@ -506,6 +535,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.UTURN) {
+    ctx.pathAckLastCommandText = actionText
+    await triggerLightBaselineBeforeMotion(ctx, s)
     s.setAction('掉头')
     s.bumpTx()
     await ctx.proto.uturn()
@@ -558,9 +589,13 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.LIGHT) {
-    s.setAction('光照查询已关闭')
+    s.setAction('光照查询')
     s.bumpTx()
-    s.pushLog('LIGHT: 光照查询发送已关闭')
+    if (typeof ctx.armLightMetricQuery === 'function') {
+      ctx.armLightMetricQuery()
+    }
+    await ctx.proto.light()
+    s.pushLog('LIGHT: 已发送光照查询，等待设备返回基准值')
     return
   }
 
