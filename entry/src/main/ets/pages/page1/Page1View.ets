@@ -13,6 +13,7 @@ import { Page1Theme } from './Page1Theme'
 import { SandboxMap } from './components/SandboxMap'
 import { CarStatusCard } from './components/CarStatusCard'
 import { ControlPanel } from './components/ControlPanel'
+import { ReplayReviewPanel } from './components/ReplayReviewPanel'
 
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
 
@@ -20,6 +21,7 @@ import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
 export struct Page1View {
   @State private store: Page1UiStore = page1Store
   @State private showDiag: boolean = false
+  @State private showReplay: boolean = false
   private startDeferredTimerId: number = -1
 
   aboutToAppear(): void {
@@ -59,7 +61,9 @@ export struct Page1View {
           Scroll() {
             Column({ space: 10 }) {
               CarStatusCard({})
-              ControlPanel({ onDiag: (): void => { this.showDiag = true } })
+              ControlPanel({
+                onDiag: (): void => { this.showDiag = true }
+              })
               Column() {}.height(4)
             }
             .width('100%')
@@ -111,6 +115,26 @@ export struct Page1View {
         .align(Alignment.Bottom)
         .onClick((): void => { this.showDiag = false })
       }
+
+      if (this.showReplay) {
+        Stack() {
+          Column() {
+            ReplayReviewPanel({
+              onClose: (): void => { this.showReplay = false }
+            })
+          }
+          .width('92%')
+          .padding(20)
+          .borderRadius(Page1Theme.RADIUS_L)
+          .backgroundColor(Page1Theme.SURFACE)
+          .shadow({ radius: 40, color: '#00000022', offsetX: 0, offsetY: 10 })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#00000033')
+        .align(Alignment.Bottom)
+        .onClick((): void => { this.showReplay = false })
+      }
     }
     .width('100%')
     .height('100%')
@@ -145,4 +169,3 @@ export struct Page1View {
   }
 
 }
-

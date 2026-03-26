@@ -22,6 +22,7 @@ import { GridIdCodec } from './PathPlannerAStar'
 import { P1C } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
 import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
+import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
 export function bindTcpCallbacks(ctx: any): void {
   const cb: CarTcpCallbacks = {
@@ -287,7 +288,8 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
 
     if (ultrasonicP1 === 0x00 || ultrasonicP1 === 0x01 || ultrasonicP1 === 0x02) {
       const recvAtMs: number = Date.now()
-      const parkingCtx: boolean = isParkingUltrasonicResponseContext(ctx, recvAtMs)
+      const parkingCtx: boolean =
+        isParkingUltrasonicResponseContext(ctx, recvAtMs) || !!ctx.parkingAwaitingUltrasonicDecision
       ctx.lastUltrasonicP1 = ultrasonicP1
       ctx.lastUltrasonicAtMs = recvAtMs
       msg = `RX 55AA cmd=0xBC 超声波结果 p1=0x${byteToHex(ultrasonicP1)}`
@@ -299,14 +301,21 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
             ? '超声波：停车位被占用(0x01)'
             : `超声波：停车位可用(p1=0x${byteToHex(ultrasonicP1)})`
         )
-        clearParkingUltrasonicRequest(ctx)
+        if (typeof ctx.onParkingUltrasonicResult === 'function') {
+          void ctx.onParkingUltrasonicResult(ultrasonicP1, recvAtMs)
+        } else {
+          clearParkingUltrasonicRequest(ctx)
+        }
       } else {
         s.pushLog(
           ultrasonicP1 === 0x01
             ? '超声波：行驶前方有障碍物(0x01)'
             : `超声波：行驶态结果 p1=0x${byteToHex(ultrasonicP1)}`
         )
-        if (ultrasonicP1 === 0x01) ctx.queueDrivingUltrasonicObstacle(ctx.lastUltrasonicAtMs)
+        if (ultrasonicP1 === 0x01) {
+          replayArchiveService.onObstacleTriggered('ULTRASONIC', '超声波检测到障碍并触发避障')
+          ctx.queueDrivingUltrasonicObstacle(ctx.lastUltrasonicAtMs)
+        }
       }
 
       s.pushLog(msg)
@@ -387,23 +396,77 @@ function isMotionAction(a: Page1Action): boolean {
     a === Page1Action.UTURN
 }
 
-async function triggerLightBaselineBeforeMotion(ctx: any, s: Page1UiStore): Promise<void> {
-  if (!!ctx.lightMetricReady) return
-  try {
-    if (typeof ctx.armLightMetricQuery === 'function') {
-      ctx.armLightMetricQuery()
-    }
-    s.bumpTx()
-    await ctx.proto.light()
-    s.pushLog('LIGHT: 出发前自动查询光照基准')
-  } catch (_) {
-    s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
-  }
+function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
+  return (Number(ctx.emergencyCommandSeq) || 0) !== seq
 }
 
-export async function sendManualGoCommand(ctx: any, actionText: string): Promise<void> {
+async function triggerLightBaselineBeforeMotion(ctx: any, s: Page1UiStore): Promise<void> {
+  if (!!ctx.lightMetricReady) return
+  const nowMs: number = Date.now()
+  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
+  const shouldQuery: boolean =
+    !ctx.lightMetricQueryEnabled ||
+    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
+  if (!shouldQuery) return
+
+  if (typeof ctx.armLightMetricQuery === 'function') {
+    ctx.armLightMetricQuery()
+  }
+  ctx.lightMetricLastQueryAtMs = nowMs
+  s.bumpTx()
+  void ctx.proto.light()
+    .then((): void => {
+      s.pushLog('LIGHT: 出发前自动查询光照基准(异步)')
+    })
+    .catch((): void => {
+      s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
+    })
+}
+
+async function waitLightBaselineReadyForManualGo(ctx: any, s: Page1UiStore, timeoutMs: number): Promise<boolean> {
+  const nowMs: number = Date.now()
+  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
+  const shouldQueryNow: boolean =
+    !ctx.lightMetricQueryEnabled ||
+    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
+  let gateAtMs: number = lastQueryAtMs > 0 ? lastQueryAtMs : nowMs
+
+  if (shouldQueryNow) {
+    try {
+      if (typeof ctx.armLightMetricQuery === 'function') {
+        ctx.armLightMetricQuery()
+      }
+      gateAtMs = Date.now()
+      ctx.lightMetricLastQueryAtMs = gateAtMs
+      s.bumpTx()
+      await ctx.proto.light()
+      s.pushLog('LIGHT: 手动起步前已发送光照查询，等待BD=02后再发前进')
+    } catch (_) {
+      s.pushLog('LIGHT: 手动起步前光照查询发送失败，本轮前进取消')
+      return false
+    }
+  } else {
+    s.pushLog('LIGHT: 手动起步前等待最近一次光照查询的BD=02')
+  }
+
+  const waitMs: number = Math.max(300, timeoutMs)
+  const deadlineMs: number = Date.now() + waitMs
+  while (Date.now() <= deadlineMs) {
+    const statusCode: number = Number(ctx.pathAckLastStatusCode) || 0
+    const statusAtMs: number = Number(ctx.pathAckLastStatusAtMs) || 0
+    if (statusCode === 0x02 && statusAtMs >= gateAtMs) return true
+    await ctx.sleep(120)
+  }
+
+  s.pushLog(`LIGHT: 手动起步等待BD=02超时(${waitMs}ms)，本轮前进取消`)
+  return false
+}
+
+export async function sendManualGoCommand(ctx: any, actionText: string, commandSeq: number): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
+  if (isStaleByEmergencySeq(ctx, commandSeq)) return
+  if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('GO', 'MANUAL_GO_SEND')) return
   s.setAction('前进')
   s.bumpTx()
   await ctx.proto.go()
@@ -414,6 +477,7 @@ export async function sendManualGoCommand(ctx: any, actionText: string): Promise
 export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
+  const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
 
   // 急停优先级最高：立即中断自动运行并执行统一急停流程。
   if (a === Page1Action.SCRAM) {
@@ -453,6 +517,9 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   else if (a === Page1Action.LIGHT) actionText = '光照查询'
   else if (a === Page1Action.TFTB) actionText = 'TFTB发送'
   else if (a === Page1Action.STROBE) actionText = '道闸发送'
+  if (actionText.length > 0) {
+    replayArchiveService.onAction(actionText, 'MANUAL')
+  }
 
   if (!canRealSend(ctx)) {
     const mode: string = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
@@ -478,8 +545,9 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
       return
     }
 
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    await sendManualGoCommand(ctx, actionText)
+    const lightReadyForGo: boolean = await waitLightBaselineReadyForManualGo(ctx, s, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
+    if (!lightReadyForGo) return
+    await sendManualGoCommand(ctx, actionText, commandSeq)
     ctx.previewManualActionOnMap(Page1Action.GO)
     return
   }
@@ -487,6 +555,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.BACK) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('BACK', 'MANUAL_SEND')) return
     s.setAction('后退')
     s.bumpTx()
     await ctx.proto.back()
@@ -497,6 +567,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.LEFT) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('LEFT', 'MANUAL_SEND')) return
     s.setAction('左转')
     s.bumpTx()
     await ctx.proto.left()
@@ -507,6 +579,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.RIGHT) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('RIGHT', 'MANUAL_SEND')) return
     s.setAction('右转')
     s.bumpTx()
     await ctx.proto.right()
@@ -517,6 +591,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.LEFT_HALF) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('LEFT_HALF', 'MANUAL_SEND')) return
     s.setAction('左半转')
     s.bumpTx()
     await ctx.proto.leftHalf()
@@ -527,6 +603,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.RIGHT_HALF) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('RIGHT_HALF', 'MANUAL_SEND')) return
     s.setAction('右半转')
     s.bumpTx()
     await ctx.proto.rightHalf()
@@ -537,6 +615,8 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.UTURN) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return
+    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('UTURN', 'MANUAL_SEND')) return
     s.setAction('掉头')
     s.bumpTx()
     await ctx.proto.uturn()

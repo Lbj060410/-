@@ -21,6 +21,7 @@ import {
 import { page2Coordinator, Page2Coordinator } from './Page2Coordinator'
 import { PtzControlPanel } from './components/PtzControlPanel'
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
+import { ReplayReviewPanel } from '../page1/components/ReplayReviewPanel'
 
 interface OverlayBoxViewModel {
   key: string
@@ -45,6 +46,7 @@ export struct Page2View {
   @State private videoStore: VideoStore = videoStore
   @State private recogStore: RecogStore = recogStore
   @State private showDiag: boolean = false
+  @State private showReplay: boolean = false
 
   // 视频显示区域的实际尺寸，由 onAreaChange 更新，用于识别框映射到 UI 坐标
   @State private videoAreaWidth: number = 0
@@ -132,6 +134,28 @@ export struct Page2View {
         .align(Alignment.Bottom)
         .onClick((): void => {
           this.showDiag = false
+        })
+      }
+
+      if (this.showReplay) {
+        Stack() {
+          Column() {
+            ReplayReviewPanel({
+              onClose: (): void => { this.showReplay = false }
+            })
+          }
+          .width('92%')
+          .padding(20)
+          .borderRadius(Page1Theme.RADIUS_L)
+          .backgroundColor(Page1Theme.SURFACE)
+          .shadow({ radius: 40, color: '#00000022', offsetX: 0, offsetY: 10 })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#00000033')
+        .align(Alignment.Bottom)
+        .onClick((): void => {
+          this.showReplay = false
         })
       }
     }
@@ -252,7 +276,7 @@ export struct Page2View {
       .width('100%')
       .padding({ top: 8, bottom: 8 })
 
-      // 第2行：快照、切换识别、切换源、重启
+      // 第2行：快照、切换识别、复盘、重启
       Row({ space: 8 }) {
         Button('抓拍')
           .layoutWeight(1)
@@ -282,7 +306,7 @@ export struct Page2View {
             this.videoStore.setStatus(`识别${this.videoStore.recognitionEnabled ? '开启' : '关闭'}`)
           })
 
-        Button('切换源')
+        Button('复盘')
           .layoutWeight(1)
           .height(40)
           .borderRadius(6)
@@ -292,6 +316,9 @@ export struct Page2View {
           .fontWeight(FontWeight.Bold)
           .border({ width: 1, color: '#E2E8F0' })
           .shadow({ radius: 4, color: '#00000005', offsetX: 0, offsetY: 1 })
+          .onClick((): void => {
+            this.showReplay = true
+          })
 
         Button('重启')
           .layoutWeight(1)
@@ -310,6 +337,26 @@ export struct Page2View {
       .width('100%')
 
       Row({ space: 8 }) {
+        Button('切换源')
+          .layoutWeight(1)
+          .height(36)
+          .borderRadius(6)
+          .backgroundColor('#FFFFFF')
+          .fontColor(Page1Theme.TEXT_SECONDARY)
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .border({ width: 1, color: '#E2E8F0' })
+          .onClick((): void => {
+            const toRtsp: boolean = this.videoStore.displayMode !== DisplayMode.RTSP
+            if (toRtsp) {
+              this.videoStore.setDisplayMode(DisplayMode.RTSP, 'manual switch')
+              this.videoStore.setStatus('已切到 RTSP 预览')
+            } else {
+              this.videoStore.setDisplayMode(DisplayMode.HTTP, 'manual switch')
+              this.videoStore.setStatus('已切到 HTTP 预览')
+            }
+          })
+
         Button(this.videoStore.page2BarrierExperimentalEnabled ? 'Barrier：开' : 'Barrier：关')
           .layoutWeight(1)
           .height(36)

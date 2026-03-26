@@ -17,6 +17,105 @@ import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { P1C } from './Page1CoordinatorDefs'
 import { RouteEdgeCodec, GridIdCodec } from './PathPlannerAStar'
 
+function clearParkingUltrasonicDecisionContext(ctx: any): void {
+  ctx.parkingAwaitingUltrasonicDecision = false
+  ctx.parkingAwaitingArrivedId = ''
+  ctx.parkingAwaitingGoalId = ''
+  ctx.parkingAwaitingRequestedAtMs = 0
+  ctx.parkingUltrasonicDecisionBusy = false
+  if (typeof ctx.clearParkingUltrasonicRequest === 'function') {
+    ctx.clearParkingUltrasonicRequest()
+  }
+}
+
+export function handleParkingSlotOccupied(ctx: any, arrivedId: string, goalId: string, sourceTag: string = ''): void {
+  const s = ctx.store
+  if (!s) return
+  const fromId: string = arrivedId.trim().toUpperCase()
+  const targetGoalId: string = goalId.trim().toUpperCase()
+  if (!GridIdCodec.isValidId(fromId) || !GridIdCodec.isValidId(targetGoalId)) {
+    s.pushLog(`停车位占用：上下文非法 from=${fromId} goal=${targetGoalId}`)
+    clearParkingUltrasonicDecisionContext(ctx)
+    return
+  }
+
+  if (ctx.isSmartParkingGoal(targetGoalId)) {
+    ctx.garageWaitingParkDone04 = false
+    ctx.garagePendingCarportLevel = 0
+  }
+
+  const blockedEdgeId: string = RouteEdgeCodec.normalize(fromId, targetGoalId)
+  if (s.addBlockedEdgeIfAbsent(blockedEdgeId, 'PARK_SLOT_OBSTACLE')) {
+    s.pushLog(`停车位障碍：封禁边 ${blockedEdgeId}`)
+  }
+
+  const fallbackGoalId: string = ctx.fallbackParkingGoalOnObstacle(targetGoalId).trim().toUpperCase()
+  if (!GridIdCodec.isValidId(fallbackGoalId)) {
+    s.pushLog(`停车位占用：备选车位非法 fallback=${fallbackGoalId} source=${sourceTag}`)
+    clearParkingUltrasonicDecisionContext(ctx)
+    return
+  }
+
+  s.destDraft = fallbackGoalId
+  s.applyDest()
+  s.pushLog(`停车位占用：${targetGoalId} 收到 0x01，重规划至 ${fallbackGoalId} source=${sourceTag}`)
+  clearParkingUltrasonicDecisionContext(ctx)
+  ctx.planPath(fallbackGoalId)
+}
+
+export async function onParkingUltrasonicResult(ctx: any, ultrasonicP1: number, recvAtMs: number): Promise<void> {
+  const s = ctx.store
+  if (!s) return
+  if (!ctx.parkingAwaitingUltrasonicDecision) return
+  if (ctx.parkingUltrasonicDecisionBusy) return
+  if (recvAtMs <= 0) return
+  ctx.parkingUltrasonicDecisionBusy = true
+  const arrivedId: string = (ctx.parkingAwaitingArrivedId as string).trim().toUpperCase()
+  const goalId: string = (ctx.parkingAwaitingGoalId as string).trim().toUpperCase()
+  try {
+    if (!GridIdCodec.isValidId(arrivedId) || !GridIdCodec.isValidId(goalId)) {
+      s.pushLog(`停车超声波：忽略，等待上下文非法 from=${arrivedId} goal=${goalId}`)
+      clearParkingUltrasonicDecisionContext(ctx)
+      return
+    }
+
+    const requestAtMsRaw: number = Number(ctx.parkingAwaitingRequestedAtMs)
+    const requestAtMs: number = Number.isFinite(requestAtMsRaw) ? requestAtMsRaw : 0
+    if (requestAtMs > 0) {
+      if (recvAtMs < requestAtMs) {
+        s.pushLog(`停车超声波：忽略过期回包 recv=${recvAtMs} < req=${requestAtMs}`)
+        return
+      }
+      const expireAtMs: number = requestAtMs + P1C.ULTRASONIC_RESPONSE_CONTEXT_MS
+      if (recvAtMs > expireAtMs) {
+        s.pushLog(`停车超声波：忽略过期回包 recv=${recvAtMs} > expire=${expireAtMs}`)
+        return
+      }
+    }
+
+    if (ultrasonicP1 === 0x01) {
+      handleParkingSlotOccupied(ctx, arrivedId, goalId, 'ULTRASONIC')
+      return
+    }
+
+    // 停车接管逻辑：只依赖超声波结果，不再强制要求额外 BD=02 才允许倒车动画。
+    // 若此时恰好还有 ACK 在收尾，最多等待一小段；超时也不中断停车动画。
+    if (ctx.canRealSend() && ctx.pathAckAwaitingComplete) {
+      const ackOk: boolean = await ctx.waitForCurrentPathAckComplete(P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS, 'PARK_HANDOFF_WAIT_ACK02')
+      if (!ackOk) {
+        s.pushLog(`停车超声波：p1=0x${ctx.byteToHex(ultrasonicP1)}，ACK未完成但继续倒车入库动画`)
+      }
+    }
+
+    const parkingHeadingDeg: number = ctx.segmentHeadingDeg(arrivedId, goalId)
+    ctx.playMapReverseParkingAnimation(arrivedId, goalId, parkingHeadingDeg)
+    s.pushLog(`停车超声波：p1=0x${ctx.byteToHex(ultrasonicP1)}，执行倒车入库动画`)
+    clearParkingUltrasonicDecisionContext(ctx)
+  } finally {
+    ctx.parkingUltrasonicDecisionBusy = false
+  }
+}
+
 async function alignToParkingGoal(ctx: any, arrivedId: string, goalId: string): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
@@ -122,10 +221,15 @@ export async function runParkingBeforeFinalEdgeArrival(ctx: any, arrivedId: stri
 
     const aligned: boolean = await alignToParkingGoal(ctx, arrivedId, goalId)
     if (!aligned) return true
-    const parkingHeadingDeg: number = ctx.segmentHeadingDeg(arrivedId, goalId)
     const ultrasonicRequestAtMs: number = Date.now()
     ctx.lastUltrasonicP1 = -1
     ctx.lastUltrasonicAtMs = 0
+    clearParkingUltrasonicDecisionContext(ctx)
+    ctx.parkingAwaitingUltrasonicDecision = true
+    ctx.parkingAwaitingArrivedId = arrivedId.trim().toUpperCase()
+    ctx.parkingAwaitingGoalId = goalId.trim().toUpperCase()
+    ctx.parkingAwaitingRequestedAtMs = ultrasonicRequestAtMs
+    ctx.parkingUltrasonicDecisionBusy = false
     ctx.clearParkingUltrasonicRequest()
     if (ctx.canRealSend()) {
       s.bumpTx()
@@ -144,36 +248,23 @@ export async function runParkingBeforeFinalEdgeArrival(ctx: any, arrivedId: stri
       s.setPath([], 'PARK_HANDOFF')
     }
 
+    if (!ctx.canRealSend()) {
+      const parkingHeadingDeg: number = ctx.segmentHeadingDeg(arrivedId, goalId)
+      ctx.playMapReverseParkingAnimation(arrivedId, goalId, parkingHeadingDeg)
+      s.pushLog(`停车前检查：${upperGoalId} DRY_RUN 直接执行倒车入库动画`)
+      clearParkingUltrasonicDecisionContext(ctx)
+      return true
+    }
+
     await ctx.sleep(P1C.ULTRASONIC_WAIT_MS)
     if (!ctx.isParkingSequenceActive(token)) return true
-
     const ultrasonicReady: boolean = ctx.lastUltrasonicAtMs >= ultrasonicRequestAtMs
     if (!ultrasonicReady) {
-      ctx.playMapReverseParkingAnimation(arrivedId, goalId, parkingHeadingDeg)
-      s.pushLog(`停车前检查：${upperGoalId} 超声波超时，按“不处理”保留当前状态`)
-      return true
-    }
-    if (ctx.lastUltrasonicP1 !== 0x01) {
-      ctx.playMapReverseParkingAnimation(arrivedId, goalId, parkingHeadingDeg)
-      s.pushLog(`停车前检查：${upperGoalId} 超声波 p1=0x${ctx.byteToHex(ctx.lastUltrasonicP1)}，不处理`)
+      s.pushLog(`停车前检查：${upperGoalId} 等待超声波回包中，收到结果后再决定是否倒车入库`)
       return true
     }
 
-    if (isGarageGoal) {
-      ctx.garageWaitingParkDone04 = false
-      ctx.garagePendingCarportLevel = 0
-    }
-    const blockedEdgeId: string = RouteEdgeCodec.normalize(arrivedId, goalId)
-    if (s.addBlockedEdgeIfAbsent(blockedEdgeId, 'PARK_SLOT_OBSTACLE')) {
-      s.pushLog(`停车位障碍：封禁边 ${blockedEdgeId}`)
-    }
-    const fallbackGoalId: string = ctx.fallbackParkingGoalOnObstacle(goalId)
-    if (fallbackGoalId !== goalId) {
-      s.destDraft = fallbackGoalId
-      s.applyDest()
-    }
-    s.pushLog(`停车前检查：${upperGoalId} 收到 0x01，重规划至 ${fallbackGoalId}`)
-    ctx.planPath(fallbackGoalId)
+    await onParkingUltrasonicResult(ctx, ctx.lastUltrasonicP1, ctx.lastUltrasonicAtMs)
     return true
   } finally {
     ctx.clearParkingUltrasonicRequest()

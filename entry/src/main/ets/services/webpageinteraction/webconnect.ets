@@ -57,7 +57,7 @@ function parseNodeCoordinate(nodeId: string): { xCoordinate: string, yCoordinate
 function buildPayloadByNode(nodeId: string, _intervalMs: number): SaveTrajectoryPayload | undefined {
   const coordinate = parseNodeCoordinate(nodeId)
   if (!coordinate) return undefined
-  const safeIntervalMs: number = Math.max(0, Math.trunc(_intervalMs))
+  const safeIntervalMs: number = Math.max(19, Math.trunc(_intervalMs))
   return {
     carId: DEFAULT_CAR_ID,
     xCoordinate: coordinate.xCoordinate,

@@ -80,6 +80,7 @@ import {
   animateMapPoseTransition
 } from './Page1CoordinatorMapObstacleOps'
 import {
+  onParkingUltrasonicResult as onParkingUltrasonicResultOp,
   runHandleGateDepartOnArrival,
   runParkingBeforeFinalEdgeArrival,
   simAmbientBackCm,
@@ -163,6 +164,7 @@ import {
   isShigongBarrierLabelKey,
   normalizeBarrierLabelKey
 } from './TrafficBarrierLabelPolicy'
+import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
 export class Page1Coordinator {
   private store?: Page1UiStore
@@ -216,6 +218,11 @@ export class Page1Coordinator {
   private parkingUltrasonicPending: boolean = false
   private parkingUltrasonicRequestAtMs: number = 0
   private parkingUltrasonicExpireAtMs: number = 0
+  private parkingAwaitingUltrasonicDecision: boolean = false
+  private parkingAwaitingArrivedId: string = ''
+  private parkingAwaitingGoalId: string = ''
+  private parkingAwaitingRequestedAtMs: number = 0
+  private parkingUltrasonicDecisionBusy: boolean = false
   private lastAutoActionFingerprint: string = ''
   private lastAutoActionDedupLogAtMs: number = 0
   private lastSchedulerSnapshot?: SchedulerSnapshot = undefined
@@ -227,11 +234,13 @@ export class Page1Coordinator {
   private pathAckBlocked: boolean = false
   private pathAckLastSendAtMs: number = 0
   private pathAckLastStatusCode: number = 0
+  private pathAckLastStatusAtMs: number = 0
   private pathAckLastCommandText: string = ''
   private pathAckLastWaitLogAtMs: number = 0
   private pathAckRetryTimerId: number = -1
   private pathAckRetrySentCount: number = 0
   private pathAckCommandKey: string = ''
+  private pathAckCommandSeq: number = 0
   private pendingAckMotion?: PendingAckMotion = undefined
   private suppressNextAckCompleteMotion: boolean = false
   private suppressAckCompleteEdgeId: string = ''
@@ -257,7 +266,14 @@ export class Page1Coordinator {
   private motionCommandBlockReason: string = ''
   private motionCommandBlockLastLogAtMs: number = 0
   private emergencyAlarmTimerId: number = -1
+  private emergencyAutoRecoverTimerId: number = -1
+  private emergencyAlarmBurstActive: boolean = false
+  private emergencyAlarmBurstAckAtMs: number = 0
+  private emergencyAlarmBurstLastSendAtMs: number = 0
   private barrierEmergencyBusy: boolean = false
+  private emergencyRecoverBypassUntilMs: number = 0
+  private emergencyMotionCommandLocked: boolean = false
+  private emergencyCommandSeq: number = 0
   private metricSpeedAnimTimerId: number = -1
   private metricSpeedAnimToken: number = 0
   private metricHeadingAnimTimerId: number = -1
@@ -273,6 +289,7 @@ export class Page1Coordinator {
   private simLightBaseLux: number = 0
   private lightMetricQueryEnabled: boolean = false
   private lightMetricReady: boolean = false
+  private lightMetricLastQueryAtMs: number = 0
   private lastBarrierEmergencyTaskId: string = ''
   private lastBarrierEmergencyTsMs: number = 0
   private started: boolean = false
@@ -549,6 +566,7 @@ export class Page1Coordinator {
   private armLightMetricQuery(): void {
     this.lightMetricQueryEnabled = true
     this.lightMetricReady = false
+    this.lightMetricLastQueryAtMs = Date.now()
     this.simLightBaseLux = 0
     const s: Page1UiStore | undefined = this.store
     if (s) s.setMetricLightLux(0)
@@ -560,6 +578,7 @@ export class Page1Coordinator {
     if (!this.lightMetricQueryEnabled) return
     if (!Number.isFinite(lux) || lux < 0) return
     this.lightMetricReady = true
+    this.lightMetricLastQueryAtMs = Date.now()
     this.simLightBaseLux = Math.round(lux)
     s.setMetricLightLux(this.simLightBaseLux)
   }
@@ -591,6 +610,7 @@ export class Page1Coordinator {
     this.metricDistanceMotionBaseCm = 0
     this.lightMetricQueryEnabled = false
     this.lightMetricReady = false
+    this.lightMetricLastQueryAtMs = 0
     store.setMetricSpeedCms(0)
     store.setMetricHeadingDeg(0)
     store.setMetricDistanceCm(0)
@@ -634,6 +654,7 @@ export class Page1Coordinator {
   }
 
   async stop(): Promise<void> {
+    replayArchiveService.closeActive('Page1 stop')
     this.starting = false
     this.started = false
     this.clearDeferredConnect()
@@ -656,6 +677,7 @@ export class Page1Coordinator {
     this.clearMetricDistanceAckAnimation()
     this.lightMetricQueryEnabled = false
     this.lightMetricReady = false
+    this.lightMetricLastQueryAtMs = 0
     this.simLightBaseLux = 0
     if (this.store) {
       this.store.setMetricSpeedCms(0)
@@ -663,6 +685,7 @@ export class Page1Coordinator {
       this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
     }
     this.clearEmergencyAlarmTimer()
+    this.clearEmergencyAutoRecoverTimer()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
@@ -672,6 +695,7 @@ export class Page1Coordinator {
   }
 
   pausePage(): void {
+    replayArchiveService.closeActive('Page1 pause')
     this.starting = false
     this.started = false
     this.clearDeferredConnect()
@@ -694,6 +718,7 @@ export class Page1Coordinator {
     this.clearMetricDistanceAckAnimation()
     this.lightMetricQueryEnabled = false
     this.lightMetricReady = false
+    this.lightMetricLastQueryAtMs = 0
     this.simLightBaseLux = 0
     if (this.store) {
       this.store.setMetricSpeedCms(0)
@@ -701,6 +726,7 @@ export class Page1Coordinator {
       this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
     }
     this.clearEmergencyAlarmTimer()
+    this.clearEmergencyAutoRecoverTimer()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
@@ -796,7 +822,7 @@ export class Page1Coordinator {
   }
 
   private async sendManualGoCommand(actionText: string): Promise<void> {
-    await sendManualGoCommandOp(this as object, actionText)
+    await sendManualGoCommandOp(this as object, actionText, this.emergencyCommandSeq)
   }
 
   async onAction(a: Page1Action): Promise<void> {
@@ -1048,6 +1074,11 @@ export class Page1Coordinator {
   private cancelParkingSequence(): void {
     this.parkingSequenceToken += 1
     this.parkingInProgress = false
+    this.parkingAwaitingUltrasonicDecision = false
+    this.parkingAwaitingArrivedId = ''
+    this.parkingAwaitingGoalId = ''
+    this.parkingAwaitingRequestedAtMs = 0
+    this.parkingUltrasonicDecisionBusy = false
   }
 
   private isParkingSequenceActive(token: number): boolean {
@@ -1184,6 +1215,11 @@ export class Page1Coordinator {
     this.gateBillingRunning = false
     this.gateBillingStartAtMs = 0
     this.gateBillingElapsedMs = 0
+    this.parkingAwaitingUltrasonicDecision = false
+    this.parkingAwaitingArrivedId = ''
+    this.parkingAwaitingGoalId = ''
+    this.parkingAwaitingRequestedAtMs = 0
+    this.parkingUltrasonicDecisionBusy = false
   }
 
   private clearGarageCarportAckWatch(): void {
@@ -1238,6 +1274,9 @@ export class Page1Coordinator {
   }
 
   private onPathAckReceived01(): void {
+    if (this.emergencyAlarmBurstActive) {
+      this.emergencyAlarmBurstAckAtMs = Date.now()
+    }
     if (!this.garageCarportAckPending) return
     const s: Page1UiStore | undefined = this.store
     const level: number = this.garageCarportAckPendingLevel
@@ -1461,6 +1500,26 @@ export class Page1Coordinator {
     }
   }
 
+  private clearEmergencyAutoRecoverTimer(): void {
+    if (this.emergencyAutoRecoverTimerId >= 0) {
+      clearTimeout(this.emergencyAutoRecoverTimerId)
+      this.emergencyAutoRecoverTimerId = -1
+    }
+  }
+
+  private armEmergencyAutoRecover(reason: string, holdMs: number): void {
+    this.clearEmergencyAutoRecoverTimer()
+    const safeHoldMs: number = Math.max(0, Math.round(holdMs))
+    this.emergencyAutoRecoverTimerId = setTimeout((): void => {
+      this.emergencyAutoRecoverTimerId = -1
+      void this.recoverFromEmergency(1000)
+      const s: Page1UiStore | undefined = this.store
+      if (s) {
+        s.pushLog(`EMERGENCY AUTO_RECOVER: reason=${reason}, delay=${safeHoldMs}ms`)
+      }
+    }, safeHoldMs) as number
+  }
+
   private setMotionCommandBlock(reason: string, holdMs: number): void {
     const nowMs: number = Date.now()
     const safeHoldMs: number = Math.max(0, Math.round(holdMs))
@@ -1483,9 +1542,16 @@ export class Page1Coordinator {
 
   canSendMotionCommand(commandKey: string, sourceTag: string): boolean {
     const nowMs: number = Date.now()
+    const s: Page1UiStore | undefined = this.store
+    if (this.emergencyMotionCommandLocked) {
+      if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
+        this.motionCommandBlockLastLogAtMs = nowMs
+        s.pushLog(`MOTION_LOCKED: ${sourceTag}:${commandKey} blocked after emergency stop`)
+      }
+      return false
+    }
     if (!this.isMotionCommandBlocked(nowMs)) return true
 
-    const s: Page1UiStore | undefined = this.store
     if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
       this.motionCommandBlockLastLogAtMs = nowMs
       const remainMs: number = Math.max(0, this.motionCommandBlockUntilMs - nowMs)
@@ -1496,21 +1562,43 @@ export class Page1Coordinator {
     return false
   }
 
-  private armAlarmEnable(delayMs: number, reason: string): void {
+  private async sendEmergencyAlarmBurst(reason: string, repeatCount: number = 3, intervalMs: number = 10): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
-    if (s.alarmEnabled) return
-    if (this.emergencyAlarmTimerId >= 0) return
-    const safeDelayMs: number = Math.max(0, Math.round(delayMs))
-    this.emergencyAlarmTimerId = setTimeout((): void => {
-      this.emergencyAlarmTimerId = -1
-      if (s.alarmEnabled) return
-      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-      s.alarmEnabled = true
-      s.bumpTx()
-      void this.proto.setAlarm(true)
-      s.pushLog(`EMERGENCY_ALARM: ON reason=${reason}`)
-    }, safeDelayMs) as number
+    const safeCount: number = Math.max(1, Math.round(repeatCount))
+    const safeIntervalMs: number = Math.max(0, Math.round(intervalMs))
+    this.emergencyAlarmBurstActive = true
+    this.emergencyAlarmBurstAckAtMs = 0
+    this.emergencyAlarmBurstLastSendAtMs = 0
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    try {
+      for (let i: number = 0; i < safeCount; i++) {
+        this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+        s.alarmEnabled = true
+        s.bumpTx()
+        this.emergencyAlarmBurstLastSendAtMs = Date.now()
+        try {
+          await this.proto.setAlarm(true)
+        } catch (_) {}
+        s.pushLog(`EMERGENCY_ALARM: ON#${i + 1}/${safeCount} reason=${reason}`)
+        if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
+          s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
+          break
+        }
+        if (i + 1 < safeCount && safeIntervalMs > 0) {
+          const deadlineMs: number = Date.now() + safeIntervalMs
+          while (Date.now() < deadlineMs) {
+            if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
+              s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
+              return
+            }
+            await this.sleep(2)
+          }
+        }
+      }
+    } finally {
+      this.emergencyAlarmBurstActive = false
+    }
   }
 
   private hasShigongBarrierFromLatestRecog(): boolean {
@@ -1526,6 +1614,7 @@ export class Page1Coordinator {
   }
 
   maybeHandleBarrierEmergencyStop(nowMs: number): boolean {
+    if (nowMs < this.emergencyRecoverBypassUntilMs) return false
     const r: RecognitionResult | undefined = recogStore.lastRecog
     if (!r || !r.ok || r.subtype !== RecognitionSubtype.BARRIER) return false
     if (!this.hasShigongBarrierFromLatestRecog()) return false
@@ -1537,15 +1626,16 @@ export class Page1Coordinator {
     this.lastBarrierEmergencyTaskId = r.taskId
     this.lastBarrierEmergencyTsMs = Math.max(this.lastBarrierEmergencyTsMs, r.tsMs)
 
-    void this.emergencyStopAndHold('BARRIER', 5000, 0).finally((): void => {
+    void this.emergencyStopAndHold('BARRIER', 1000).finally((): void => {
       this.barrierEmergencyBusy = false
     })
     return true
   }
 
-  async emergencyStopAndHold(reason: string = 'MANUAL_SCRAM', holdMs: number = 5000, alarmDelayMs: number = 1000): Promise<void> {
+  async emergencyStopAndHold(reason: string = 'MANUAL_SCRAM', holdMs: number = 1000): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
+    const safeHoldMs: number = Math.max(0, Math.round(holdMs))
 
     this.cancelMapPoseAnimation()
     this.cancelParkingSequence()
@@ -1555,16 +1645,41 @@ export class Page1Coordinator {
     this.resetPathAckState()
     this.stopActiveMotion()
     this.actionScheduler.reset()
-    this.setMotionCommandBlock(reason, holdMs)
+    this.setMotionCommandBlock(reason, safeHoldMs)
+    this.emergencyMotionCommandLocked = true
+    this.emergencyCommandSeq += 1
 
-    s.autoFollowEnabled = false
     s.lastAutoFollowAtMs = Date.now()
 
     await this.sendDriveActionDirect(Page1Action.STOP)
-    this.armAlarmEnable(alarmDelayMs, reason)
+    void this.sendEmergencyAlarmBurst(reason, 3, 10)
+    this.armEmergencyAutoRecover(reason, safeHoldMs)
 
     s.setAction('紧急停止')
-    s.pushLog(`EMERGENCY STOP: reason=${reason}, hold=${holdMs}ms, alarmDelay=${alarmDelayMs}ms`)
+    s.pushLog(`EMERGENCY STOP: reason=${reason}, hold=${safeHoldMs}ms`)
+  }
+
+  async recoverFromEmergency(graceMs: number = 1000): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+
+    this.clearEmergencyAlarmTimer()
+    this.clearEmergencyAutoRecoverTimer()
+    this.clearMotionCommandBlock()
+    this.barrierEmergencyBusy = false
+    this.emergencyRecoverBypassUntilMs = Date.now() + Math.max(1000, Math.round(graceMs))
+    this.emergencyMotionCommandLocked = false
+
+    s.alarmEnabled = false
+    s.autoFollowEnabled = true
+    if (s.pathNodes.length > 1 && s.pathIndex < s.pathNodes.length - 1) {
+      // Allow route-follow loop to send next segment immediately after emergency recovery.
+      s.lastAutoFollowAtMs = 0
+    }
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+
+    s.setAction('紧急状态已恢复')
+    s.pushLog(`EMERGENCY RECOVER: bypass=${Math.max(1000, Math.round(graceMs))}ms`)
   }
 
   private canSendNextCommand(nowMs: number): boolean {
@@ -1620,6 +1735,10 @@ export class Page1Coordinator {
 
   private async maybeRunParkingBeforeFinalEdgeArrival(arrivedId: string): Promise<boolean> {
     return await runParkingBeforeFinalEdgeArrival(this as object, arrivedId)
+  }
+
+  private async onParkingUltrasonicResult(ultrasonicP1: number, recvAtMs: number): Promise<void> {
+    await onParkingUltrasonicResultOp(this as object, ultrasonicP1, recvAtMs)
   }
 
   private edgeSideOfNode(id: string): EdgeSide {
@@ -1722,6 +1841,10 @@ export class Page1Coordinator {
 
     s.destDraft = goal
     s.applyDest()
+    if (!s.autoFollowEnabled) {
+      s.autoFollowEnabled = true
+      s.pushLog('AUTO_FOLLOW: 目标点发送时自动开启')
+    }
 
     if (!this.canRealSend()) {
       this.planPath(goal)

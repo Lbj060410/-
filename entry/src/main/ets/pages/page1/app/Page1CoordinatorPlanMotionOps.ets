@@ -15,11 +15,41 @@ Page1 coordination/scheduling helper logic.
 import { Page1Action } from '../types/Page1Types'
 import { GridIdCodec, PathPlannerAStar } from './PathPlannerAStar'
 import { videoStore } from '../../../state/VideoStore'
+import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
-function syncRecognitionByNodeId(nodeId: string): void {
-  const id: string = nodeId.trim().toUpperCase()
-  const enabled: boolean = (id === 'B2' || id === 'B4' || id === 'D6' || id === 'F6')
-  videoStore.setRecognitionEnabled(enabled)
+function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
+  const from: string = fromId.trim().toUpperCase()
+  const to: string = toId.trim().toUpperCase()
+  return (from === 'B4' && to === 'B6') || (from === 'D6' && to === 'F6')
+}
+
+function syncRecognitionBySegment(fromId: string, toId: string): void {
+  const trafficEnabled: boolean = shouldEnableTrafficBySegment(fromId, toId)
+  videoStore.setRecognitionEnabled(true)
+  if (trafficEnabled) {
+    videoStore.setPage2TrafficEnabled(true)
+  } else {
+    videoStore.setPage2BarrierEnabled(true)
+  }
+}
+
+function syncRecognitionByPathCursor(ctx: any): void {
+  const s = ctx.store
+  if (!s) return
+  if (s.pathNodes.length <= 1) {
+    videoStore.setRecognitionEnabled(true)
+    videoStore.setPage2BarrierEnabled(true)
+    return
+  }
+  const idx: number = s.pathIndex
+  if (idx < 0 || idx >= s.pathNodes.length - 1) {
+    videoStore.setRecognitionEnabled(true)
+    videoStore.setPage2BarrierEnabled(true)
+    return
+  }
+  const fromId: string = s.pathNodes[idx]
+  const toId: string = s.pathNodes[idx + 1]
+  syncRecognitionBySegment(fromId, toId)
 }
 
 export function motionHooks(ctx: any): any {
@@ -60,8 +90,9 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
   const s = ctx.store
   if (!s) return
   s.currentSnapNodeId = toId
-  syncRecognitionByNodeId(toId)
+  syncRecognitionByPathCursor(ctx)
   s.stepNextNode()
+  syncRecognitionByPathCursor(ctx)
   ctx.uploadTrajectoryNode(toId)
 
   const fromId: string = ctx.motionPlayer.currentFromId()
@@ -79,6 +110,7 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
     if (!ctx.canSendNextCommand(Date.now())) return
     await ctx.sendDriveActionDirect(Page1Action.STOP)
     s.setAction('到达终点，停止')
+    replayArchiveService.closeActive('到达终点')
     return
   }
 
@@ -89,7 +121,9 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
 export function planPath(ctx: any, dest: string): void {
   const s = ctx.store
   if (!s) return
-  syncRecognitionByNodeId('')
+  const oldPath: Array<string> = s.pathNodes.slice()
+  videoStore.setRecognitionEnabled(true)
+  videoStore.setPage2BarrierEnabled(true)
   ctx.resetGarageFlowState()
 
   ctx.clearAheadVisionReplanState()
@@ -128,8 +162,9 @@ export function planPath(ctx: any, dest: string): void {
       return
     }
     s.setPath(gateRes.path, 'A*GATE')
+    replayArchiveService.onPathReplanned(oldPath, gateRes.path, 'A*GATE')
     s.currentSnapNodeId = start
-    syncRecognitionByNodeId(start)
+    syncRecognitionByPathCursor(ctx)
     ctx.uploadTrajectoryNode(start)
     s.lastAutoFollowAtMs = 0
     ctx.syncLogicalHeadingWithCurrentState()
@@ -144,9 +179,10 @@ export function planPath(ctx: any, dest: string): void {
   const segPath: Array<string> | undefined = ctx.tryBuildSegmentAwarePath(goal, blocked, blockedEdges)
   if (segPath && segPath.length > 0) {
     s.setPath(segPath, 'A*SEG')
+    replayArchiveService.onPathReplanned(oldPath, segPath, 'A*SEG')
     const near: string = ctx.nearestNodeIdByPose()
     s.currentSnapNodeId = GridIdCodec.isValidId(near) ? near : segPath[0]
-    syncRecognitionByNodeId(s.currentSnapNodeId)
+    syncRecognitionByPathCursor(ctx)
     ctx.uploadTrajectoryNode(s.currentSnapNodeId)
     s.lastAutoFollowAtMs = 0
     ctx.syncLogicalHeadingWithCurrentState()
@@ -166,8 +202,9 @@ export function planPath(ctx: any, dest: string): void {
   }
 
   s.setPath(res.path, 'A*')
+  replayArchiveService.onPathReplanned(oldPath, res.path, 'A*')
   s.currentSnapNodeId = start
-  syncRecognitionByNodeId(start)
+  syncRecognitionByPathCursor(ctx)
   ctx.uploadTrajectoryNode(start)
   s.lastAutoFollowAtMs = 0
   ctx.syncLogicalHeadingWithCurrentState()
@@ -177,5 +214,3 @@ export function planPath(ctx: any, dest: string): void {
     s.setAction('到达终点，停止')
   }
 }
-
-

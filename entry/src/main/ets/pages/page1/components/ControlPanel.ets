@@ -34,19 +34,6 @@ export struct ControlPanel {
             this.store.toggleRealSend()
           })
 
-        Button(this.store.autoFollowEnabled ? '跟车：开' : '跟车：关')
-          .layoutWeight(1)
-          .height(44)
-          .borderRadius(14)
-          .backgroundColor(this.store.autoFollowEnabled ? '#ECFDF5' : '#F8FAFC')
-          .fontColor(this.store.autoFollowEnabled ? '#059669' : Page1Theme.TEXT_SECONDARY)
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.store.autoFollowEnabled ? '#D1FAE5' : Page1Theme.BORDER })
-          .onClick((): void => {
-            this.store.autoFollowEnabled = !this.store.autoFollowEnabled
-          })
-
         Button(this.store.obstacleEditEnabled ? '设障：开' : '设障：关')
           .layoutWeight(1)
           .height(44)

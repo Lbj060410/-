@@ -68,8 +68,8 @@ export class Page1UiStore {
   // - carDotSize 仅影响显示大小，不影响规划与控制
   mapW: number = 0
   mapH: number = 0
-  carX: number = 0.52
-  carY: number = 0.45
+  carX: number = 0.195
+  carY: number = 0.902
   carDotSize: number = 26
 
   // ===== 黑线路网节点（行号 1/2/4/6/7）=====
@@ -233,8 +233,8 @@ export class Page1UiStore {
 
   pose: Pose2D = {
     tsMs: 0,
-    xNorm: 0.52,
-    yNorm: 0.45,
+    xNorm: 0.195,
+    yNorm: 0.902,
     headingDeg: 0,
     confidence: 0.70,
     source: PoseSource.INIT

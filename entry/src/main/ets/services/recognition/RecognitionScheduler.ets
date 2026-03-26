@@ -34,6 +34,7 @@ import {
 } from './RecognitionTask'
 import { RecognitionReportService } from './RecognitionReportService'
 import { CarTaskSnapshotArchiveService } from './CarTaskSnapshotArchiveService'
+import { replayArchiveService } from '../replay/ReplayArchiveService'
 
 class CancelledError extends Error {
   constructor() {
@@ -485,6 +486,7 @@ export class RecognitionScheduler {
         if (result.ok) {
           this.store.setRecogResult(result)
           this.store.bumpRecogOk()
+          replayArchiveService.onRecognition(result)
         } else {
           this.store.bumpRecogFail()
         }
@@ -492,6 +494,9 @@ export class RecognitionScheduler {
       } else {
         // SNAPSHOT：保存最近一次（Page4 下方截图预览也会被更新）
         this.store.setLastSnapshotResult(result)
+        if (result.ok) {
+          replayArchiveService.onRecognition(result)
+        }
       }
 
       // Optional: auto report should not break task flow.

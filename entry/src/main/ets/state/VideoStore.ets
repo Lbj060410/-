@@ -67,7 +67,7 @@ export class VideoStore {
   page2AutoPreviewAtMs: number = 0
 
   // ==== 识别调度预留 ====
-  recognitionEnabled: boolean = false
+  recognitionEnabled: boolean = true
   lastRecognizeAtMs: number = 0
   recognizeIntervalMs: number = 200
   // Page2 barrier 模型开关：默认开启。
@@ -182,4 +182,3 @@ export class VideoStore {
 }
 
 export const videoStore: VideoStore = new VideoStore()
-

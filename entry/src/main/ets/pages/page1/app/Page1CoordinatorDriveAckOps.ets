@@ -18,9 +18,14 @@ import { RouteEdgeCodec } from './PathPlannerAStar'
 import { MotionTimingProfile } from './ActionTimingRegistry'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
+import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
-const PATH_ACK_RETRY_WAIT_MS: number =10
+const PATH_ACK_RETRY_WAIT_MS: number =2000
 const PATH_ACK_RETRY_MAX_SENDS: number = 3
+
+function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
+  return (Number(ctx.emergencyCommandSeq) || 0) !== seq
+}
 
 function clearPathAckRetryTimer(ctx: any): void {
   if (ctx.pathAckRetryTimerId >= 0) {
@@ -42,10 +47,11 @@ function resolvePathAckCommandKey(actionText: string): string {
   return ''
 }
 
-async function sendPathAckCommandByKey(ctx: any, key: string): Promise<boolean> {
+async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
   if (!ctx.canRealSend()) return false
+  if (isStaleByEmergencySeq(ctx, commandSeq)) return false
   const isMotionKey: boolean =
     key === 'GO' ||
     key === 'BACK' ||
@@ -104,12 +110,16 @@ function armPathAckRetryTimer(ctx: any): void {
   clearPathAckRetryTimer(ctx)
   if (!ctx.canRealSend()) return
   if (!ctx.pathAckAwaitingComplete) return
+  const commandSeq: number = Number(ctx.pathAckCommandSeq) || 0
+  if (isStaleByEmergencySeq(ctx, commandSeq)) return
   if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
   if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) return
   if (!ctx.pathAckCommandKey || ctx.pathAckCommandKey.length <= 0) return
 
   ctx.pathAckRetryTimerId = setTimeout((): void => {
     ctx.pathAckRetryTimerId = -1
+    const latestSeq: number = Number(ctx.pathAckCommandSeq) || 0
+    if (isStaleByEmergencySeq(ctx, latestSeq)) return
     void retryPathAckCommandIfNeeded(ctx)
   }, PATH_ACK_RETRY_WAIT_MS) as number
 }
@@ -119,13 +129,15 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
   if (!s) return
   if (!ctx.canRealSend()) return
   if (!ctx.pathAckAwaitingComplete) return
+  const commandSeq: number = Number(ctx.pathAckCommandSeq) || 0
+  if (isStaleByEmergencySeq(ctx, commandSeq)) return
   if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
   if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) return
   const key: string = ctx.pathAckCommandKey || ''
   if (key.length <= 0) return
 
   const nextSendCount: number = ctx.pathAckRetrySentCount + 1
-  const sentOk: boolean = await sendPathAckCommandByKey(ctx, key)
+  const sentOk: boolean = await sendPathAckCommandByKey(ctx, key, commandSeq)
   if (!sentOk) {
     s.pushLog(`PATH_ACK_RETRY: 重发失败 key=${key}`)
     return
@@ -134,13 +146,55 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
   ctx.pathAckRetrySentCount = nextSendCount
   ctx.pathAckLastSendAtMs = Date.now()
   ctx.pathAckLastStatusCode = 0
-  s.pushLog(`PATH_ACK_RETRY: 10ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
+  s.pushLog(`PATH_ACK_RETRY: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
   armPathAckRetryTimer(ctx)
+}
+
+async function waitLightBaselineReadyForInitialGo(ctx: any, timeoutMs: number): Promise<boolean> {
+  const s = ctx.store
+  if (!s) return false
+
+  const nowMs: number = Date.now()
+  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
+  const shouldQueryNow: boolean =
+    !ctx.lightMetricQueryEnabled ||
+    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
+  let gateAtMs: number = lastQueryAtMs > 0 ? lastQueryAtMs : nowMs
+
+  if (shouldQueryNow) {
+    try {
+      if (typeof ctx.armLightMetricQuery === 'function') {
+        ctx.armLightMetricQuery()
+      }
+      gateAtMs = Date.now()
+      ctx.lightMetricLastQueryAtMs = gateAtMs
+      s.bumpTx()
+      await ctx.proto.light()
+      s.pushLog('LIGHT: 起步前已发送光照查询，等待BD=02后再发前进')
+    } catch (_) {
+      s.pushLog('LIGHT: 起步前光照查询发送失败，本轮前进取消')
+      return false
+    }
+  } else {
+    s.pushLog('LIGHT: 起步前等待最近一次光照查询的BD=02')
+  }
+
+  const waitMs: number = Math.max(300, timeoutMs)
+  const deadlineMs: number = Date.now() + waitMs
+  while (Date.now() <= deadlineMs) {
+    const statusCode: number = Number(ctx.pathAckLastStatusCode) || 0
+    const statusAtMs: number = Number(ctx.pathAckLastStatusAtMs) || 0
+    if (statusCode === 0x02 && statusAtMs >= gateAtMs) return true
+    await ctx.sleep(120)
+  }
+  s.pushLog(`LIGHT: 起步等待BD=02超时(${waitMs}ms)，本轮前进取消`)
+  return false
 }
 
 export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
+  const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
 
   const isBlockedMotionAction: boolean =
     a === Page1Action.GO ||
@@ -177,22 +231,37 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   if (!ctx.canRealSend()) {
     s.bumpTx()
     s.setAction(`自动动作=${actionText} | ${s.realSendEnabled ? 'REAL_SEND(但未连接)' : 'DRY_RUN'}`)
+    replayArchiveService.onAction(actionText, 'AUTO_DRY')
     return true
   }
 
   if (isPathMotion && !canSendPathCommandNow(ctx, actionText)) return false
 
+  const isInitialPathGo: boolean = a === Page1Action.GO && !ctx.pathAckFirstCommandSent
   if (isPathMotion) {
+    if (isInitialPathGo) {
+      const ready: boolean = await waitLightBaselineReadyForInitialGo(ctx, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
+      if (!ready) return false
+    }
     if (!ctx.lightMetricReady) {
-      try {
+      const nowMs: number = Date.now()
+      const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
+      const shouldQuery: boolean =
+        !ctx.lightMetricQueryEnabled ||
+        (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
+      if (shouldQuery) {
         if (typeof ctx.armLightMetricQuery === 'function') {
           ctx.armLightMetricQuery()
         }
+        ctx.lightMetricLastQueryAtMs = nowMs
         s.bumpTx()
-        await ctx.proto.light()
-        s.pushLog('LIGHT: 出发前自动查询光照基准')
-      } catch (_) {
-        s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
+        void ctx.proto.light()
+          .then((): void => {
+            s.pushLog('LIGHT: 出发前自动查询光照基准(异步)')
+          })
+          .catch((): void => {
+            s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
+          })
       }
     }
   }
@@ -201,38 +270,52 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   s.setAction(`自动动作=${actionText}`)
 
   if (a === Page1Action.GO) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.go()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.BACK) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.back()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.LEFT) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.left()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.RIGHT) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.right()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.LEFT_HALF) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.leftHalf()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.RIGHT_HALF) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.rightHalf()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.UTURN) {
+    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
     await ctx.proto.uturn()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
+    replayArchiveService.onAction(actionText, 'AUTO')
     return true
   }
   if (a === Page1Action.STOP) {
@@ -310,10 +393,12 @@ export function resetPathAckState(ctx: any): void {
   ctx.pathAckBlocked = false
   ctx.pathAckLastSendAtMs = 0
   ctx.pathAckLastStatusCode = 0
+  ctx.pathAckLastStatusAtMs = 0
   ctx.pathAckLastCommandText = ''
   ctx.pathAckLastWaitLogAtMs = 0
   ctx.pathAckRetrySentCount = 0
   ctx.pathAckCommandKey = ''
+  ctx.pathAckCommandSeq = Number(ctx.emergencyCommandSeq) || 0
   ctx.pendingAckMotion = undefined
   ctx.suppressNextAckCompleteMotion = false
   ctx.suppressAckCompleteEdgeId = ''
@@ -371,6 +456,7 @@ export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean
 }
 
 export function markPathCommandSent(ctx: any, actionText: string): void {
+  const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
   ctx.pathAckFirstCommandSent = true
   ctx.pathAckAwaitingComplete = true
   ctx.pathAckBlocked = false
@@ -379,11 +465,14 @@ export function markPathCommandSent(ctx: any, actionText: string): void {
   ctx.pathAckLastCommandText = actionText
   ctx.pathAckRetrySentCount = 1
   ctx.pathAckCommandKey = resolvePathAckCommandKey(actionText)
+  ctx.pathAckCommandSeq = commandSeq
   armPathAckRetryTimer(ctx)
 }
 
 export function onPathAckFrame(ctx: any, f: any): void {
   const status: number = f.p1 & 0xff
+  replayArchiveService.onAck(status)
+  ctx.pathAckLastStatusAtMs = Date.now()
   if (typeof ctx.onPathAckStatusForDashboard === 'function') {
     ctx.onPathAckStatusForDashboard(status)
   }

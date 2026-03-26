@@ -18,11 +18,14 @@ interface NodeBlockRule {
   fullBlockThreshold: number
 }
 
+type MapDetailLevel = 'OVERVIEW' | 'ROUTE' | 'DETAIL'
+
 @Component
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
 
+  private readonly DEFAULT_ROUTE_ZOOM: number = 1.5
   @State private zoomScale: number = 1.5
   @State private pinchStartZoomScale: number = 1.5
 
@@ -53,6 +56,12 @@ export struct SandboxMap {
   }
 
   aboutToAppear(): void {
+    // 每次进入页面都回到 ROUTE 级缩放（1.2 <= zoom < 2.2）。
+    this.zoomScale = this.DEFAULT_ROUTE_ZOOM
+    this.pinchStartZoomScale = this.DEFAULT_ROUTE_ZOOM
+    this.clampAll()
+    this.syncCameraFollow()
+
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
       this.syncCameraFollow()
@@ -139,14 +148,18 @@ export struct SandboxMap {
             .height('100%')
             .objectFit(ImageFit.Fill)
 
-          this.buildGridOverlay()
-          this.buildBlockedNodeMarkers()
-          this.buildRouteObstaclePointMarkers()
-          this.buildBlockedEdgeMarkers()
+          if (!this.isOverviewLevel()) {
+            this.buildGridOverlay()
+            this.buildBlockedNodeMarkers()
+            this.buildRouteObstaclePointMarkers()
+            this.buildBlockedEdgeMarkers()
+          }
           this.buildDestinationMarker()
           this.buildCarDot()
           this.buildCarHeadingArrow()
-          this.buildCurrentNodeBadge()
+          if (this.isDetailLevel()) {
+            this.buildCurrentNodeBadge()
+          }
         }
         .width('100%')
         .height('100%')
@@ -264,7 +277,7 @@ export struct SandboxMap {
   @Builder
   private buildGridOverlay(): void {
     ForEach(this.store.gridNodes, (n: GridNode): void => {
-      if (!this.isCurrentNode(n.id)) {
+      if (!this.isCurrentNode(n.id) && this.shouldShowGridNode(n.id)) {
         Column() {}
         .width(this.gridDotSize())
         .height(this.gridDotSize())
@@ -273,12 +286,14 @@ export struct SandboxMap {
         .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
         .zIndex(2)
 
-        Text(n.id)
-          .fontSize(10)
-          .fontColor(this.nodeLabelColor(n.id))
-          .fontWeight(this.nodeLabelWeight(n.id))
-          .position(this.store.gridNodeLabelPos(n))
-          .zIndex(2)
+        if (this.shouldShowNodeLabel(n.id)) {
+          Text(n.id)
+            .fontSize(this.nodeLabelFontSize())
+            .fontColor(this.nodeLabelColor(n.id))
+            .fontWeight(this.nodeLabelWeight(n.id))
+            .position(this.store.gridNodeLabelPos(n))
+            .zIndex(2)
+        }
       }
     }, (n: GridNode): string => n.id)
   }
@@ -734,7 +749,50 @@ export struct SandboxMap {
   }
 
   private gridDotSize(): number {
+    if (this.isDetailLevel()) return 12
     return 10
+  }
+
+  private detailLevel(): MapDetailLevel {
+    if (this.zoomScale < 1.2) return 'OVERVIEW'
+    if (this.zoomScale < 2.2) return 'ROUTE'
+    return 'DETAIL'
+  }
+
+  private isOverviewLevel(): boolean {
+    return this.detailLevel() === 'OVERVIEW'
+  }
+
+  private isRouteLevel(): boolean {
+    return this.detailLevel() === 'ROUTE'
+  }
+
+  private isDetailLevel(): boolean {
+    return this.detailLevel() === 'DETAIL'
+  }
+
+  private shouldShowGridNode(id: string): boolean {
+    if (this.isDetailLevel()) return true
+    if (this.isRouteLevel()) {
+      return this.isPathCurrent(id) ||
+        this.isPathNext(id) ||
+        this.isPathVisited(id) ||
+        this.isPathFuture(id) ||
+        this.isBlockedNode(id) ||
+        this.isCurrentNode(id)
+    }
+    return false
+  }
+
+  private shouldShowNodeLabel(id: string): boolean {
+    if (this.isDetailLevel()) return true
+    if (this.isRouteLevel()) return this.isPathCurrent(id) || this.isPathNext(id) || this.isCurrentNode(id)
+    return false
+  }
+
+  private nodeLabelFontSize(): number {
+    if (this.isDetailLevel()) return 10
+    return 9
   }
 
   private isCurrentNode(id: string): boolean {
