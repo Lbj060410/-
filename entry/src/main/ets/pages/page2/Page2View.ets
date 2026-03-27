@@ -141,6 +141,7 @@ export struct Page2View {
         Stack() {
           Column() {
             ReplayReviewPanel({
+              scope: 'vision',
               onClose: (): void => { this.showReplay = false }
             })
           }

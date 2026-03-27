@@ -23,6 +23,23 @@ import { replayArchiveService } from '../../../services/replay/ReplayArchiveServ
 const PATH_ACK_RETRY_WAIT_MS: number =2000
 const PATH_ACK_RETRY_MAX_SENDS: number = 3
 
+function kickTcpConnectForRealSendIfNeeded(ctx: any, s: any): void {
+  if (!s || !s.realSendEnabled) return
+  const connState: number = Number(s.connState)
+  // CarConnState: IDLE=0 CONNECTING=1 CONNECTED=2 RECONNECTING=3 FAILED=4
+  if (connState === 1 || connState === 2 || connState === 3) return
+  const nowMs: number = Date.now()
+  const lastKickAtMs: number = Number(ctx.realSendConnectKickAtMs) || 0
+  if (nowMs - lastKickAtMs < 2000) return
+  ctx.realSendConnectKickAtMs = nowMs
+  if (typeof s.pushLog === 'function') {
+    s.pushLog(`REAL_SEND: 链路未连接，自动重连 ${s.connIp}:${s.connPort}`)
+  }
+  if (typeof ctx.connectTcp === 'function') {
+    void ctx.connectTcp(s.connIp, s.connPort)
+  }
+}
+
 function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
   return (Number(ctx.emergencyCommandSeq) || 0) !== seq
 }
@@ -229,6 +246,7 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   const isPathMotion: boolean = isPathMotionAction(a)
 
   if (!ctx.canRealSend()) {
+    kickTcpConnectForRealSendIfNeeded(ctx, s)
     s.bumpTx()
     s.setAction(`自动动作=${actionText} | ${s.realSendEnabled ? 'REAL_SEND(但未连接)' : 'DRY_RUN'}`)
     replayArchiveService.onAction(actionText, 'AUTO_DRY')

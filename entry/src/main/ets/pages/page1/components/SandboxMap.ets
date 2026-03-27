@@ -19,6 +19,35 @@ interface NodeBlockRule {
 }
 
 type MapDetailLevel = 'OVERVIEW' | 'ROUTE' | 'DETAIL'
+interface MapRoadRect {
+  id: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+interface MapBlockCellRect extends MapRoadRect {
+  color: string
+}
+
+interface MapPathSegment {
+  id: string
+  fromId: string
+  toId: string
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  index: number
+}
+
+interface MapTurnNode {
+  id: string
+  x: number
+  y: number
+  index: number
+}
 
 @Component
 export struct SandboxMap {
@@ -140,7 +169,7 @@ export struct SandboxMap {
           })
       }
 
-      // 地图底图 + 网格点位 + 小车/朝向/当前节点覆盖层
+      // 分层渲染：BaseLayer -> GridLayer -> RouteLayer -> ObstacleLayer -> VehicleLayer -> LabelLayer
       Stack() {
         Stack() {
           Image($rawfile('sandbox_map.png'))
@@ -167,10 +196,10 @@ export struct SandboxMap {
         .translate({ x: this.offsetX, y: this.offsetY })
       }
       .width('100%')
-      .height(this.fullHeightMap ? '100%' : 420)
+      .height(this.fullHeightMap ? '100%' : 480)
       .borderRadius(Page1Theme.RADIUS_XL)
       .clip(true)
-      .backgroundColor('#DDE6F5')
+      .backgroundColor('#081624')
       .border({ width: 1, color: 'rgba(0,0,0,0.06)' })
       .shadow({ radius: 48, color: '#0000001F', offsetX: 0, offsetY: 12 })
       .onAreaChange((oldValue: Area, newValue: Area): void => {
@@ -276,7 +305,7 @@ export struct SandboxMap {
 
   @Builder
   private buildGridOverlay(): void {
-    ForEach(this.store.gridNodes, (n: GridNode): void => {
+    ForEach(this.visibleGridNodesForRender(), (n: GridNode): void => {
       if (!this.isCurrentNode(n.id) && this.shouldShowGridNode(n.id)) {
         Column() {}
         .width(this.gridDotSize())
@@ -300,7 +329,7 @@ export struct SandboxMap {
 
   @Builder
   private buildRouteObstaclePointMarkers(): void {
-    ForEach(this.store.routeObstaclePoints, (p: RouteObstaclePoint): void => {
+    ForEach(this.visibleRouteObstaclePointsForRender(), (p: RouteObstaclePoint): void => {
       if (!this.edgeMarkerSuppressedByNodeBlock(p.edgeId)) {
         Image($rawfile('icon/障碍物.png'))
           .width(18)
@@ -320,7 +349,7 @@ export struct SandboxMap {
 
   @Builder
   private buildBlockedEdgeMarkers(): void {
-    ForEach(this.store.blockedEdges, (edgeId: string): void => {
+    ForEach(this.visibleBlockedEdgesForRender(), (edgeId: string): void => {
       if (this.edgeMarkerVisible(edgeId)) {
         Image($rawfile('icon/障碍物.png'))
           .width(18)
@@ -347,7 +376,7 @@ export struct SandboxMap {
 
   @Builder
   private buildBlockedNodeMarkers(): void {
-    ForEach(this.store.gridNodes, (n: GridNode): void => {
+    ForEach(this.visibleBlockedNodesForRender(), (n: GridNode): void => {
       if (this.shouldShowBlockedNodeMarker(n.id)) {
         Image(this.blockedNodeMarkerResource(n.id))
         .width(20)
@@ -357,6 +386,52 @@ export struct SandboxMap {
         .zIndex(6)
       }
     }, (n: GridNode): string => `blocked-node-${n.id}`)
+  }
+
+  private visibleGridNodesForRender(): Array<GridNode> {
+    if (!this.isDetailLevel()) return this.store.gridNodes
+    const out: Array<GridNode> = []
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const n: GridNode = this.store.gridNodes[i]
+      if (this.isWorldPointVisible(n.xNorm * this.store.mapW, n.yNorm * this.store.mapH, 56)) out.push(n)
+    }
+    return out
+  }
+
+  private visibleRouteObstaclePointsForRender(): Array<RouteObstaclePoint> {
+    const out: Array<RouteObstaclePoint> = []
+    for (let i: number = 0; i < this.store.routeObstaclePoints.length; i++) {
+      const p: RouteObstaclePoint = this.store.routeObstaclePoints[i]
+      if (this.isRouteLevel() && (p.createdAtMs % 2 !== 0)) continue
+      if (this.isDetailLevel() && !this.isWorldPointVisible(p.xNorm * this.store.mapW, p.yNorm * this.store.mapH, 48)) continue
+      out.push(p)
+    }
+    return out
+  }
+
+  private visibleBlockedEdgesForRender(): Array<string> {
+    const out: Array<string> = []
+    for (let i: number = 0; i < this.store.blockedEdges.length; i++) {
+      const edgeId: string = this.store.blockedEdges[i]
+      if (this.isRouteLevel()) {
+        const parsed = RouteEdgeCodec.parse(edgeId)
+        if (!parsed) continue
+        if ((parsed.a.charCodeAt(0) + parsed.b.charCodeAt(0)) % 2 !== 0) continue
+      }
+      out.push(edgeId)
+    }
+    return out
+  }
+
+  private visibleBlockedNodesForRender(): Array<GridNode> {
+    const out: Array<GridNode> = []
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const n: GridNode = this.store.gridNodes[i]
+      if (this.isDetailLevel() && !this.isWorldPointVisible(n.xNorm * this.store.mapW, n.yNorm * this.store.mapH, 48)) continue
+      if (this.isRouteLevel() && ((n.id.charCodeAt(0) + n.id.charCodeAt(1)) % 2 !== 0)) continue
+      out.push(n)
+    }
+    return out
   }
 
   @Builder
@@ -412,7 +487,7 @@ export struct SandboxMap {
     .width(this.store.carDotSize)
     .height(this.store.carDotSize)
     .borderRadius(this.store.carDotSize / 2)
-    .backgroundColor('#FF3B30')
+    .backgroundColor('#3381FF')
     .border({ width: 3, color: '#FFFFFF' })
     .position(this.store.carDotPos())
     .zIndex(10)
@@ -599,6 +674,36 @@ export struct SandboxMap {
     }
   }
 
+  @Builder
+  private buildOverviewCurrentNodeMarker(): void {
+    if (this.hasOverviewCurrentNodeMarker()) {
+      Column() {}
+        .width(14)
+        .height(14)
+        .borderRadius(7)
+        .backgroundColor('#4089FF')
+        .border({ width: 2, color: '#FFFFFF' })
+        .position(this.overviewCurrentNodeMarkerPos())
+        .zIndex(9)
+    }
+  }
+
+  private hasOverviewCurrentNodeMarker(): boolean {
+    return this.overviewCurrentNode() !== undefined
+  }
+
+  private overviewCurrentNode(): GridNode | undefined {
+    const id: string = this.currentNodeBadgeId()
+    if (id.length <= 0) return undefined
+    return this.findGridNodeById(id)
+  }
+
+  private overviewCurrentNodeMarkerPos(): XYPos {
+    const n: GridNode | undefined = this.overviewCurrentNode()
+    if (!n) return { x: -9999, y: -9999 }
+    return this.store.gridNodeDotPos(n, 14)
+  }
+
   private currentNodeBadgeId(): string {
     return this.store.currentSnapNodeId.trim().toUpperCase()
   }
@@ -741,6 +846,518 @@ export struct SandboxMap {
     return ((y - this.offsetY - viewH / 2) / s) + (viewH / 2)
   }
 
+  private mapToScreenX(worldX: number): number {
+    const viewW: number = this.store.mapW
+    const s: number = this.safeScale()
+    return ((worldX - viewW / 2) * s) + viewW / 2 + this.offsetX
+  }
+
+  private mapToScreenY(worldY: number): number {
+    const viewH: number = this.store.mapH
+    const s: number = this.safeScale()
+    return ((worldY - viewH / 2) * s) + viewH / 2 + this.offsetY
+  }
+
+  private isWorldRectVisible(x: number, y: number, w: number, h: number, margin: number = 0): boolean {
+    const sx0: number = this.mapToScreenX(x)
+    const sy0: number = this.mapToScreenY(y)
+    const sx1: number = this.mapToScreenX(x + w)
+    const sy1: number = this.mapToScreenY(y + h)
+    const left: number = Math.min(sx0, sx1)
+    const right: number = Math.max(sx0, sx1)
+    const top: number = Math.min(sy0, sy1)
+    const bottom: number = Math.max(sy0, sy1)
+    return !(right < -margin || left > this.store.mapW + margin || bottom < -margin || top > this.store.mapH + margin)
+  }
+
+  private isWorldPointVisible(x: number, y: number, margin: number = 0): boolean {
+    const sx: number = this.mapToScreenX(x)
+    const sy: number = this.mapToScreenY(y)
+    return !(sx < -margin || sx > this.store.mapW + margin || sy < -margin || sy > this.store.mapH + margin)
+  }
+
+  @Builder
+  private buildProceduralMapBase(): void {
+    Stack() {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.isOverviewLevel() ? '#061220' : '#081624')
+
+      if (this.isOverviewLevel()) {
+        // OVERVIEW 只保留暗底，不绘制网格。
+      } else {
+        if (this.isDetailLevel()) {
+          this.buildRoadRects(this.detailGridRoadRects(this.greenBeltThickness() * 1.25), this.greenBeltColor())
+          this.buildRoadRects(this.detailGridRoadRects(this.mainRoadThickness() * 1.05), this.mainRoadColor())
+          this.buildRoadBlockCells()
+        } else {
+          this.buildRoadRects(this.roadRectsForThickness(this.greenBeltThickness()), this.greenBeltColor())
+          this.buildRoadRects(this.roadRectsForThickness(this.mainRoadThickness()), this.mainRoadColor())
+        }
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  private buildOverviewReferenceGridBase(): void {
+    this.buildRoadRects(this.overviewExactLaneFillRects(), this.mainRoadColor(), false)
+    this.buildRoadRects(this.overviewExactBlueRects(), this.mainRoadColor(), false)
+    this.buildRoadRects(this.overviewExactGreenRectsNoCross(), this.greenBeltColor(), false)
+  }
+
+  @Builder
+  private buildRoadRects(rects: Array<MapRoadRect>, color: string, rounded: boolean = true): void {
+    ForEach(rects, (r: MapRoadRect): void => {
+      Column() {}
+        .width(r.w)
+        .height(r.h)
+        .borderRadius(rounded ? Math.min(r.w, r.h) / 2 : 0)
+        .backgroundColor(color)
+        .position({ x: r.x, y: r.y })
+        .zIndex(1)
+    }, (r: MapRoadRect): string => r.id)
+  }
+
+  private greenBeltColor(): string {
+    return this.isDetailLevel() ? '#12324B' : '#163A56'
+  }
+
+  private mainRoadColor(): string {
+    return this.isDetailLevel() ? '#0E2940' : '#113451'
+  }
+
+  private greenBeltThickness(): number {
+    const base: number = Math.min(this.store.mapW, this.store.mapH)
+    if (base <= 0) return 32
+    const v: number = base * 0.072
+    if (v < 26) return 26
+    if (v > 42) return 42
+    return v
+  }
+
+  private mainRoadThickness(): number {
+    const base: number = Math.min(this.store.mapW, this.store.mapH)
+    if (base <= 0) return 22
+    const v: number = base * 0.048
+    if (v < 16) return 16
+    if (v > 28) return 28
+    return v
+  }
+
+  private overviewGuideThickness(): number {
+    const base: number = Math.min(this.store.mapW, this.store.mapH)
+    if (base <= 0) return 3
+    const v: number = base * 0.0046
+    if (v < 2.5) return 2.5
+    if (v > 4.5) return 4.5
+    return v
+  }
+
+  private overviewGuideX(): Array<number> {
+    const out: Array<number> = []
+    // 严格按参考图：最小缩放仅三条纵线（对应 B / D / F）
+    const raw: Array<number> = [0.188, 0.505, 0.813]
+    for (let i: number = 0; i < raw.length; i++) {
+      out.push(raw[i] * this.store.mapW)
+    }
+    return out
+  }
+
+  private overviewGuideY(): Array<number> {
+    const out: Array<number> = []
+    const raw: Array<number> = [0.094, 0.258, 0.507, 0.754, 0.917]
+    for (let i: number = 0; i < raw.length; i++) {
+      out.push(raw[i] * this.store.mapH)
+    }
+    return out
+  }
+
+  private overviewGuideVerticalRects(xs: Array<number>, ys: Array<number>, thickness: number): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    if (ys.length <= 0) return out
+    const top: number = ys[0] - thickness / 2
+    const bottom: number = ys[ys.length - 1] + thickness / 2
+    const h: number = Math.max(0, bottom - top)
+    for (let i: number = 0; i < xs.length; i++) {
+      const x: number = xs[i] - thickness / 2
+      out.push({ id: `ov-v-${i}`, x: x, y: top, w: thickness, h: h })
+    }
+    return out
+  }
+
+  private overviewGuideHorizontalRects(ys: Array<number>, thickness: number): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    const w: number = this.store.mapW
+    for (let i: number = 0; i < ys.length; i++) {
+      const y: number = ys[i] - thickness / 2
+      out.push({ id: `ov-h-${i}`, x: 0, y: y, w: w, h: thickness })
+    }
+    return out
+  }
+
+  private overviewVerticalGuideRects(): Array<MapRoadRect> {
+    const guideThickness: number = this.overviewGuideThickness()
+    const guidesX: Array<number> = this.overviewGuideX()
+    const guidesY: Array<number> = this.overviewGuideY()
+    return this.overviewGuideVerticalRects(guidesX, guidesY, guideThickness)
+  }
+
+  private overviewHorizontalGuideRects(): Array<MapRoadRect> {
+    const guideThickness: number = this.overviewGuideThickness()
+    const guidesY: Array<number> = this.overviewGuideY()
+    return this.overviewGuideHorizontalRects(guidesY, guideThickness)
+  }
+
+  private overviewRoadCellRects(): Array<MapRoadRect> {
+    const guideThickness: number = this.overviewGuideThickness()
+    const guidesX: Array<number> = this.overviewGuideX()
+    const guidesY: Array<number> = this.overviewGuideY()
+    return this.overviewCellRects(guidesX, guidesY, guideThickness, true)
+  }
+
+  private overviewLandCellRects(): Array<MapRoadRect> {
+    const guideThickness: number = this.overviewGuideThickness()
+    const guidesX: Array<number> = this.overviewGuideX()
+    const guidesY: Array<number> = this.overviewGuideY()
+    return this.overviewCellRects(guidesX, guidesY, guideThickness, false)
+  }
+
+  private overviewCellRects(xs: Array<number>, ys: Array<number>, guideThickness: number, road: boolean): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    if (xs.length < 1 || ys.length < 2) return out
+
+    const pad: number = Math.max(2, guideThickness * 1.4)
+    const colBounds: Array<number> = [0]
+    for (let i: number = 0; i < xs.length; i++) colBounds.push(xs[i])
+    colBounds.push(this.store.mapW)
+
+    for (let r: number = 0; r < ys.length - 1; r++) {
+      for (let c: number = 0; c < colBounds.length - 1; c++) {
+        const isRoad: boolean = this.overviewRoadCellEnabled(r, c)
+        if (isRoad !== road) continue
+
+        const left: number = colBounds[c] + pad
+        const top: number = ys[r] + pad
+        const width: number = (colBounds[c + 1] - colBounds[c]) - pad * 2
+        const height: number = (ys[r + 1] - ys[r]) - pad * 2
+        if (width <= 0 || height <= 0) continue
+        out.push({
+          id: `ov-cell-${r}-${c}-${road ? 'road' : 'land'}`,
+          x: left,
+          y: top,
+          w: width,
+          h: height
+        })
+      }
+    }
+    return out
+  }
+
+  private overviewRoadCellEnabled(row: number, col: number): boolean {
+    const mask: Array<Array<number>> = [
+      [0, 0, 1, 0],
+      [0, 1, 0, 1],
+      [1, 0, 1, 0],
+      [1, 1, 0, 1]
+    ]
+    if (row >= 0 && row < mask.length && col >= 0 && col < mask[row].length) {
+      return mask[row][col] === 1
+    }
+    return (row + col) % 2 === 0
+  }
+
+  private refX(px: number): number {
+    const canvas = this.overviewCanvasRect()
+    return canvas.x + px / 1024.0 * canvas.size
+  }
+
+  private refY(py: number): number {
+    const canvas = this.overviewCanvasRect()
+    return canvas.y + py / 1024.0 * canvas.size
+  }
+
+  private overviewCanvasRect(): { x: number, y: number, size: number } {
+    const w: number = this.store.mapW
+    const h: number = this.store.mapH
+    if (w <= 0 || h <= 0) {
+      return { x: 0, y: 0, size: 0 }
+    }
+    const size: number = Math.min(w, h)
+    const x: number = (w - size) / 2
+    const y: number = (h - size) / 2
+    return { x: x, y: y, size: size }
+  }
+
+  private overviewExactLaneFillRects(): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    const verticalLaneFills: Array<{ x: number, w: number, y: number, h: number }> = [
+      { x: 195, w: 11, y: 81, h: 859 },
+      { x: 510, w: 11, y: 81, h: 859 },
+      { x: 826, w: 10, y: 81, h: 859 }
+    ]
+    for (let i: number = 0; i < verticalLaneFills.length; i++) {
+      const v = verticalLaneFills[i]
+      out.push({
+        id: `ovx-lane-v-${i}`,
+        x: this.refX(v.x),
+        y: this.refY(v.y),
+        w: this.refX(v.x + v.w) - this.refX(v.x),
+        h: this.refY(v.y + v.h) - this.refY(v.y)
+      })
+    }
+
+    const horizontalLaneFills: Array<{ y: number, h: number, x: number, w: number }> = [
+      { y: 85, h: 11, x: 0, w: 1024 },
+      { y: 251, h: 12, x: 0, w: 1024 },
+      { y: 505, h: 11, x: 0, w: 1024 },
+      { y: 757, h: 11, x: 0, w: 1024 },
+      { y: 923, h: 13, x: 0, w: 1024 }
+    ]
+    for (let i: number = 0; i < horizontalLaneFills.length; i++) {
+      const h = horizontalLaneFills[i]
+      out.push({
+        id: `ovx-lane-h-${i}`,
+        x: this.refX(h.x),
+        y: this.refY(h.y),
+        w: this.refX(h.x + h.w) - this.refX(h.x),
+        h: this.refY(h.y + h.h) - this.refY(h.y)
+      })
+    }
+    return out
+  }
+
+  private overviewExactGreenRectsNoCross(): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    // 竖向绿线分段绘制，避开横向双线带，避免“绿线交叉”
+    const verticals: Array<{ x: number, w: number }> = [
+      { x: 190, w: 5 }, { x: 206, w: 5 },
+      { x: 505, w: 5 }, { x: 521, w: 5 },
+      { x: 822, w: 4 }, { x: 836, w: 5 }
+    ]
+    const vSegY: Array<{ y: number, h: number }> = [
+      { y: 101, h: 146 }, { y: 267, h: 234 },
+      { y: 521, h: 232 }, { y: 772, h: 147 }
+    ]
+    for (let i: number = 0; i < verticals.length; i++) {
+      for (let j: number = 0; j < vSegY.length; j++) {
+        const v = verticals[i]
+        const s = vSegY[j]
+        out.push({
+          id: `ovx-v-${i}-${j}`,
+          x: this.refX(v.x),
+          y: this.refY(s.y),
+          w: this.refX(v.x + v.w) - this.refX(v.x),
+          h: this.refY(s.y + s.h) - this.refY(s.y)
+        })
+      }
+    }
+
+    // 横向绿线分段绘制，避开竖向双线带
+    const horizontals: Array<{ y: number, h: number }> = [
+      { y: 81, h: 4 }, { y: 96, h: 5 },
+      { y: 247, h: 4 }, { y: 263, h: 4 },
+      { y: 501, h: 4 }, { y: 516, h: 5 },
+      { y: 753, h: 4 }, { y: 768, h: 4 },
+      { y: 919, h: 4 }, { y: 936, h: 4 }
+    ]
+    const hSegX: Array<{ x: number, w: number }> = [
+      { x: 0, w: 190 }, { x: 211, w: 294 },
+      { x: 526, w: 296 }, { x: 841, w: 183 }
+    ]
+    for (let i: number = 0; i < horizontals.length; i++) {
+      for (let j: number = 0; j < hSegX.length; j++) {
+        const h = horizontals[i]
+        const s = hSegX[j]
+        out.push({
+          id: `ovx-h-${i}-${j}`,
+          x: this.refX(s.x),
+          y: this.refY(h.y),
+          w: this.refX(s.x + s.w) - this.refX(s.x),
+          h: this.refY(h.y + h.h) - this.refY(h.y)
+        })
+      }
+    }
+    return out
+  }
+
+  private overviewExactBlueRects(): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    // 参考图4x4分块（列边界按双线间隔后区域）
+    const cols: Array<{ x: number, w: number }> = [
+      { x: 0, w: 190 },
+      { x: 211, w: 294 },
+      { x: 526, w: 296 },
+      { x: 841, w: 183 }
+    ]
+    const rows: Array<{ y: number, h: number }> = [
+      { y: 101, h: 146 },
+      { y: 267, h: 234 },
+      { y: 521, h: 232 },
+      { y: 772, h: 147 }
+    ]
+    // 与参考图一致的蓝块分布
+    const mask: Array<Array<number>> = [
+      [0, 0, 1, 1],
+      [0, 1, 0, 1],
+      [1, 0, 1, 0],
+      [1, 1, 0, 1]
+    ]
+    for (let r: number = 0; r < rows.length; r++) {
+      for (let c: number = 0; c < cols.length; c++) {
+        if (mask[r][c] !== 1) continue
+        const cellX: number = cols[c].x
+        const cellY: number = rows[r].y
+        const cellW: number = cols[c].w
+        const cellH: number = rows[r].h
+        out.push({
+          id: `ovx-cell-${r}-${c}`,
+          x: this.refX(cellX),
+          y: this.refY(cellY),
+          w: this.refX(cellX + cellW) - this.refX(cellX),
+          h: this.refY(cellY + cellH) - this.refY(cellY)
+        })
+      }
+    }
+    return out
+  }
+
+  private roadRectsForThickness(thickness: number): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    const edges = PathPlannerAStar.routeEdges()
+    for (let i: number = 0; i < edges.length; i++) {
+      const seg = edges[i]
+      const a: GridNode | undefined = this.findGridNodeById(seg.a)
+      const b: GridNode | undefined = this.findGridNodeById(seg.b)
+      if (!a || !b) continue
+
+      const ax: number = a.xNorm * this.store.mapW
+      const ay: number = a.yNorm * this.store.mapH
+      const bx: number = b.xNorm * this.store.mapW
+      const by: number = b.yNorm * this.store.mapH
+      const dx: number = Math.abs(bx - ax)
+      const dy: number = Math.abs(by - ay)
+      const key: string = RouteEdgeCodec.fromSegment(seg)
+
+      if (dx >= dy) {
+        const x: number = Math.min(ax, bx) - thickness / 2
+        const y: number = (ay + by) / 2 - thickness / 2
+        const w: number = dx + thickness
+        const h: number = thickness
+        out.push({ id: `${key}-h-${thickness}`, x: x, y: y, w: w, h: h })
+      } else {
+        const x: number = (ax + bx) / 2 - thickness / 2
+        const y: number = Math.min(ay, by) - thickness / 2
+        const w: number = thickness
+        const h: number = dy + thickness
+        out.push({ id: `${key}-v-${thickness}`, x: x, y: y, w: w, h: h })
+      }
+    }
+    return out
+  }
+
+  private gridAxisX(): Array<number> {
+    const out: Array<number> = []
+    const seen: Map<string, boolean> = new Map<string, boolean>()
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const x: number = this.store.gridNodes[i].xNorm * this.store.mapW
+      const key: string = `${Math.round(x)}`
+      if (seen.get(key) === true) continue
+      seen.set(key, true)
+      out.push(x)
+    }
+    out.sort((a: number, b: number): number => a - b)
+    return out
+  }
+
+  private gridAxisY(): Array<number> {
+    const out: Array<number> = []
+    const seen: Map<string, boolean> = new Map<string, boolean>()
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const y: number = this.store.gridNodes[i].yNorm * this.store.mapH
+      const key: string = `${Math.round(y)}`
+      if (seen.get(key) === true) continue
+      seen.set(key, true)
+      out.push(y)
+    }
+    out.sort((a: number, b: number): number => a - b)
+    return out
+  }
+
+  private detailGridRoadRects(thickness: number): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    const xs: Array<number> = this.gridAxisX()
+    const ys: Array<number> = this.gridAxisY()
+
+    for (let i: number = 0; i < xs.length; i++) {
+      out.push({
+        id: `detail-v-${i}-${thickness}`,
+        x: xs[i] - thickness / 2,
+        y: 0,
+        w: thickness,
+        h: this.store.mapH
+      })
+    }
+    for (let i: number = 0; i < ys.length; i++) {
+      out.push({
+        id: `detail-h-${i}-${thickness}`,
+        x: 0,
+        y: ys[i] - thickness / 2,
+        w: this.store.mapW,
+        h: thickness
+      })
+    }
+    return out
+  }
+
+  private detailBlockCellRects(): Array<MapBlockCellRect> {
+    const out: Array<MapBlockCellRect> = []
+    if (!this.isDetailLevel()) return out
+    const xs: Array<number> = this.gridAxisX()
+    const ys: Array<number> = this.gridAxisY()
+    const insetFactor: number = 0.20
+
+    for (let r: number = 0; r + 1 < ys.length; r++) {
+      for (let c: number = 0; c + 1 < xs.length; c++) {
+        const cellW: number = xs[c + 1] - xs[c]
+        const cellH: number = ys[r + 1] - ys[r]
+        if (cellW <= 0 || cellH <= 0) continue
+        const inset: number = Math.min(cellW, cellH) * insetFactor
+        const x: number = xs[c] + inset
+        const y: number = ys[r] + inset
+        const w: number = cellW - inset * 2
+        const h: number = cellH - inset * 2
+        if (w <= 0 || h <= 0) continue
+        if (!this.isWorldRectVisible(x, y, w, h, 42)) continue
+        out.push({
+          id: `detail-cell-${r}-${c}`,
+          x: x,
+          y: y,
+          w: w,
+          h: h,
+          color: ((r + c) % 2 === 0) ? '#0A1F31' : '#0B2439'
+        })
+      }
+    }
+    return out
+  }
+
+  @Builder
+  private buildRoadBlockCells(): void {
+    ForEach(this.detailBlockCellRects(), (cell: MapBlockCellRect): void => {
+        Column() {}
+          .width(cell.w)
+          .height(cell.h)
+          .borderRadius(Math.min(cell.w, cell.h) * 0.18)
+          .backgroundColor(cell.color)
+          .border({ width: 1, color: '#1A496A55' })
+          .position({ x: cell.x, y: cell.y })
+          .zIndex(1)
+    }, (cell: MapBlockCellRect): string => cell.id)
+  }
+
   private safeScale(): number {
     if (this.zoomScale <= 0.001) {
       return 0.001
@@ -773,14 +1390,7 @@ export struct SandboxMap {
 
   private shouldShowGridNode(id: string): boolean {
     if (this.isDetailLevel()) return true
-    if (this.isRouteLevel()) {
-      return this.isPathCurrent(id) ||
-        this.isPathNext(id) ||
-        this.isPathVisited(id) ||
-        this.isPathFuture(id) ||
-        this.isBlockedNode(id) ||
-        this.isCurrentNode(id)
-    }
+    if (this.isRouteLevel()) return true
     return false
   }
 
@@ -808,43 +1418,43 @@ export struct SandboxMap {
   }
 
   private nodeDotBg(id: string): string {
-    if (this.isBlockedNode(id)) return '#00000025'
+    if (this.isBlockedNode(id)) return '#FF5C5C66'
     if (this.isPathCurrent(id)) {
-      return '#1677FF'
+      return '#27B8FF'
     }
     if (this.isPathNext(id)) {
-      return '#FF9500'
+      return '#FFD166'
     }
     if (this.isPathVisited(id)) {
-      return '#00000040'
+      return '#245A7C'
     }
     if (this.isPathFuture(id)) {
-      return '#1677FF40'
+      return '#1D7CBF66'
     }
     if (this.isCurrentNode(id)) {
-      return '#1677FF'
+      return '#27B8FF'
     }
-    return '#00000025'
+    return '#28597A66'
   }
 
   private nodeLabelColor(id: string): string {
-    if (this.isBlockedNode(id)) return '#00000070'
+    if (this.isBlockedNode(id)) return '#FF9E9E'
     if (this.isPathCurrent(id)) {
-      return '#1677FF'
+      return '#73D7FF'
     }
     if (this.isPathNext(id)) {
-      return '#FF9500'
+      return '#FFD166'
     }
     if (this.isPathVisited(id)) {
-      return '#00000070'
+      return '#86AEC8'
     }
     if (this.isPathFuture(id)) {
-      return '#1677FF'
+      return '#5FC7FF'
     }
     if (this.isCurrentNode(id)) {
-      return '#1677FF'
+      return '#73D7FF'
     }
-    return '#00000070'
+    return '#86AEC8'
   }
 
   private nodeLabelWeight(id: string): FontWeight {

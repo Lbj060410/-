@@ -37,14 +37,38 @@ export function isInsideGateInnerSideNode(id: string): boolean {
   return p.row <= 1
 }
 
+function rowLabelByIndex(rowIndex: number): number {
+  if (rowIndex === 0) return 1
+  if (rowIndex === 1) return 2
+  if (rowIndex === 2) return 4
+  if (rowIndex === 3) return 6
+  if (rowIndex === 4) return 7
+  return -1
+}
+
+function isUpperZoneById(id: string): boolean {
+  const p = GridIdCodec.parse(id)
+  if (!p) return false
+  const rowLabel: number = rowLabelByIndex(p.row)
+  return rowLabel === 1 || rowLabel === 2
+}
+
+function isLowerZoneById(id: string): boolean {
+  const p = GridIdCodec.parse(id)
+  if (!p) return false
+  const rowLabel: number = rowLabelByIndex(p.row)
+  return rowLabel === 4 || rowLabel === 6 || rowLabel === 7
+}
+
 export function gateForcedWaypoint(ctx: any, startId: string, goalId: string): string {
-  const startInner = isParkingInnerRowNode(startId)
-  const goalInner = isParkingInnerRowNode(goalId)
-  if (startInner && !goalInner) return 'B2'
-  if (!startInner && goalInner) {
-    if (isInsideGateInnerSideNode(startId)) return ''
-    return 'B4'
-  }
+  void ctx
+  const startUpper: boolean = isUpperZoneById(startId)
+  const goalUpper: boolean = isUpperZoneById(goalId)
+  const startLower: boolean = isLowerZoneById(startId)
+  const goalLower: boolean = isLowerZoneById(goalId)
+  // 仅在上下区跨区通行时强制经过道闸。
+  if (startUpper && goalLower) return 'B2'
+  if (startLower && goalUpper) return 'B4'
   return ''
 }
 
@@ -306,5 +330,4 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
 export async function driveAutoStep(ctx: any, nowMs: number, force: boolean = false): Promise<void> {
   await followPathOnce(ctx, nowMs, force)
 }
-
 

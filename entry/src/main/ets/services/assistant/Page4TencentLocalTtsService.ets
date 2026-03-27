@@ -12,6 +12,10 @@ import {
   TENCENT_ASR_SECRET_ID,
   TENCENT_ASR_SECRET_KEY
 } from '../../config/TencentAsrConfig'
+import hilog from '@ohos.hilog'
+
+const TTS_LOG_DOMAIN = 0xFF04
+const TTS_LOG_TAG = 'page4tts'
 
 interface TtsRequestConfig {
   secretId: string
@@ -599,11 +603,13 @@ export class Page4TencentLocalTtsService {
   }
 
   private logInfo(name: string, message: string): void {
-    console.info(`[info][${this.logTag}][${name}] ${message}`)
+    const text: string = `[info][${this.logTag}][${name}] ${message}`
+    hilog.info(TTS_LOG_DOMAIN, TTS_LOG_TAG, '%{public}s', text)
   }
 
   private logError(name: string, message: string): void {
-    console.error(`[error][${this.logTag}][${name}] ${message}`)
+    const text: string = `[error][${this.logTag}][${name}] ${message}`
+    hilog.error(TTS_LOG_DOMAIN, TTS_LOG_TAG, '%{public}s', text)
   }
 }
 

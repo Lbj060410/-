@@ -68,17 +68,14 @@ export class CarTcpService {
 
   private logInfo(tag: string, text: string): void {
     hilog.info(DOMAIN, tag, '%{public}s', text)
-    console.info(`[${tag}] ${text}`)
   }
 
   private logWarn(tag: string, text: string): void {
     hilog.warn(DOMAIN, tag, '%{public}s', text)
-    console.warn(`[${tag}] ${text}`)
   }
 
   private logError(tag: string, text: string): void {
     hilog.error(DOMAIN, tag, '%{public}s', text)
-    console.error(`[${tag}] ${text}`)
   }
 
   private toDecimal(data: Uint8Array): string {

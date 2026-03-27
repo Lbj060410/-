@@ -63,11 +63,11 @@ export class CommStore {
 
   // ==== 关键指令帧日志（仅动作控制）====
   diagKeyTxFrames: Array<DiagKeyTxFrame> = []
-  private readonly diagKeyTxFramesMax: number = 120
+  private readonly diagKeyTxFramesMax: number = 10
   diagKeyRxFrames: Array<DiagKeyRxFrame> = []
-  private readonly diagKeyRxFramesMax: number = 120
+  private readonly diagKeyRxFramesMax: number = 10
   diagWebTxLogs: Array<DiagWebTxLog> = []
-  private readonly diagWebTxLogsMax: number = 120
+  private readonly diagWebTxLogsMax: number = 10
 
   // ==== Getter 别名（供 DiagnosticsPanel 使用）====
   get diagCommStateText(): string { return this.commStateText }
@@ -174,4 +174,3 @@ export class CommStore {
 }
 
 export const commStore: CommStore = new CommStore()
-

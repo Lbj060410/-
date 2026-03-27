@@ -23,6 +23,21 @@ import { P1C } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
 import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
+import hilog from '@ohos.hilog'
+
+const PAGE1_TCP_LOG_DOMAIN = 0xFF03
+const PAGE1_TCP_LOG_TAG = 'page1tcp'
+
+function kickTcpConnectForRealSendIfNeeded(ctx: any, s: Page1UiStore): void {
+  if (!s.realSendEnabled) return
+  if (s.connState === CarConnState.CONNECTED || s.connState === CarConnState.CONNECTING || s.connState === CarConnState.RECONNECTING) return
+  const nowMs: number = Date.now()
+  const lastKickAtMs: number = Number(ctx.realSendConnectKickAtMs) || 0
+  if (nowMs - lastKickAtMs < 2000) return
+  ctx.realSendConnectKickAtMs = nowMs
+  s.pushLog(`REAL_SEND: 链路未连接，自动重连 ${s.connIp}:${s.connPort}`)
+  void ctx.connectTcp(s.connIp, s.connPort)
+}
 
 export function bindTcpCallbacks(ctx: any): void {
   const cb: CarTcpCallbacks = {
@@ -375,7 +390,7 @@ export async function disconnectTcp(ctx: any): Promise<void> {
     await ctx.tcp.disconnect()
   } catch (e) {
     const msg: string = e instanceof Error ? e.message : 'disconnect error'
-    console.warn('[Page1] disconnectTcp:', msg)
+    hilog.warn(PAGE1_TCP_LOG_DOMAIN, PAGE1_TCP_LOG_TAG, '%{public}s', `[Page1] disconnectTcp: ${msg}`)
   }
 }
 
@@ -522,6 +537,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (!canRealSend(ctx)) {
+    kickTcpConnectForRealSendIfNeeded(ctx, s)
     const mode: string = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
     s.bumpTx()
     if (a === Page1Action.ALARM) s.alarmEnabled = !s.alarmEnabled

@@ -12,6 +12,10 @@ import { GridNode, SandboxGridModel } from '../types/SandboxGridTypes'
 import { Pose2D, PoseSource } from '../types/PoseTypes'
 import { PathPlannerAStar, RouteEdgeCodec, RouteSegment } from './PathPlannerAStar'
 import { CAR_DEVICE_IP, CAR_TCP_PORT } from '../../../config/DeviceNetworkConfig'
+import hilog from '@ohos.hilog'
+
+const BIZLOG_DOMAIN = 0xFF03
+const BIZLOG_TAG = 'bizlog'
 
 export enum RiskLevel {
   SAFE = 0,
@@ -68,7 +72,7 @@ export class Page1UiStore {
   // - carDotSize 仅影响显示大小，不影响规划与控制
   mapW: number = 0
   mapH: number = 0
-  carX: number = 0.195
+  carX: number = 0.210
   carY: number = 0.902
   carDotSize: number = 26
 
@@ -233,7 +237,7 @@ export class Page1UiStore {
 
   pose: Pose2D = {
     tsMs: 0,
-    xNorm: 0.195,
+    xNorm: 0.210,
     yNorm: 0.902,
     headingDeg: 0,
     confidence: 0.70,
@@ -905,8 +909,9 @@ export class Page1UiStore {
   pushLog(line: string): void {
     const ts: number = Date.now()
     const item: string = `${ts} | ${line}`
-    this.logs.unshift(item)
-    if (this.logs.length > 60) this.logs.pop()
+    hilog.info(BIZLOG_DOMAIN, BIZLOG_TAG, 'page1: %{public}s', item)
+    // 普通业务日志改为仅输出到 hilog，UI 面板不再保留。
+    if (this.logs.length > 0) this.logs = []
   }
 }
 

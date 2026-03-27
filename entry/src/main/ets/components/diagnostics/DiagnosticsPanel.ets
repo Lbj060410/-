@@ -13,7 +13,24 @@ import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResol
 
 @Component
 export struct DiagnosticsPanel {
+  private trimDiagColumnsToLatest10(): void {
+    const cap: number = 10
+    if (commStore.diagKeyTxFrames.length > cap) {
+      const start: number = commStore.diagKeyTxFrames.length - cap
+      commStore.diagKeyTxFrames = commStore.diagKeyTxFrames.slice(start)
+    }
+    if (commStore.diagKeyRxFrames.length > cap) {
+      const start: number = commStore.diagKeyRxFrames.length - cap
+      commStore.diagKeyRxFrames = commStore.diagKeyRxFrames.slice(start)
+    }
+    if (commStore.diagWebTxLogs.length > cap) {
+      const start: number = commStore.diagWebTxLogs.length - cap
+      commStore.diagWebTxLogs = commStore.diagWebTxLogs.slice(start)
+    }
+  }
+
   aboutToAppear(): void {
+    this.trimDiagColumnsToLatest10()
     const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
     if (gatewayIp.length > 0) {
       commStore.setWifiIp(gatewayIp)
@@ -201,4 +218,3 @@ export struct DiagnosticsPanel {
     .padding(16)
   }
 }
-

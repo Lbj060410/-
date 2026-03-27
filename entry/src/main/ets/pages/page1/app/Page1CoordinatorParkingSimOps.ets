@@ -16,6 +16,10 @@ import { Page1Action } from '../types/Page1Types'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { P1C } from './Page1CoordinatorDefs'
 import { RouteEdgeCodec, GridIdCodec } from './PathPlannerAStar'
+import hilog from '@ohos.hilog'
+
+const PAGE1_SIM_LOG_DOMAIN = 0xFF03
+const PAGE1_SIM_LOG_TAG = 'page1sim'
 
 function clearParkingUltrasonicDecisionContext(ctx: any): void {
   ctx.parkingAwaitingUltrasonicDecision = false
@@ -399,7 +403,8 @@ export function startSimulatorLoop(ctx: any): void {
   ctx.simLoopBusy = false
   ctx.simTimerId = setInterval((): void => {
     simulateOnceLoop(ctx).catch((e: Error): void => {
-      console.error('[Sim] simulateOnce error:', e.message)
+      const msg: string = e instanceof Error ? e.message : 'simulateOnce error'
+      hilog.error(PAGE1_SIM_LOG_DOMAIN, PAGE1_SIM_LOG_TAG, '%{public}s', `[Sim] simulateOnce error: ${msg}`)
     })
   }, P1C.SIM_TICK_MS) as number
 }

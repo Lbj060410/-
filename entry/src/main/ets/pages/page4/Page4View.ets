@@ -24,6 +24,10 @@ import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResol
 import { OpenClawGatewayClient, OpenClawChatMessage } from '../../services/assistant/OpenClawGatewayClient'
 import { installPage4TencentVoiceInputAdapter } from '../../services/assistant/Page4TencentVoiceInputAdapter'
 import { page4TencentLocalTtsService } from '../../services/assistant/Page4TencentLocalTtsService'
+import hilog from '@ohos.hilog'
+
+const PAGE4_LOG_DOMAIN = 0xFF04
+const PAGE4_LOG_TAG = 'page4log'
 
 interface AssistantMessage {
   id: string
@@ -1065,10 +1069,12 @@ export struct Page4View {
   }
 
   private logInfo(name: string, message: string): void {
-    console.info(`[info][${this.logTag}][${name}] ${message}`)
+    const text: string = `[info][${this.logTag}][${name}] ${message}`
+    hilog.info(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '%{public}s', text)
   }
 
   private logError(name: string, message: string): void {
-    console.error(`[error][${this.logTag}][${name}] ${message}`)
+    const text: string = `[error][${this.logTag}][${name}] ${message}`
+    hilog.error(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '%{public}s', text)
   }
 }

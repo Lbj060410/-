@@ -17,6 +17,7 @@ import * as libentry from 'libentry.so'
 const TAGRUN = 'SendMasterRun';
 const DOMAIN = 0xFF01   //小车运行日志
 const TAGCONNECT="SendMaster"
+const TAGTEXTONE1 = 'textone1'
 
 export enum CarSendMode {
   DRY_RUN = 0,
@@ -77,7 +78,7 @@ export class CarProtocolService {
 
   private getTcpOrLog(): CarTcpService | undefined {
     const t: CarTcpService | undefined = this.tcp
-    if (!t) console.info('[CAR][WARN] tcp not bound, drop send')
+    if (!t) hilog.warn(DOMAIN, TAGCONNECT, '%{public}s', '[CAR][WARN] tcp not bound, drop send')
     return t
   }
 
@@ -95,6 +96,9 @@ export class CarProtocolService {
       const t: CarTcpService | undefined = this.getTcpOrLog()
       if (!t) return
       await t.sendOrLog(frame, sendTag)
+      if (i + 1 < sendTimes) {
+        await this.sleepMs(10)
+      }
     }
   }
 
@@ -236,6 +240,8 @@ export class CarProtocolService {
   }
 
   async lowcarport(): Promise<void>{
+    const payloadText: string = 'textone1 lowcarport() -> send 0x19'
+    hilog.info(DOMAIN, TAGTEXTONE1, 'send payload: %{public}s', payloadText)
     await this.sendControl0A(0x19,"车库调至一层并获取当前层数")
   }
 
@@ -392,5 +398,12 @@ export class CarProtocolService {
       payloads.push(this.toByteArray(current))
     }
     return payloads
+  }
+
+  private async sleepMs(ms: number): Promise<void> {
+    const waitMs: number = Math.max(0, Math.trunc(ms))
+    await new Promise<void>((resolve): void => {
+      setTimeout((): void => resolve(), waitMs)
+    })
   }
 }

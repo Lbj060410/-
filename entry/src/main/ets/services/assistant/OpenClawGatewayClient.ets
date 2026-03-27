@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 代码指南：
  * 文件： services/assistant/OpenClawGatewayClient.ets
  * 用途： 调用 OpenClaw 网关中兼容 OpenAI 的 HTTP 接口获取聊天回复.
@@ -217,3 +217,4 @@ export class OpenClawGatewayClient {
     return s.substring(0, maxLen)
   }
 }
+
