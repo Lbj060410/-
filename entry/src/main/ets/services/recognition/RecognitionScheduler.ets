@@ -685,8 +685,8 @@ export class RecognitionScheduler {
   }
 
   private resolveServiceForTask(task: RecognitionTask): IRecognitionService {
-    // LIVE 任务统一按 subtype 选离线模型（含 Page2 / Page4），避免误用默认模型。
-    if (task.kind === RecognitionTaskKind.LIVE && this.store.recogEngineType === RecogEngineType.OFFLINE_NCNN) {
+    // 离线 NCNN：所有任务都按 subtype 选模型，避免 SNAPSHOT/GALLERY 误用默认模型。
+    if (this.store.recogEngineType === RecogEngineType.OFFLINE_NCNN) {
       const subtype: RecognitionSubtype = task.subtype
       const conf: number = this.store.recogOfflineConfThresh
       const engineType: RecogEngineType = this.store.recogEngineType

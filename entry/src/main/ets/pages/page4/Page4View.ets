@@ -37,6 +37,12 @@ interface AssistantMessage {
   tsMs: number
 }
 
+interface HistorySession {
+  title: string
+  messages: Array<AssistantMessage>
+  tsMs: number
+}
+
 interface Page4VoiceInputAdapter {
   startListening: () => void | Promise<void>
   stopListening: () => string | Promise<string>
@@ -58,6 +64,7 @@ export struct Page4View {
   @State private voiceReplyEnabled: boolean = false
   @State private currentChatTitle: string = '新对话'
   @State private historyTitles: Array<string> = []
+  @State private historySessions: Array<HistorySession> = []
   @State private toastVisible: boolean = false
   @State private toastText: string = ''
   private chatScroller: Scroller = new Scroller()
@@ -284,7 +291,21 @@ export struct Page4View {
                 .borderWidth(0)
                 .stateEffect(false)
                 .onClick((): void => {
-                  void index
+                  if (index >= this.historySessions.length) return
+                  const session: HistorySession = this.historySessions[index]
+                  if (!this.isCurrentNewChat()) {
+                    this.archiveCurrentChatTitle()
+                  }
+                  const restored: Array<AssistantMessage> = []
+                  for (let k: number = 0; k < session.messages.length; k++) {
+                    restored.push(session.messages[k])
+                  }
+                  animateTo({ duration: 200 }, (): void => {
+                    this.messages = restored
+                    this.currentChatTitle = session.title
+                    this.showSidebar = false
+                  })
+                  this.scrollChatToBottomSoon()
                 })
             },
             (title: string, index: number): string => `${title}-${index}`)
@@ -715,11 +736,22 @@ export struct Page4View {
   private archiveCurrentChatTitle(): void {
     const title: string = this.currentChatTitle.trim()
     if (title.length <= 0 || title === '新对话') return
-    const next: Array<string> = [title]
-    for (let i: number = 0; i < this.historyTitles.length; i++) {
-      next.push(this.historyTitles[i])
+    if (this.isCurrentNewChat()) return
+
+    const savedMessages: Array<AssistantMessage> = []
+    for (let i: number = 0; i < this.messages.length; i++) {
+      savedMessages.push(this.messages[i])
     }
-    this.historyTitles = next
+    const session: HistorySession = { title: title, messages: savedMessages, tsMs: Date.now() }
+
+    const nextSessions: Array<HistorySession> = [session]
+    const nextTitles: Array<string> = [title]
+    for (let i: number = 0; i < this.historySessions.length; i++) {
+      nextSessions.push(this.historySessions[i])
+      nextTitles.push(this.historySessions[i].title)
+    }
+    this.historySessions = nextSessions
+    this.historyTitles = nextTitles
   }
 
   private maybeRefreshCurrentChatTitleByFirstUserSentence(): void {
@@ -773,8 +805,13 @@ export struct Page4View {
 
   private extractDestNode(input: string): string {
     const upper: string = input.trim().toUpperCase()
-    const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到)\s*([A-Z]\d{1,2})/)
+    // 优先匹配明确的导航关键词（最高优先级，不受反向词干扰）
+    const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到达|前进到)\s*([A-Z]\d{1,2})/)
     if (m1 && m1.length > 1) return m1[1]
+    // 如果节点 ID 出现在"出发/离开/从/起点"等非目标语境后，不当作目的地
+    const antiNav: RegExpMatchArray | null = upper.match(/(?:离开|从|出发|起点|LEAVE|FROM|DEPART)\s*([A-Z]\d{1,2})/)
+    if (antiNav) return ''
+    // 兜底：仅剩一个独立节点 ID 且无反向语境时才识别为目的地
     const m2: RegExpMatchArray | null = upper.match(/\b([A-Z]\d{1,2})\b/)
     if (m2 && m2.length > 1) return m2[1]
     return ''

@@ -300,6 +300,7 @@ export class VehicleMotionPlayer {
   private async maybeHandleMotionArrive(hooks: VehicleMotionHooks): Promise<void> {
     if (!this.motionAdvancePathOnFinish) return
     if (this.motionArriveHandled) return
+    if (!this.running()) return
     this.motionArriveHandled = true
     await hooks.maybeHandleMotionArrive(this.motionToId)
     if (this.callbacks && this.callbacks.onArriveHandled) {
@@ -337,6 +338,7 @@ export class VehicleMotionPlayer {
     }
 
     if (elapsedMs < activeEndMs) {
+      if (!this.running()) return
       this.setPhase(MotionPhase.ACTIVE, nowMs)
 
       let activeT: number = 1
@@ -364,6 +366,7 @@ export class VehicleMotionPlayer {
     }
 
     if (elapsedMs < postEndMs) {
+      if (!this.running()) return
       this.setPhase(MotionPhase.POST, nowMs)
 
       if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
@@ -379,6 +382,7 @@ export class VehicleMotionPlayer {
       return
     }
 
+    if (!this.running()) return
     if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
       if (toNode) {
         hooks.updatePoseAndTelemetryForDisplay(toNode.xNorm, toNode.yNorm, this.motionHeadingToDeg, 0)

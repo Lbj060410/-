@@ -81,7 +81,7 @@
 - **现状**：黄灯返回UNKNOWN，不阻止通行
 - **问题**：
   ```typescript
-  if (x.indexOf('yellow') >= 0 ||) return 'YELLOW'
+  if (x.indexOf('yellow') >= 0 ) return 'YELLOW'
   return 'UNKNOWN'  // 黄灯最终返回UNKNOWN
   ```
 - **缺失**：黄灯应该有明确的处理策略（阻止/警告/通行）

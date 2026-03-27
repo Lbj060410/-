@@ -289,6 +289,8 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
 
   if (a === Page1Action.GO) {
     if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+    // 异步等待后再次检查下一节点是否被阻塞（防止await窗口期内新障碍漏检）
+    if (isPathMotion && typeof ctx.isNextNodeBlocked === 'function' && ctx.isNextNodeBlocked()) return false
     await ctx.proto.go()
     if (isPathMotion) markPathCommandSent(ctx, actionText)
     replayArchiveService.onAction(actionText, 'AUTO')
@@ -338,7 +340,14 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   }
   if (a === Page1Action.STOP) {
     const s2 = ctx.store
-    if (s2) s2.pushLog('AUTO_STOP: 已忽略 stopTask 下发（该指令无法停止行动任务）')
+    if (!ctx.canRealSend()) {
+      if (s2) s2.pushLog('AUTO_STOP: DRY_RUN，跳过发送')
+      return true
+    }
+    ctx.proto.setMode(CarSendMode.REAL_SEND)
+    if (s2) s2.bumpTx()
+    await ctx.proto.stopTask()
+    if (s2) s2.pushLog('AUTO_STOP: 已发送停止指令给真车')
     return true
   }
 
@@ -547,6 +556,23 @@ export function onPathAckFrame(ctx: any, f: any): void {
       }
     }
 
+    // 在启动动画前再检查一次目标节点/边是否在 ACK 等待窗口期被新标记为阻塞
+    const req2: PendingAckMotion | undefined = ctx.pendingAckMotion
+    if (req2) {
+      const s2 = ctx.store
+      const toId2: string = req2.toId.trim().toUpperCase()
+      const fromId2: string = req2.fromId.trim().toUpperCase()
+      if (s2 && (s2.isBlocked(toId2) || s2.isBlockedEdge(fromId2, toId2))) {
+        ctx.pendingAckMotion = undefined
+        s2.pushLog(`PATH_ACK_BLOCK: BD=02后发现目标节点/边已被阻塞 ${fromId2}->${toId2}，跳过动画并重规划`)
+        if (s2.destApplied.length > 0) {
+          ctx.stopActiveMotion()
+          void ctx.sendDriveActionDirect(Page1Action.STOP)
+          ctx.planPath(s2.destApplied)
+        }
+        return
+      }
+    }
     startPendingAckMotionOnComplete(ctx)
   }
 }
@@ -627,11 +653,13 @@ export function queueDrivingUltrasonicObstacle(ctx: any, nowMs: number): void {
   const edgeId: string = ctx.frontRouteEdgeIdForDriving()
   if (edgeId.length <= 0) return
 
+  // 立即停止：取消 ACK 挂起动画并直接重规划，不再等待 BD=02
   ctx.suppressNextAckCompleteMotion = true
   ctx.suppressAckCompleteEdgeId = edgeId
-  ctx.pendingDrivingUltrasonicObstacleEdgeId = edgeId
-  ctx.pendingDrivingUltrasonicObstacleAtMs = nowMs
-  s.pushLog(`ULTRASONIC_P1_01: 已挂起路段障碍 edge=${edgeId}，等待BD=02后重规划`)
+  ctx.pendingDrivingUltrasonicObstacleEdgeId = ''
+  ctx.pendingDrivingUltrasonicObstacleAtMs = 0
+  s.pushLog(`ULTRASONIC_P1_01: 立即停止并重规划 edge=${edgeId}`)
+  ctx.maybeHandleDrivingUltrasonicObstacle(nowMs, edgeId)
 }
 
 export function flushDrivingUltrasonicObstacleAfterAck(ctx: any): void {

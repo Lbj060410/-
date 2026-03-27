@@ -294,7 +294,7 @@ export function maybeTriggerRoutePointObstacle(ctx: any): boolean {
   for (let i = 0; i < s.routeObstaclePoints.length; i++) {
     const p = s.routeObstaclePoints[i]
     if (p.triggered) continue
-    if (now - p.createdAtMs < 350) continue
+    if (now - p.createdAtMs < 80) continue
     const dx = s.pose.xNorm - p.xNorm
     const dy = s.pose.yNorm - p.yNorm
     const d2 = dx * dx + dy * dy
@@ -463,14 +463,21 @@ export function maybeReplanOnObstacle(ctx: any): void {
   if (typeof ctx.maybeHandleBarrierEmergencyStop === 'function' && ctx.maybeHandleBarrierEmergencyStop(now)) return
   if (s.destApplied.length === 0) return
   if (now < ctx.pauseUntilMs) return
-  if (now - ctx.lastReplanAtMs < P1C.REPLAN_COOLDOWN_MS) return
   if (s.riskScore >= 95) commStore.bumpEStop()
   maybeLogVisionTaskOrTraffic(ctx, now)
   const riskHigh = s.riskScore >= 70
+  const riskCritical = s.riskScore >= 95
   const yoloBlockId = yoloSuggestBlockedNodeId(ctx, now)
-  if (yoloBlockId.length > 0) s.addBlockedIfAbsent(yoloBlockId, 'YOLO')
+  if (yoloBlockId.length > 0) {
+    s.addBlockedIfAbsent(yoloBlockId, 'YOLO')
+    // 同时阻塞当前正在行驶的边，防止动画继续穿越
+    const yoloCurEdge: string = frontRouteEdgeIdForDriving(ctx)
+    if (yoloCurEdge.length > 0) s.addBlockedEdgeIfAbsent(yoloCurEdge, 'YOLO_EDGE')
+  }
   const blockedNext = isNextNodeBlocked(ctx)
   if (!blockedNext && !riskHigh && yoloBlockId.length === 0) return
+  // 风险极高时（>=95）跳过冷却限制，否则正常冷却节流
+  if (!riskCritical && now - ctx.lastReplanAtMs < P1C.REPLAN_COOLDOWN_MS) return
   ctx.stopActiveMotion()
   commStore.bumpReplan()
   commStore.bumpAvoid()
@@ -632,7 +639,7 @@ export function findPendingRouteObstacleOnEdge(ctx: any, edgeId: string, nowMs: 
   for (let i = 0; i < s.routeObstaclePoints.length; i++) {
     const p = s.routeObstaclePoints[i]
     if (p.triggered) continue
-    if (nowMs - p.createdAtMs < 350) continue
+    if (nowMs - p.createdAtMs < 80) continue
     if (p.edgeId.trim().toUpperCase() !== x) continue
     return p
   }
