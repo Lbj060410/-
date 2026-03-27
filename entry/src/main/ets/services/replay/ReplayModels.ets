@@ -10,6 +10,23 @@ export type ReplayTriggerType =
   'TRAFFIC_LIGHT' |
   'REPLAN'
 
+export type ReplaySessionOrigin =
+  'PAGE1' |
+  'PAGE2' |
+  'PAGE4' |
+  'GALLERY' |
+  'CAR' |
+  'UNKNOWN'
+
+export interface ReplayDetectionBox {
+  label: string
+  score: number
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export interface ReplayTimelineItem {
   tsMs: number
   kind: string
@@ -19,6 +36,7 @@ export interface ReplayTimelineItem {
 export interface ReplaySession {
   id: string
   triggerType: ReplayTriggerType
+  origin: ReplaySessionOrigin
   startAtMs: number
   endAtMs: number
   durationMs: number
@@ -28,6 +46,7 @@ export interface ReplaySession {
   oldPath: Array<string>
   newPath: Array<string>
   actions: Array<string>
+  detections: Array<ReplayDetectionBox>
   timeline: Array<ReplayTimelineItem>
 }
 

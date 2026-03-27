@@ -383,6 +383,22 @@ export class RecognitionScheduler {
     return id
   }
 
+  enqueueSnapshotFromGalleryUri(uri: string, subtype: RecognitionSubtype): string {
+    const id: string = this.nextId('gal')
+    const task: RecognitionTask = {
+      id,
+      kind: RecognitionTaskKind.SNAPSHOT,
+      subtype,
+      source: RecognitionTaskSource.GALLERY,
+      priority: RecognitionPriority.SNAPSHOT,
+      createdAtMs: Date.now(),
+      timeoutMs: 8000,
+      input: { type: RecognitionInputType.GALLERY_URI, galleryUri: uri }
+    }
+    this.enqueue(task, 'gallery uri snapshot')
+    return id
+  }
+
   cancel(taskId: string): void {
     this.cancelSet.add(taskId)
 
@@ -587,6 +603,16 @@ export class RecognitionScheduler {
       if (!v) throw new Error('pixelMap undefined')
       pm = v
       releaseAfterUse = !!task.input.releaseAfterUse
+    } else if (task.input.type === RecognitionInputType.GALLERY_URI) {
+      const uri: string | undefined = task.input.galleryUri
+      if (!uri || uri.trim().length <= 0) throw new Error('gallery uri empty')
+      const src: image.ImageSource = image.createImageSource(uri)
+      try {
+        pm = await src.createPixelMap()
+        videoStore.setSnapshot(pm)
+      } finally {
+        try { src.release() } catch (_) {}
+      }
     } else {
       throw new Error('unsupported input type')
     }

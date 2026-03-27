@@ -8,6 +8,7 @@
 
 import resourceManager from '@ohos.resourceManager'
 import image from '@ohos.multimedia.image'
+import picker from '@ohos.file.picker'
 import { Page1Theme } from '../page1/Page1Theme'
 import { videoStore, VideoStore, DisplayMode } from '../../state/VideoStore'
 import { recogStore, RecogStore } from '../../state/RecogStore'
@@ -15,13 +16,16 @@ import { BBoxNorm, RecognitionResult } from '../../services/recognition/Recognit
 import {
   RecognitionSubtype,
   RecognitionTaskKind,
+  RecognitionTaskRecord,
+  RecognitionTaskState,
   RecognitionTaskSource,
   RoiNorm
 } from '../../services/recognition/RecognitionTask'
 import { page2Coordinator, Page2Coordinator } from './Page2Coordinator'
 import { PtzControlPanel } from './components/PtzControlPanel'
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
-import { ReplayReviewPanel } from '../page1/components/ReplayReviewPanel'
+import { Page2ReplayCenter } from './components/Page2ReplayCenter'
+import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 
 interface OverlayBoxViewModel {
   key: string
@@ -47,6 +51,7 @@ export struct Page2View {
   @State private recogStore: RecogStore = recogStore
   @State private showDiag: boolean = false
   @State private showReplay: boolean = false
+  @State private galleryOriginalUri: string = ''
 
   // 视频显示区域的实际尺寸，由 onAreaChange 更新，用于识别框映射到 UI 坐标
   @State private videoAreaWidth: number = 0
@@ -140,8 +145,7 @@ export struct Page2View {
       if (this.showReplay) {
         Stack() {
           Column() {
-            ReplayReviewPanel({
-              scope: 'vision',
+            Page2ReplayCenter({
               onClose: (): void => { this.showReplay = false }
             })
           }
@@ -155,9 +159,6 @@ export struct Page2View {
         .height('100%')
         .backgroundColor('#00000033')
         .align(Alignment.Bottom)
-        .onClick((): void => {
-          this.showReplay = false
-        })
       }
     }
     .width('100%')
@@ -277,24 +278,10 @@ export struct Page2View {
       .width('100%')
       .padding({ top: 8, bottom: 8 })
 
-      // 第2行：快照、切换识别、复盘、重启
+      // 第2行：切换识别、复盘、重启
       Row({ space: 8 }) {
-        Button('抓拍')
-          .layoutWeight(1)
-          .height(40)
-          .borderRadius(6)
-          .backgroundColor('#FFFFFF')
-          .fontColor(Page1Theme.PRIMARY)
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#E2E8F0' })
-          .shadow({ radius: 4, color: '#00000005', offsetX: 0, offsetY: 1 })
-          .onClick((): void => {
-            void this.captureSnapshot()
-          })
-
         Button(this.videoStore.recognitionEnabled ? '识别：开' : '识别：关')
-          .layoutWeight(1)
+          .layoutWeight(2)
           .height(40)
           .borderRadius(6)
           .backgroundColor(this.videoStore.recognitionEnabled ? '#ECFDF5' : '#F8FAFC')
@@ -308,7 +295,7 @@ export struct Page2View {
           })
 
         Button('复盘')
-          .layoutWeight(1)
+          .layoutWeight(1.5)
           .height(40)
           .borderRadius(6)
           .backgroundColor('#FFFFFF')
@@ -322,7 +309,7 @@ export struct Page2View {
           })
 
         Button('重启')
-          .layoutWeight(1)
+          .layoutWeight(1.5)
           .height(40)
           .borderRadius(6)
           .backgroundColor('#FEF2F2')
@@ -338,6 +325,19 @@ export struct Page2View {
       .width('100%')
 
       Row({ space: 8 }) {
+        Button('选图')
+          .layoutWeight(1)
+          .height(36)
+          .borderRadius(6)
+          .backgroundColor('#FFFFFF')
+          .fontColor(Page1Theme.PRIMARY)
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .border({ width: 1, color: '#DBEAFE' })
+          .onClick((): void => {
+            void this.pickImageFromGallery()
+          })
+
         Button('切换源')
           .layoutWeight(1)
           .height(36)
@@ -358,7 +358,7 @@ export struct Page2View {
             }
           })
 
-        Button(this.videoStore.page2BarrierExperimentalEnabled ? 'Barrier：开' : 'Barrier：关')
+        Button(this.videoStore.page2BarrierExperimentalEnabled ? '开障' : '关障')
           .layoutWeight(1)
           .height(36)
           .borderRadius(6)
@@ -372,7 +372,7 @@ export struct Page2View {
             this.c.onModelSwitchChanged()
           })
 
-        Button(this.videoStore.page2TrafficEnabled ? 'Traffic：开' : 'Traffic：关')
+        Button(this.videoStore.page2TrafficEnabled ? '灯开' : '灯关')
           .layoutWeight(1)
           .height(36)
           .borderRadius(6)
@@ -504,6 +504,13 @@ export struct Page2View {
 
       if (this.videoStore.snapshotPixelMap) {
         Image(this.videoStore.snapshotPixelMap)
+          .width('100%')
+          .height(220)
+          .borderRadius(12)
+          .objectFit(ImageFit.Contain)
+          .backgroundColor(Page1Theme.CARD_HOVER)
+      } else if (this.galleryOriginalUri.length > 0) {
+        Image(this.galleryOriginalUri)
           .width('100%')
           .height(220)
           .borderRadius(12)
@@ -1097,17 +1104,21 @@ export struct Page2View {
           quality: 95
         })
 
-        const src2: image.ImageSource = image.createImageSource(jpeg)
-        try {
-          const copy: image.PixelMap = await src2.createPixelMap()
-          this.videoStore.setSnapshot(copy)
-        } finally {
-          try {
-            src2.release()
-          } catch (_) {}
+        const previewPm: image.PixelMap | undefined = await this.createPixelMapFromJpeg(jpeg)
+        const inferPm: image.PixelMap | undefined = await this.createPixelMapFromJpeg(jpeg)
+        if (!previewPm || !inferPm) {
+          if (previewPm) {
+            try { previewPm.release() } catch (_) {}
+          }
+          if (inferPm) {
+            try { inferPm.release() } catch (_) {}
+          }
+          throw new Error('Capture decode failed')
         }
 
-        this.videoStore.setStatus('Capture success')
+        this.videoStore.setSnapshot(previewPm)
+        const taskId: string = this.c.enqueueSnapshotRecognitionFromPixelMap(inferPm, RecognitionTaskSource.PAGE2_BUTTON)
+        this.videoStore.setStatus(`Capture+recognize queued: ${taskId}`)
       } finally {
         try {
           packer.release()
@@ -1118,5 +1129,136 @@ export struct Page2View {
       this.videoStore.setStatus(errMsg)
       console.error('[Page2] captureSnapshot error:', errMsg)
     }
+  }
+
+  private async pickImageFromGallery(): Promise<void> {
+    try {
+      const photoPicker: picker.PhotoViewPicker = new picker.PhotoViewPicker()
+      const options: picker.PhotoSelectOptions = new picker.PhotoSelectOptions()
+      options.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE
+      options.maxSelectNumber = 1
+
+      const result: picker.PhotoSelectResult = await photoPicker.select(options)
+      const uris: Array<string> = Array.isArray(result.photoUris) ? result.photoUris : []
+      if (uris.length <= 0) {
+        this.videoStore.setStatus('未选择图片')
+        return
+      }
+
+      const selectedUri: string = uris[0]
+      this.galleryOriginalUri = selectedUri
+      this.videoStore.setSnapshot(undefined)
+
+      const taskId: string = this.c.enqueueSnapshotRecognitionFromGalleryUri(
+        selectedUri,
+        RecognitionSubtype.BARRIER
+      )
+      this.videoStore.setStatus(`选图识别已提交: ${taskId}`)
+      void this.waitAndArchiveGalleryReplay(taskId, selectedUri)
+    } catch (e) {
+      const errMsg: string = e instanceof Error ? e.message : '选图识别失败'
+      this.videoStore.setStatus(errMsg)
+      console.error('[Page2] pickImageFromGallery error:', errMsg)
+    }
+  }
+
+  private async loadPixelMapFromUri(uri: string): Promise<image.PixelMap> {
+    const src: image.ImageSource = image.createImageSource(uri)
+    try {
+      return await src.createPixelMap()
+    } finally {
+      try { src.release() } catch (_) {}
+    }
+  }
+
+  private async createPixelMapFromJpeg(jpeg: ArrayBuffer): Promise<image.PixelMap | undefined> {
+    const src: image.ImageSource = image.createImageSource(jpeg)
+    try {
+      return await src.createPixelMap()
+    } catch (_) {
+      return undefined
+    } finally {
+      try { src.release() } catch (_) {}
+    }
+  }
+
+  private async clonePixelMap(pm: image.PixelMap): Promise<image.PixelMap | undefined> {
+    const packer: image.ImagePacker = image.createImagePacker()
+    try {
+      const jpeg: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 92 })
+      return await this.createPixelMapFromJpeg(jpeg)
+    } catch (_) {
+      return undefined
+    } finally {
+      try { packer.release() } catch (_) {}
+    }
+  }
+
+  private async waitAndArchiveGalleryReplay(taskId: string, selectedUri: string): Promise<void> {
+    const startedAt: number = Date.now()
+    const timeoutMs: number = 12000
+    while (Date.now() - startedAt < timeoutMs) {
+      const task: RecognitionTaskRecord | undefined = this.findTaskById(taskId)
+      if (task && task.result) {
+        await page2ReplayService.onGalleryRecognitionFromUri(selectedUri, task.result)
+        return
+      }
+      if (task && this.isTaskTerminal(task.state)) {
+        await page2ReplayService.onGalleryRecognitionFromUri(
+          selectedUri,
+          this.fallbackRecognitionResult(taskId, task)
+        )
+        return
+      }
+      await this.sleep(150)
+    }
+    await page2ReplayService.onGalleryRecognitionFromUri(
+      selectedUri,
+      this.fallbackRecognitionResult(taskId, undefined, 'wait result timeout')
+    )
+  }
+
+  private findTaskById(taskId: string): RecognitionTaskRecord | undefined {
+    const tasks = this.recogStore.recogTasks
+    for (let i: number = 0; i < tasks.length; i++) {
+      if (tasks[i].id === taskId) return tasks[i]
+    }
+    return undefined
+  }
+
+  private isTaskTerminal(state: RecognitionTaskState): boolean {
+    return state === RecognitionTaskState.SUCCESS ||
+      state === RecognitionTaskState.FAILED ||
+      state === RecognitionTaskState.CANCELED ||
+      state === RecognitionTaskState.TIMEOUT ||
+      state === RecognitionTaskState.DROPPED
+  }
+
+  private fallbackRecognitionResult(
+    taskId: string,
+    task?: RecognitionTaskRecord,
+    reason: string = ''
+  ): RecognitionResult {
+    return {
+      taskId,
+      kind: task ? task.kind : RecognitionTaskKind.SNAPSHOT,
+      subtype: task ? task.subtype : RecognitionSubtype.BARRIER,
+      source: task ? task.source : RecognitionTaskSource.GALLERY,
+      tsMs: Date.now(),
+      costMs: task ? task.costMs : 0,
+      engine: task && task.engine.length > 0 ? task.engine : 'unknown',
+      boxes: [],
+      texts: [],
+      ok: false,
+      errorText: task && task.errorText.length > 0
+        ? task.errorText
+        : (reason.length > 0 ? reason : 'recognition failed')
+    }
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout((): void => resolve(), Math.max(1, ms))
+    })
   }
 }

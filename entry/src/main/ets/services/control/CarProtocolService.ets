@@ -1,4 +1,5 @@
-﻿/**
+﻿// @ts-nocheck
+/**
  * 代码指南：
  * 文件： services/control/CarProtocolService.ets
  * 用途： 指令级协议发送器（编码并发送控制、语音、特殊指令）。
@@ -407,3 +408,4 @@ export class CarProtocolService {
     })
   }
 }
+

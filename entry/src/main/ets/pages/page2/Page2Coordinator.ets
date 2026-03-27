@@ -19,8 +19,10 @@ import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResol
 import { ensureRecognitionCenter } from '../../services/recognition/RecognitionCenter'
 import { RecognitionScheduler } from '../../services/recognition/RecognitionScheduler'
 import { RecognitionSubtype, RecognitionTaskSource, RoiNorm } from '../../services/recognition/RecognitionTask'
+import { RecognitionTaskKind } from '../../services/recognition/RecognitionTask'
 import { RecogEngineType } from '../../services/recognition/RecognitionConfig'
 import { BBoxNorm, RecognitionResult } from '../../services/recognition/RecognitionResult'
+import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 import { page1Store } from '../page1/app/Page1UiStore'
 
 export class Page2Coordinator {
@@ -44,10 +46,10 @@ export class Page2Coordinator {
   private liveDecodeBusy: boolean = false
   // 最近一次投喂识别的时间戳（毫秒）。
   private lastLiveSubmitAtMs: number = 0
-  // 自动截图间隔：每 10 秒刷新一次“原始截图区”。
-  private readonly autoSnapshotIntervalMs: number = 10000
-  private nextAutoSnapshotAtMs: number = 0
-  private autoSnapshotBusy: boolean = false
+  private lastAutoSnapTaskId: string = ''
+  private lastAutoSnapAtMs: number = 0
+  private autoSnapBusy: boolean = false
+  private readonly autoSnapMinIntervalMs: number = 1200
   private activeSnapshotUrl: string = ''
   private started: boolean = false
   private starting: boolean = false
@@ -62,12 +64,12 @@ export class Page2Coordinator {
 
     this.frames.setOnFrame((frame, pm: image.PixelMap): void => {
       // Page2 帧处理入口：
-      // 1) 每 10 秒自动更新一次截图区（可按识别结果裁剪）
-      // 2) 实时识别只在识别开关开启时工作
-      // 3) 识别任务按时间节流并防重入，避免抢占预览线程
+      // 1) 实时识别只在识别开关开启时工作
+      // 2) 识别任务按时间节流并防重入，避免抢占预览线程
       const now: number = Date.now()
-      this.maybeAutoCaptureSnapshot(frame, now)
-
+      page2ReplayService.ingestFrameJpeg(frame.jpeg, now)
+      this.maybeAutoSnapshotFromVision(pm, now)
+      this.maybeRecordShigongReplay()
       if (!videoStore.recognitionEnabled) return
 
       if (now - this.lastLiveSubmitAtMs < this.page2LiveIntervalMs) return
@@ -197,8 +199,6 @@ export class Page2Coordinator {
       this.lastLiveSubmitAtMs = 0
       this.lastTrafficCascadeAtMs = 0
       this.liveDecodeBusy = false
-      this.autoSnapshotBusy = false
-      this.nextAutoSnapshotAtMs = Date.now() + this.autoSnapshotIntervalMs
 
       // 保持 HarmonyOS 与当前 HTTP 预览路径对齐。
       this.switcher.stop()
@@ -229,8 +229,6 @@ export class Page2Coordinator {
       this.frames.startHttp(httpUrl, this.prewarmHttpIntervalMs)
       this.lastLiveSubmitAtMs = 0
       this.liveDecodeBusy = false
-      this.autoSnapshotBusy = false
-      this.nextAutoSnapshotAtMs = Date.now() + this.autoSnapshotIntervalMs
       this.switcher.stop()
 
       this.prewarmed = true
@@ -252,8 +250,6 @@ export class Page2Coordinator {
     this.started = false
     this.liveDecodeBusy = false
     this.lastTrafficCascadeAtMs = 0
-    this.autoSnapshotBusy = false
-    this.nextAutoSnapshotAtMs = 0
 
     this.switcher.stop()
     this.frames.stop()
@@ -418,115 +414,74 @@ export class Page2Coordinator {
     }
   }
 
-  private maybeAutoCaptureSnapshot(frame: VideoFrame, nowMs: number): void {
-    if (this.autoSnapshotBusy) return
-    if (this.nextAutoSnapshotAtMs <= 0) {
-      this.nextAutoSnapshotAtMs = nowMs + this.autoSnapshotIntervalMs
-      return
-    }
-    if (nowMs < this.nextAutoSnapshotAtMs) return
+  enqueueSnapshotRecognitionFromPixelMap(
+    pm: image.PixelMap,
+    source: RecognitionTaskSource,
+    forceSubtype?: RecognitionSubtype,
+    releaseAfterUse: boolean = true
+  ): string {
+    const subtype: RecognitionSubtype = forceSubtype !== undefined ? forceSubtype : this.preferredSnapshotSubtype()
+    const fullRoi: RoiNorm = { x: 0, y: 0, w: 1, h: 1 }
+    return this.recog.enqueueSnapshotFromPixelMapWithRoi(pm, fullRoi, subtype, source, releaseAfterUse)
+  }
 
-    this.autoSnapshotBusy = true
-    void this.captureAutoSnapshotFromFrame(frame).finally((): void => {
-      this.autoSnapshotBusy = false
+  enqueueSnapshotRecognitionFromGalleryUri(uri: string, forceSubtype: RecognitionSubtype = RecognitionSubtype.BARRIER): string {
+    return this.recog.enqueueSnapshotFromGalleryUri(uri, forceSubtype)
+  }
+
+  private preferredSnapshotSubtype(): RecognitionSubtype {
+    if (videoStore.page2TrafficEnabled) return RecognitionSubtype.TRAFFIC_LIGHT
+    return RecognitionSubtype.BARRIER
+  }
+
+  private maybeAutoSnapshotFromVision(currentPm: image.PixelMap, nowMs: number): void {
+    const r: RecognitionResult | undefined = recogStore.lastRecog
+    if (!r || !r.ok || r.boxes.length <= 0) return
+    if (r.source !== RecognitionTaskSource.PAGE2_BUTTON) return
+    if (r.kind !== RecognitionTaskKind.LIVE) return
+    if (r.subtype !== RecognitionSubtype.BARRIER && r.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
+    if (r.taskId.length > 0 && r.taskId === this.lastAutoSnapTaskId) return
+    if (nowMs - this.lastAutoSnapAtMs < this.autoSnapMinIntervalMs) return
+    if (this.autoSnapBusy) return
+
+    this.lastAutoSnapTaskId = r.taskId
+    this.lastAutoSnapAtMs = nowMs
+    this.autoSnapBusy = true
+    void this.captureOriginalFromRecognition(currentPm, r).finally((): void => {
+      this.autoSnapBusy = false
     })
+    void page2ReplayService.onVisionObstacleDetected(r)
   }
 
-  private pickBestRecogBoxForAutoSnapshot(result: RecognitionResult | undefined): BBoxNorm | undefined {
-    if (!result || !result.ok) return undefined
-    if (result.boxes.length <= 0) return undefined
-
-    let best: BBoxNorm | undefined = undefined
-    let bestScore: number = 0
-    for (let i: number = 0; i < result.boxes.length; i++) {
-      const box: BBoxNorm = result.boxes[i]
-      if (!best || box.score > bestScore) {
-        best = box
-        bestScore = box.score
-      }
-    }
-    return best
-  }
-
-  private boxToCropRegion(box: BBoxNorm, imgW: number, imgH: number): image.Region | undefined {
-    if (imgW <= 0 || imgH <= 0) return undefined
-
-    const normalized: boolean =
-      box.x >= 0 && box.y >= 0 && box.w > 0 && box.h > 0 &&
-      box.x <= 1 && box.y <= 1 && box.w <= 1 && box.h <= 1
-
-    let x0: number = normalized ? box.x * imgW : box.x
-    let y0: number = normalized ? box.y * imgH : box.y
-    let x1: number = normalized ? (box.x + box.w) * imgW : (box.x + box.w)
-    let y1: number = normalized ? (box.y + box.h) * imgH : (box.y + box.h)
-
-    x0 = Math.max(0, Math.min(x0, imgW))
-    y0 = Math.max(0, Math.min(y0, imgH))
-    x1 = Math.max(0, Math.min(x1, imgW))
-    y1 = Math.max(0, Math.min(y1, imgH))
-
-    if (x1 <= x0 || y1 <= y0) return undefined
-
-    const bw: number = x1 - x0
-    const bh: number = y1 - y0
-    const padX: number = Math.max(2, Math.floor(bw * 0.10))
-    const padY: number = Math.max(2, Math.floor(bh * 0.10))
-
-    let px0: number = Math.max(0, Math.floor(x0 - padX))
-    let py0: number = Math.max(0, Math.floor(y0 - padY))
-    let px1: number = Math.min(imgW, Math.ceil(x1 + padX))
-    let py1: number = Math.min(imgH, Math.ceil(y1 + padY))
-
-    if (px1 <= px0 || py1 <= py0) return undefined
-
-    return {
-      x: px0,
-      y: py0,
-      size: {
-        width: Math.max(1, px1 - px0),
-        height: Math.max(1, py1 - py0)
-      }
-    }
-  }
-
-  private async captureAutoSnapshotFromFrame(frame: VideoFrame): Promise<void> {
-    let pm: image.PixelMap | undefined = undefined
-    const captureAtMs: number = Date.now()
-    let usedRecogCrop: boolean = false
-
+  private async captureOriginalFromRecognition(pm: image.PixelMap, r: RecognitionResult): Promise<void> {
+    let previewPm: image.PixelMap | undefined = undefined
+    let galleryPm: image.PixelMap | undefined = undefined
     try {
-      pm = await this.jpegToPixelMap(frame.jpeg)
-      const info: image.ImageInfo = await pm.getImageInfo()
-      const bestBox: BBoxNorm | undefined = this.pickBestRecogBoxForAutoSnapshot(recogStore.lastRecog)
-      if (bestBox) {
-        const region: image.Region | undefined = this.boxToCropRegion(bestBox, info.size.width, info.size.height)
-        if (region) {
-          try {
-            await pm.crop(region)
-            usedRecogCrop = true
-          } catch (e) {
-            void e
-          }
-        }
+      previewPm = await this.clonePixelMap(pm)
+      galleryPm = await this.clonePixelMap(pm)
+      if (previewPm) {
+        videoStore.setSnapshot(previewPm)
+        previewPm = undefined
       }
-
-      videoStore.setSnapshot(pm)
-      pm = undefined
-      this.nextAutoSnapshotAtMs = captureAtMs + this.autoSnapshotIntervalMs
-      if (usedRecogCrop) {
-        videoStore.setStatus('Auto snapshot updated (recognition crop)')
-      } else {
-        videoStore.setStatus('Auto snapshot updated (full frame)')
+      if (galleryPm) {
+        const tag: string = r.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'traffic' : 'barrier'
+        await page2ReplayService.archiveOriginalSnapshotToGallery(galleryPm, tag)
       }
-    } catch (e) {
-      const errMsg: string = e instanceof Error ? e.message : 'auto snapshot failed'
-      videoStore.setError(errMsg)
-      this.nextAutoSnapshotAtMs = captureAtMs + this.autoSnapshotIntervalMs
     } finally {
-      if (pm) {
-        try { pm.release() } catch (_) {}
+      if (previewPm) {
+        try { previewPm.release() } catch (_) {}
+      }
+      if (galleryPm) {
+        try { galleryPm.release() } catch (_) {}
       }
     }
+  }
+
+  private maybeRecordShigongReplay(): void {
+    const r: RecognitionResult | undefined = recogStore.lastRecog
+    if (!r || !r.ok) return
+    if (r.subtype !== RecognitionSubtype.BARRIER) return
+    void page2ReplayService.onShigongRecognition(r)
   }
 
   private currentLiveSubtype(): RecognitionSubtype | undefined {
@@ -574,7 +529,3 @@ export class Page2Coordinator {
 }
 
 export const page2Coordinator: Page2Coordinator = new Page2Coordinator()
-
-
-
-

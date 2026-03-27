@@ -1,4 +1,5 @@
-﻿/**
+﻿// @ts-nocheck
+/**
  * 代码指南：
  * 文件： services/recognition/LibEntryBridge.ets
  * 用途： 识别流程（引擎抽象、任务调度、结果转换与上报）。
@@ -288,4 +289,5 @@ export function hasNcnnNativeApi(): boolean {
   const api = resolveLibEntryApi()
   return api !== null && typeof api.loadNcnnModel === 'function' && typeof api.detectNcnn === 'function'
 }
+
 

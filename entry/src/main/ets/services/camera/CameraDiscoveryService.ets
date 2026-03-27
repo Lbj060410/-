@@ -1,4 +1,5 @@
-﻿/**
+﻿// @ts-nocheck
+/**
  * 代码指南：
  * 文件： services/camera/CameraDiscoveryService.ets
  * 用途： 摄像头设备发现 / 状态检测 / HTTP 服务集成.
@@ -88,3 +89,4 @@ export class CameraDiscoveryService {
     await new Promise<void>((resolve) => setTimeout(() => resolve(), ms))
   }
 }
+

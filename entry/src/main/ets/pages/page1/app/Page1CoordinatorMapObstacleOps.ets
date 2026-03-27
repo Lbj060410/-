@@ -396,11 +396,17 @@ export function promoteBlockedEdgePairsToBlockedNodes(ctx: any): Array<string> {
       if (!parsed) continue
       if (parsed.a === nodeId || parsed.b === nodeId) touchingEdges.push(edgeId)
     }
-    if (touchingEdges.length < 2) continue
+    // 永久分界线不计入升级判断，只统计动态阻塞边
+    let dynamicTouchCount: number = 0
+    for (let k = 0; k < touchingEdges.length; k++) {
+      if (!s.isPermanentBlockedEdge(touchingEdges[k])) dynamicTouchCount++
+    }
+    if (dynamicTouchCount < 2) continue
     if (promotedNodes.indexOf(nodeId) < 0) promotedNodes.push(nodeId)
     s.addBlockedIfAbsent(nodeId, 'EDGE_PAIR')
     for (let j = 0; j < touchingEdges.length; j++) {
       const edgeId = touchingEdges[j]
+      if (s.isPermanentBlockedEdge(edgeId)) continue  // 永久分界线不移除
       if (removeEdges.indexOf(edgeId) < 0) removeEdges.push(edgeId)
     }
     s.pushLog(`路段禁行转点禁行：${nodeId} edges=[${touchingEdges.join(',')}]`)

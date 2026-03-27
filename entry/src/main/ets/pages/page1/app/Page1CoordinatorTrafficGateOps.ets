@@ -63,6 +63,8 @@ function activeGateEdge(ctx: any): string {
     if (isActiveGateEdge(fromId, toId)) {
       return edgeKey(fromId, toId)
     }
+    // 有路径但当前段不是道闸边，不用朝向兜底，防止经过B4/D6时误触发等待
+    return ''
   }
   return headingGateEdgeBySnap(ctx)
 }

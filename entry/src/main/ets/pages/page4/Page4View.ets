@@ -7,6 +7,7 @@
  */
 import { page1Coordinator } from '../page1/app/Page1Coordinator'
 import { page1Store, Page1UiStore, CarConnState } from '../page1/app/Page1UiStore'
+import { GridIdCodec } from '../page1/app/PathPlannerAStar'
 import { Page1Action } from '../page1/types/Page1Types'
 import { Page1Theme } from '../page1/Page1Theme'
 import { commStore } from '../../state/CommStore'
@@ -1027,6 +1028,10 @@ export struct Page4View {
 
     const dest: string = this.extractDestNode(text)
     if (dest.length > 0) {
+      if (!GridIdCodec.isValidId(dest)) {
+        this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
+        return
+      }
       try {
         this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
         await page1Coordinator.startManualRoute(dest)

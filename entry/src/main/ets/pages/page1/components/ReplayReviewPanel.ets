@@ -5,9 +5,15 @@
  */
 import { Page1Theme } from '../Page1Theme'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
-import { ReplaySession, ReplayTimelineItem, ReplayTriggerType } from '../../../services/replay/ReplayModels'
+import {
+  ReplayDetectionBox,
+  ReplaySession,
+  ReplaySessionOrigin,
+  ReplayTimelineItem,
+  ReplayTriggerType
+} from '../../../services/replay/ReplayModels'
 
-export type ReplayReviewScope = 'all' | 'vision'
+export type ReplayReviewScope = 'all' | 'vision' | 'vision-page2'
 
 @Component
 export struct ReplayReviewPanel {
@@ -173,10 +179,27 @@ export struct ReplayReviewPanel {
               .borderRadius(10)
           }
           this.infoLine('触发类型', this.selectedTriggerType())
+          this.infoLine('来源', this.selectedOriginText())
           this.infoLine('发生时间', this.selectedStartTimeText())
           this.infoLine('过程耗时', this.selectedDurationText())
           this.infoLine('截图数量', this.selectedSnapshotCountText())
           this.infoLine('路径变化', this.selectedPathChangeText())
+
+          Text('框选目标')
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Page1Theme.TEXT_PRIMARY)
+            .width('100%')
+            .margin({ top: 8 })
+          ForEach(this.selectedDetections(), (d: ReplayDetectionBox): void => {
+            Text(
+              `${d.label} ${(d.score * 100).toFixed(1)}% | x=${d.x.toFixed(3)} y=${d.y.toFixed(3)} w=${d.w.toFixed(3)} h=${d.h.toFixed(3)}`
+            )
+              .fontSize(12)
+              .fontColor(Page1Theme.TEXT_SECONDARY)
+              .width('100%')
+              .padding({ top: 3, bottom: 3 })
+          }, (d: ReplayDetectionBox, i: number): string => `${d.label}-${i}-${Math.round(d.score * 1000)}`)
 
           Text('动作记录')
             .fontSize(13)
@@ -244,11 +267,17 @@ export struct ReplayReviewPanel {
     const out: Array<ReplaySession> = []
     for (let i: number = 0; i < sessions.length; i++) {
       const one: ReplaySession = sessions[i]
-      if (this.isVisionSession(one.triggerType)) {
-        out.push(one)
-      }
+      if (!this.isVisionSession(one.triggerType)) continue
+      if (scope === 'vision-page2' && !this.isPage2VisionSession(one.origin)) continue
+      out.push(one)
     }
     return out
+  }
+
+  private isPage2VisionSession(origin: ReplaySessionOrigin): boolean {
+    if (origin === 'PAGE2') return true
+    if (origin === 'GALLERY') return true
+    return false
   }
 
   private isVisionSession(triggerType: ReplayTriggerType): boolean {
@@ -279,6 +308,12 @@ export struct ReplayReviewPanel {
     return s.triggerType
   }
 
+  private selectedOriginText(): string {
+    const s: ReplaySession | undefined = this.selectedSession()
+    if (!s) return '-'
+    return s.origin
+  }
+
   private selectedStartTimeText(): string {
     const s: ReplaySession | undefined = this.selectedSession()
     if (!s) return '-'
@@ -301,6 +336,12 @@ export struct ReplayReviewPanel {
     const s: ReplaySession | undefined = this.selectedSession()
     if (!s) return '-'
     return `${s.oldPath.join('->')} => ${s.newPath.join('->')}`
+  }
+
+  private selectedDetections(): Array<ReplayDetectionBox> {
+    const s: ReplaySession | undefined = this.selectedSession()
+    if (!s) return []
+    return s.detections
   }
 
   private selectedActions(): Array<string> {

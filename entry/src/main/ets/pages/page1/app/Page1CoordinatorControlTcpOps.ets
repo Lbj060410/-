@@ -23,6 +23,7 @@ import { P1C } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
 import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
+import { page2ReplayService } from '../../../services/replay/Page2ReplayService'
 import hilog from '@ohos.hilog'
 
 const PAGE1_TCP_LOG_DOMAIN = 0xFF03
@@ -329,6 +330,7 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
         )
         if (ultrasonicP1 === 0x01) {
           replayArchiveService.onObstacleTriggered('ULTRASONIC', '超声波检测到障碍并触发避障')
+          void page2ReplayService.onUltrasonicObstacleSignal('接收到小车 0x01 障碍物信号')
           ctx.queueDrivingUltrasonicObstacle(ctx.lastUltrasonicAtMs)
         }
       }

@@ -91,7 +91,13 @@ export class Page1UiStore {
 
   // ===== B2：障碍 =====
   blockedNodes: Array<string> = []
-  blockedEdges: Array<string> = []
+  // D2|D4 和 F2|F4 默认阻塞：强制上下区通行只能经过 B2-B4 道闸
+  blockedEdges: Array<string> = ['D2|D4', 'F2|F4']
+
+  isPermanentBlockedEdge(edgeId: string): boolean {
+    const x: string = edgeId.trim().toUpperCase()
+    return x === 'D2|D4' || x === 'F2|F4'
+  }
   routeObstaclePoints: Array<RouteObstaclePoint> = []
   obstacleEditEnabled: boolean = false
   targetPickEnabled: boolean = false
@@ -440,6 +446,10 @@ export class Page1UiStore {
 
     const parsed: RouteSegment | undefined = RouteEdgeCodec.parse(x)
     if (!parsed) return
+    if (this.isPermanentBlockedEdge(x)) {
+      this.pushLog(`路段障碍拒绝：${x}（永久分界线，不可修改）`)
+      return
+    }
     const cur: string = this.currentSnapNodeId.trim().toUpperCase()
     if (cur === parsed.a || cur === parsed.b) {
       this.pushLog(`路段障碍拒绝：${x}（与当前位置相邻）`)
@@ -676,9 +686,15 @@ export class Page1UiStore {
   }
 
   clearBlockedNodes(): void {
-    if (this.blockedNodes.length === 0 && this.blockedEdges.length === 0 && this.routeObstaclePoints.length === 0) return
+    const defaultEdges: Array<string> = ['D2|D4', 'F2|F4']
+    const alreadyClear: boolean =
+      this.blockedNodes.length === 0 &&
+      this.routeObstaclePoints.length === 0 &&
+      this.blockedEdges.length === defaultEdges.length &&
+      defaultEdges.every((e: string) => this.blockedEdges.indexOf(e) >= 0)
+    if (alreadyClear) return
     this.blockedNodes = []
-    this.blockedEdges = []
+    this.blockedEdges = defaultEdges
     this.routeObstaclePoints = []
     this.pushLog('障碍清空')
   }

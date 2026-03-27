@@ -7,8 +7,14 @@ import fs from '@ohos.file.fs'
 import image from '@ohos.multimedia.image'
 import { videoStore } from '../../state/VideoStore'
 import { RecognitionResult } from '../recognition/RecognitionResult'
-import { RecognitionSubtype } from '../recognition/RecognitionTask'
-import { ReplaySession, ReplayTimelineItem, ReplayTriggerType } from './ReplayModels'
+import { RecognitionSubtype, RecognitionTaskSource } from '../recognition/RecognitionTask'
+import {
+  ReplayDetectionBox,
+  ReplaySession,
+  ReplaySessionOrigin,
+  ReplayTimelineItem,
+  ReplayTriggerType
+} from './ReplayModels'
 
 const REPLAY_DIR: string = '/data/storage/el2/base/haps/entry/files/replay'
 const REPLAY_INDEX_PATH: string = `${REPLAY_DIR}/sessions.json`
@@ -50,7 +56,7 @@ export class ReplayArchiveService {
 
   onObstacleTriggered(kind: ReplayTriggerType, note: string): void {
     this.ensureLoaded()
-    const sid: string = this.ensureActive(kind, note)
+    const sid: string = this.ensureActive(kind, note, 'PAGE1')
     this.appendTimeline(sid, 'trigger', note)
     void this.captureSnapshotForSession(sid, 'trigger')
   }
@@ -63,9 +69,14 @@ export class ReplayArchiveService {
 
     const trigger: ReplayTriggerType =
       result.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'TRAFFIC_LIGHT' : 'VISION_BARRIER'
-    const sid: string = this.ensureActive(trigger, '识别触发')
-    const detail: string = `${result.engine} boxes=${result.boxes.length}`
+    const origin: ReplaySessionOrigin = this.mapOriginFromSource(result.source)
+    const sid: string = this.ensureActive(trigger, '识别触发', origin)
+    const detail: string = `${result.engine} boxes=${result.boxes.length} src=${this.sourceText(result.source)}`
     this.appendTimeline(sid, 'recognition', detail)
+    if (result.boxes.length > 0) {
+      this.appendTimeline(sid, 'targets', this.formatDetectionSummary(result))
+    }
+    this.updateSessionDetections(sid, result)
 
     const nowMs: number = Date.now()
     if (nowMs - this.lastSnapshotAtMs >= SNAPSHOT_MIN_INTERVAL_MS) {
@@ -79,7 +90,7 @@ export class ReplayArchiveService {
     if (oldPath.length <= 0 || newPath.length <= 0) return
     if (this.samePath(oldPath, newPath)) return
 
-    const sid: string = this.ensureActive('REPLAN', reason.length > 0 ? reason : '路径重规划')
+    const sid: string = this.ensureActive('REPLAN', reason.length > 0 ? reason : '路径重规划', 'PAGE1')
     const s: ReplaySession | undefined = this.getSessionRef(sid)
     if (!s) return
     s.oldPath = this.cloneArray(oldPath)
@@ -123,7 +134,7 @@ export class ReplayArchiveService {
     this.persistIndex()
   }
 
-  private ensureActive(trigger: ReplayTriggerType, title: string): string {
+  private ensureActive(trigger: ReplayTriggerType, title: string, origin: ReplaySessionOrigin): string {
     this.closeIdleIfNeeded()
 
     const nowMs: number = Date.now()
@@ -131,9 +142,12 @@ export class ReplayArchiveService {
     if (activeId.length > 0) {
       const old: ReplaySession | undefined = this.getSessionRef(activeId)
       if (old) {
-        old.endAtMs = nowMs
-        old.durationMs = Math.max(0, old.endAtMs - old.startAtMs)
-        return activeId
+        if (old.origin === origin && old.triggerType === trigger) {
+          old.endAtMs = nowMs
+          old.durationMs = Math.max(0, old.endAtMs - old.startAtMs)
+          return activeId
+        }
+        this.closeActive(`切换会话 ${old.origin}/${old.triggerType} -> ${origin}/${trigger}`)
       }
     }
 
@@ -141,6 +155,7 @@ export class ReplayArchiveService {
     const session: ReplaySession = {
       id: id,
       triggerType: trigger,
+      origin: origin,
       startAtMs: nowMs,
       endAtMs: nowMs,
       durationMs: 0,
@@ -150,6 +165,7 @@ export class ReplayArchiveService {
       oldPath: [],
       newPath: [],
       actions: [],
+      detections: [],
       timeline: []
     }
 
@@ -417,6 +433,7 @@ export class ReplayArchiveService {
     return {
       id: typeof src.id === 'string' ? src.id : '',
       triggerType: this.normalizeTriggerType(src.triggerType),
+      origin: this.normalizeOrigin(src.origin),
       startAtMs: this.toSafeInt(src.startAtMs),
       endAtMs: this.toSafeInt(src.endAtMs),
       durationMs: this.toSafeInt(src.durationMs),
@@ -426,6 +443,7 @@ export class ReplayArchiveService {
       oldPath: this.cloneArray(Array.isArray(src.oldPath) ? src.oldPath : []),
       newPath: this.cloneArray(Array.isArray(src.newPath) ? src.newPath : []),
       actions: this.cloneArray(Array.isArray(src.actions) ? src.actions : []),
+      detections: this.cloneDetections(Array.isArray(src.detections) ? src.detections : []),
       timeline: timelineSrc.map((x: ReplayTimelineItem): ReplayTimelineItem => ({
         tsMs: this.toSafeInt(x?.tsMs),
         kind: typeof x?.kind === 'string' ? x.kind : '',
@@ -439,6 +457,77 @@ export class ReplayArchiveService {
       return v
     }
     return 'REPLAN'
+  }
+
+  private normalizeOrigin(v: ReplaySessionOrigin | undefined): ReplaySessionOrigin {
+    if (v === 'PAGE1' || v === 'PAGE2' || v === 'PAGE4' || v === 'GALLERY' || v === 'CAR') {
+      return v
+    }
+    return 'UNKNOWN'
+  }
+
+  private mapOriginFromSource(source: RecognitionTaskSource): ReplaySessionOrigin {
+    if (source === RecognitionTaskSource.PAGE2_BUTTON) return 'PAGE2'
+    if (source === RecognitionTaskSource.GALLERY) return 'GALLERY'
+    if (source === RecognitionTaskSource.CAR_FRAME_TRIGGER) return 'CAR'
+    if (source === RecognitionTaskSource.PAGE4_TAP || source === RecognitionTaskSource.PAGE4_LIVE) return 'PAGE4'
+    return 'UNKNOWN'
+  }
+
+  private sourceText(source: RecognitionTaskSource): string {
+    if (source === RecognitionTaskSource.PAGE2_BUTTON) return 'PAGE2'
+    if (source === RecognitionTaskSource.GALLERY) return 'GALLERY'
+    if (source === RecognitionTaskSource.CAR_FRAME_TRIGGER) return 'CAR'
+    if (source === RecognitionTaskSource.PAGE4_TAP) return 'PAGE4_TAP'
+    if (source === RecognitionTaskSource.PAGE4_LIVE) return 'PAGE4_LIVE'
+    return 'UNKNOWN'
+  }
+
+  private updateSessionDetections(sessionId: string, result: RecognitionResult): void {
+    const s: ReplaySession | undefined = this.getSessionRef(sessionId)
+    if (!s) return
+    const out: Array<ReplayDetectionBox> = []
+    const maxItems: number = Math.min(20, result.boxes.length)
+    for (let i: number = 0; i < maxItems; i++) {
+      const b = result.boxes[i]
+      out.push({
+        label: typeof b.label === 'string' ? b.label : '-',
+        score: Number.isFinite(b.score) ? b.score : 0,
+        x: Number.isFinite(b.x) ? b.x : 0,
+        y: Number.isFinite(b.y) ? b.y : 0,
+        w: Number.isFinite(b.w) ? b.w : 0,
+        h: Number.isFinite(b.h) ? b.h : 0
+      })
+    }
+    s.detections = out
+    this.persistIndex()
+  }
+
+  private formatDetectionSummary(result: RecognitionResult): string {
+    const topN: number = Math.min(3, result.boxes.length)
+    const chunks: Array<string> = []
+    for (let i: number = 0; i < topN; i++) {
+      const one = result.boxes[i]
+      const scoreText: string = (Math.max(0, one.score) * 100).toFixed(1)
+      chunks.push(`${one.label} ${scoreText}%`)
+    }
+    return chunks.join(' | ')
+  }
+
+  private cloneDetections(src: Array<ReplayDetectionBox>): Array<ReplayDetectionBox> {
+    const out: Array<ReplayDetectionBox> = []
+    for (let i: number = 0; i < src.length; i++) {
+      const one: ReplayDetectionBox = src[i]
+      out.push({
+        label: typeof one.label === 'string' ? one.label : '',
+        score: Number.isFinite(one.score) ? one.score : 0,
+        x: Number.isFinite(one.x) ? one.x : 0,
+        y: Number.isFinite(one.y) ? one.y : 0,
+        w: Number.isFinite(one.w) ? one.w : 0,
+        h: Number.isFinite(one.h) ? one.h : 0
+      })
+    }
+    return out
   }
 }
 

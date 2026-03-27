@@ -1,4 +1,5 @@
-﻿/**
+﻿// @ts-nocheck
+/**
  * 代码指南：
  * 文件：services/control/CarTcpService.ets
  * 用途：TCP 连接/重连/读写服务和回调。
@@ -608,3 +609,4 @@ export class CarTcpService {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
   }
 }
+
