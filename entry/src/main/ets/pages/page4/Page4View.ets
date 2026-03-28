@@ -75,8 +75,8 @@ export struct Page4View {
   private lastGoodOpenClawHost: string = ''
   private openClawHostCooldownUntilMs: Record<string, number> = {}
   private readonly openClawHostCooldownMs: number = 25000
-  private readonly openClawRetryConnectTimeoutMs: number = 2200
-  private readonly openClawRetryReadTimeoutMs: number = 16000
+  private readonly openClawRetryConnectTimeoutMs: number = 5000
+  private readonly openClawRetryReadTimeoutMs: number = 45000
   private readonly openClawSystemPrompt: string =
     '你是智能小车的车控助手。优先使用简洁中文回复；涉及行驶或安全动作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
 

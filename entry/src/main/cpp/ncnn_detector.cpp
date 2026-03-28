@@ -160,7 +160,8 @@ OutputGroup GuessOutputs(const std::string& modelName) {
 void ConfigureNet(ncnn::Net& net) {
     ncnn::Option opt;
     opt.lightmode = true;
-    opt.num_threads = 1;
+    // Speed-first tuning: 2 threads usually reduces end-to-end latency on mobile CPUs.
+    opt.num_threads = 2;
     // Use default allocators for stability on OpenHarmony 3.2.
     // Custom pool allocator clear() has triggered tagged-pointer aborts on some devices.
     opt.blob_allocator = nullptr;

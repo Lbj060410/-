@@ -9,6 +9,9 @@
 import resourceManager from '@ohos.resourceManager'
 import image from '@ohos.multimedia.image'
 import picker from '@ohos.file.picker'
+import fs from '@ohos.file.fs'
+import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
+import type common from '@ohos.app.ability.common'
 import { Page1Theme } from '../page1/Page1Theme'
 import { videoStore, VideoStore, DisplayMode } from '../../state/VideoStore'
 import { recogStore, RecogStore } from '../../state/RecogStore'
@@ -1133,6 +1136,12 @@ export struct Page2View {
 
   private async pickImageFromGallery(): Promise<void> {
     try {
+      const mediaOk: boolean = await this.ensureMediaReadPermission()
+      if (!mediaOk) {
+        this.videoStore.setStatus('缺少媒体读取权限，无法识别选图')
+        return
+      }
+
       const photoPicker: picker.PhotoViewPicker = new picker.PhotoViewPicker()
       const options: picker.PhotoSelectOptions = new picker.PhotoSelectOptions()
       options.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE
@@ -1149,10 +1158,25 @@ export struct Page2View {
       this.galleryOriginalUri = selectedUri
       this.videoStore.setSnapshot(undefined)
 
-      const taskId: string = this.c.enqueueSnapshotRecognitionFromGalleryUri(
-        selectedUri,
-        RecognitionSubtype.YOLOV26BARRIER
-      )
+      let taskId: string = ''
+      try {
+        const pickedPm: image.PixelMap = await this.loadPixelMapFromUri(selectedUri)
+        const previewPm: image.PixelMap | undefined = await this.clonePixelMap(pickedPm)
+        if (previewPm) {
+          this.videoStore.setSnapshot(previewPm)
+        }
+        taskId = this.c.enqueueSnapshotRecognitionFromPixelMap(
+          pickedPm,
+          RecognitionTaskSource.GALLERY,
+          RecognitionSubtype.YOLOV26BARRIER,
+          true
+        )
+      } catch (_) {
+        taskId = this.c.enqueueSnapshotRecognitionFromGalleryUri(
+          selectedUri,
+          RecognitionSubtype.YOLOV26BARRIER
+        )
+      }
       this.videoStore.setStatus(`选图识别已提交: ${taskId}`)
       void this.waitAndArchiveGalleryReplay(taskId, selectedUri)
     } catch (e) {
@@ -1162,12 +1186,114 @@ export struct Page2View {
     }
   }
 
-  private async loadPixelMapFromUri(uri: string): Promise<image.PixelMap> {
-    const src: image.ImageSource = image.createImageSource(uri)
+  private async ensureMediaReadPermission(): Promise<boolean> {
+    const ctx: common.UIAbilityContext | undefined = this.getUiContext()
+    if (!ctx) return true
+    const atManager: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager()
+    const perms: Array<Permissions> = ['ohos.permission.READ_MEDIA' as Permissions]
     try {
+      const result = await atManager.requestPermissionsFromUser(ctx, perms)
+      if (!result || !Array.isArray(result.authResults) || result.authResults.length <= 0) return false
+      return result.authResults[0] === 0
+    } catch (_) {
+      return false
+    }
+  }
+
+  private getUiContext(): common.UIAbilityContext | undefined {
+    const root: Record<string, Object | undefined> = globalThis as Record<string, Object | undefined>
+    const ctx: common.UIAbilityContext | undefined = root['abilityContext'] as common.UIAbilityContext | undefined
+    return ctx
+  }
+
+  private async loadPixelMapFromUri(uri: string): Promise<image.PixelMap> {
+    const raw: string = uri.trim()
+    const viaFd: image.PixelMap | undefined = await this.tryDecodePixelMapByFd(raw)
+    if (viaFd) return viaFd
+
+    const noQuery: string = this.stripUriQuery(raw)
+    const candidates: Array<string> = []
+    const pushUnique = (s: string): void => {
+      const one: string = s.trim()
+      if (one.length <= 0) return
+      for (let i: number = 0; i < candidates.length; i++) {
+        if (candidates[i] === one) return
+      }
+      candidates.push(one)
+    }
+    pushUnique(raw)
+    pushUnique(noQuery)
+    try { pushUnique(decodeURIComponent(raw)) } catch (_) {}
+    try { pushUnique(decodeURIComponent(noQuery)) } catch (_) {}
+    if (noQuery.toLowerCase().startsWith('file://')) {
+      const pathRaw: string = noQuery.substring('file://'.length)
+      pushUnique(pathRaw)
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+    }
+
+    let firstErr: string = ''
+    for (let i: number = 0; i < candidates.length; i++) {
+      let src: image.ImageSource | undefined = undefined
+      try {
+        src = image.createImageSource(candidates[i])
+        if (!src) continue
+        return await src.createPixelMap()
+      } catch (e) {
+        if (firstErr.length <= 0) firstErr = this.errorToText(e)
+      } finally {
+        if (src) {
+          try { src.release() } catch (_) {}
+        }
+      }
+    }
+    const scheme: string = this.uriScheme(raw)
+    const detail: string = firstErr.length > 0 ? `, err=${firstErr}` : ''
+    throw new Error(`gallery image decode failed, scheme=${scheme}${detail}`)
+  }
+
+  private async tryDecodePixelMapByFd(uri: string): Promise<image.PixelMap | undefined> {
+    if (uri.length <= 0) return undefined
+    let f: fs.File | undefined = undefined
+    let src: image.ImageSource | undefined = undefined
+    try {
+      f = fs.openSync(uri, fs.OpenMode.READ_ONLY)
+      src = image.createImageSource(f.fd)
+      if (!src) return undefined
       return await src.createPixelMap()
+    } catch (_) {
+      return undefined
     } finally {
-      try { src.release() } catch (_) {}
+      if (src) {
+        try { src.release() } catch (_) {}
+      }
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+  }
+
+  private stripUriQuery(uri: string): string {
+    const qPos: number = uri.indexOf('?')
+    const hPos: number = uri.indexOf('#')
+    let end: number = uri.length
+    if (qPos >= 0 && qPos < end) end = qPos
+    if (hPos >= 0 && hPos < end) end = hPos
+    return uri.substring(0, end)
+  }
+
+  private uriScheme(uri: string): string {
+    const pos: number = uri.indexOf('://')
+    if (pos <= 0) return 'unknown'
+    return uri.substring(0, pos).toLowerCase()
+  }
+
+  private errorToText(e: Object): string {
+    if (e instanceof Error) return e.message.length > 0 ? e.message : 'unknown error'
+    try {
+      const txt: string = JSON.stringify(e)
+      return txt.length > 0 ? txt : 'unknown error'
+    } catch (_) {
+      return 'unknown error'
     }
   }
 

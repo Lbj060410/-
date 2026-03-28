@@ -25,6 +25,9 @@ export interface Page2GalleryReplayItem {
   resultText: string
   originalImageRef: string
   boxedImageRef: string
+  boxes: Array<BBoxNorm>
+  imageWidth: number
+  imageHeight: number
 }
 
 interface FrameClipBufferItem {
@@ -138,14 +141,24 @@ export class Page2ReplayService {
   async onGalleryRecognition(originalPm: image.PixelMap, result: RecognitionResult): Promise<void> {
     const id: string = this.nextId('gal')
     const originalImageRef: string = await this.savePixelMapReference(originalPm, `${id}_origin`, false)
-    const boxedImageRef: string = await this.saveBoxedPixelMapReference(originalPm, result, `${id}_boxed`, false)
+    let imgW: number = 0
+    let imgH: number = 0
+    try {
+      const info: image.ImageInfo = await originalPm.getImageInfo()
+      imgW = Math.max(0, info.size.width)
+      imgH = Math.max(0, info.size.height)
+    } catch (_) {}
+    const boxes: Array<BBoxNorm> = await this.cloneBoxesForReplay(result, imgW, imgH)
     this.pushGallery({
       id,
       tsMs: Date.now(),
       buttonName: this.galleryButtonName(result),
       resultText: this.formatResultText(result),
       originalImageRef,
-      boxedImageRef
+      boxedImageRef: originalImageRef,
+      boxes,
+      imageWidth: imgW,
+      imageHeight: imgH
     })
   }
 
@@ -158,7 +171,10 @@ export class Page2ReplayService {
         buttonName: this.galleryButtonName(result),
         resultText: this.formatResultText(result),
         originalImageRef: '',
-        boxedImageRef: ''
+        boxedImageRef: '',
+        boxes: await this.cloneBoxesForReplay(result, 0, 0),
+        imageWidth: 0,
+        imageHeight: 0
       })
       return
     }
@@ -167,22 +183,91 @@ export class Page2ReplayService {
 
   async onGalleryRecognitionFromUri(selectedUri: string, result: RecognitionResult): Promise<void> {
     const id: string = this.nextId('gal')
-    const pm: image.PixelMap | undefined = videoStore.snapshotPixelMap
-    let boxedImageRef: string = ''
+    const boxedImageRef: string = selectedUri
+    let imgW: number = 0
+    let imgH: number = 0
+    let pm: image.PixelMap | undefined = videoStore.snapshotPixelMap
+    if (!pm) {
+      pm = await this.loadPixelMapFromUriSafe(selectedUri)
+    }
     if (pm) {
-      boxedImageRef = await this.saveBoxedPixelMapReference(pm, result, `${id}_boxed`, false)
+      try {
+        const info: image.ImageInfo = await pm.getImageInfo()
+        imgW = Math.max(0, info.size.width)
+        imgH = Math.max(0, info.size.height)
+      } catch (_) {}
+      if (pm !== videoStore.snapshotPixelMap) {
+        try { pm.release() } catch (_) {}
+      }
     }
-    if (boxedImageRef.length <= 0) {
-      boxedImageRef = selectedUri
-    }
+    const boxes: Array<BBoxNorm> = await this.cloneBoxesForReplay(result, imgW, imgH)
     this.pushGallery({
       id,
       tsMs: Date.now(),
       buttonName: this.galleryButtonName(result),
       resultText: this.formatResultText(result),
       originalImageRef: selectedUri,
-      boxedImageRef
+      boxedImageRef,
+      boxes,
+      imageWidth: imgW,
+      imageHeight: imgH
     })
+  }
+
+  private async cloneBoxesForReplay(result: RecognitionResult, imgW: number, imgH: number): Promise<Array<BBoxNorm>> {
+    void imgW
+    void imgH
+    const out: Array<BBoxNorm> = []
+    const src: Array<BBoxNorm> = Array.isArray(result.boxes) ? result.boxes : []
+    for (let i: number = 0; i < src.length; i++) {
+      const one: BBoxNorm = src[i]
+      out.push({
+        x: one.x,
+        y: one.y,
+        w: one.w,
+        h: one.h,
+        score: one.score,
+        label: one.label
+      })
+    }
+    return out
+  }
+
+  private async loadPixelMapFromUriSafe(uri: string): Promise<image.PixelMap | undefined> {
+    const one: string = uri.trim()
+    if (one.length <= 0) return undefined
+    const candidates: Array<string> = []
+    const pushUnique = (s: string): void => {
+      const v: string = s.trim()
+      if (v.length <= 0) return
+      for (let i: number = 0; i < candidates.length; i++) {
+        if (candidates[i] === v) return
+      }
+      candidates.push(v)
+    }
+    pushUnique(one)
+    try { pushUnique(decodeURIComponent(one)) } catch (_) {}
+    if (one.toLowerCase().startsWith('file://')) {
+      const pathRaw: string = one.substring('file://'.length)
+      pushUnique(pathRaw)
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+    }
+
+    for (let i: number = 0; i < candidates.length; i++) {
+      let src: image.ImageSource | undefined = undefined
+      try {
+        src = image.createImageSource(candidates[i])
+        if (!src) continue
+        return await src.createPixelMap()
+      } catch (_) {
+        // try next candidate
+      } finally {
+        if (src) {
+          try { src.release() } catch (_) {}
+        }
+      }
+    }
+    return undefined
   }
 
   async archiveOriginalSnapshotToGallery(pm: image.PixelMap, key: string): Promise<string> {
@@ -190,10 +275,26 @@ export class Page2ReplayService {
   }
 
   private pushObstacle(item: Page2ObstacleReplayItem): void {
+    const cap: number = this.obstacleCap(item.triggerType)
     const next: Array<Page2ObstacleReplayItem> = [item]
+    let sameTypeCount: number = 1
     for (let i: number = 0; i < this.obstacleItems.length; i++) {
-      next.push(this.obstacleItems[i])
-      if (next.length >= MAX_OBSTACLE_ITEMS) break
+      const oldItem: Page2ObstacleReplayItem = this.obstacleItems[i]
+      if (oldItem.triggerType === item.triggerType) {
+        if (sameTypeCount >= cap) {
+          this.recycleObstacleItem(oldItem)
+          continue
+        }
+        sameTypeCount += 1
+      }
+      next.push(oldItem)
+    }
+
+    if (next.length > MAX_OBSTACLE_ITEMS) {
+      for (let i: number = MAX_OBSTACLE_ITEMS; i < next.length; i++) {
+        this.recycleObstacleItem(next[i])
+      }
+      next.splice(MAX_OBSTACLE_ITEMS, next.length - MAX_OBSTACLE_ITEMS)
     }
     this.obstacleItems = next
   }
@@ -212,6 +313,26 @@ export class Page2ReplayService {
     return `${prefix}-${Date.now()}-${this.seq}`
   }
 
+  private obstacleCap(triggerType: 'SHIGONG' | 'ULTRASONIC_01' | 'VISION'): number {
+    if (triggerType === 'ULTRASONIC_01') return 2
+    if (triggerType === 'SHIGONG') return 3
+    return 1
+  }
+
+  private recycleObstacleItem(item: Page2ObstacleReplayItem): void {
+    this.tryDeleteLocalRef(item.decisionImageRef)
+    for (let i: number = 0; i < item.clipFrameRefs.length; i++) {
+      this.tryDeleteLocalRef(item.clipFrameRefs[i])
+    }
+  }
+
+  private tryDeleteLocalRef(ref: string): void {
+    const path: string = ref.trim()
+    if (path.length <= 0) return
+    if (!path.startsWith(PAGE2_REPLAY_DIR)) return
+    try { fs.unlinkSync(path) } catch (_) {}
+  }
+
   private containsShigong(result: RecognitionResult): boolean {
     if (!result.ok || result.boxes.length <= 0) return false
     for (let i: number = 0; i < result.boxes.length; i++) {
@@ -224,18 +345,27 @@ export class Page2ReplayService {
   }
 
   private formatResultText(result: RecognitionResult): string {
-    if (!result.ok || result.boxes.length <= 0) return 'No target'
+    if (!result.ok || result.boxes.length <= 0) {
+      const err: string = (result.errorText ?? '').trim()
+      return err.length > 0 ? `Failed: ${err}` : 'Failed: No target'
+    }
     const topN: number = Math.min(5, result.boxes.length)
     const out: Array<string> = []
     for (let i: number = 0; i < topN; i++) {
       const one: BBoxNorm = result.boxes[i]
-      out.push(`${one.label} ${(Math.max(0, one.score) * 100).toFixed(1)}%`)
+      const xywh: string = `(${one.x.toFixed(3)}, ${one.y.toFixed(3)}, ${one.w.toFixed(3)}, ${one.h.toFixed(3)})`
+      out.push(`${one.label} ${(Math.max(0, one.score) * 100).toFixed(1)}% ${xywh}`)
     }
     return out.join('\n')
   }
 
   private galleryButtonName(result: RecognitionResult): string {
-    if (!result.ok || result.boxes.length <= 0) return 'Recognize Failed'
+    if (!result.ok || result.boxes.length <= 0) {
+      const err: string = (result.errorText ?? '').trim()
+      if (err.length <= 0) return 'Recognize Failed'
+      const shortErr: string = err.length > 18 ? `${err.substring(0, 18)}...` : err
+      return `Failed: ${shortErr}`
+    }
     const one: BBoxNorm = result.boxes[0]
     return `${one.label} ${(Math.max(0, one.score) * 100).toFixed(0)}%`
   }

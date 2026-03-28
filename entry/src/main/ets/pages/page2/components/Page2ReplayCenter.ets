@@ -5,8 +5,29 @@ import {
   Page2GalleryReplayItem,
   Page2ObstacleReplayItem
 } from '../../../services/replay/Page2ReplayService'
+import { BBoxNorm } from '../../../services/recognition/RecognitionResult'
 
 type ReplayTab = 'obstacle' | 'gallery'
+const OBSTACLE_REPLAY_LOOP_MS: number = 2000
+const GALLERY_BOX_CANVAS_W: number = 320
+const GALLERY_BOX_CANVAS_H: number = 250
+
+interface ReplayOverlayBoxViewModel {
+  key: string
+  label: string
+  score: number
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+interface Rect2d {
+  x: number
+  y: number
+  w: number
+  h: number
+}
 
 @Component
 export struct Page2ReplayCenter {
@@ -240,29 +261,16 @@ export struct Page2ReplayCenter {
           .fontColor(Page1Theme.TEXT_TERTIARY)
           .width('100%')
         Image(item.originalImageRef)
-          .width('100%')
-          .height(250)
+          .width(GALLERY_BOX_CANVAS_W)
+          .height(GALLERY_BOX_CANVAS_H)
           .objectFit(ImageFit.Contain)
           .backgroundColor('#F8FAFC')
           .borderRadius(8)
-        Text('Box Crop')
+        Text('Box Overlay')
           .fontSize(12)
           .fontColor(Page1Theme.TEXT_TERTIARY)
           .width('100%')
-        if (item.boxedImageRef.length > 0) {
-          Image(item.boxedImageRef)
-            .width('100%')
-            .height(250)
-            .objectFit(ImageFit.Contain)
-            .backgroundColor('#F8FAFC')
-            .borderRadius(8)
-        } else {
-          Column() {
-            Text('No crop').fontSize(12).fontColor(Page1Theme.TEXT_TERTIARY)
-          }
-          .width('100%').height(250).justifyContent(FlexAlign.Center)
-          .backgroundColor('#F8FAFC').borderRadius(8)
-        }
+        this.buildGalleryOverlay(item)
       }
       .width('50%')
       .height(540)
@@ -287,6 +295,114 @@ export struct Page2ReplayCenter {
       .borderRadius(10)
     }
     .width('100%')
+  }
+
+  @Builder
+  private buildGalleryOverlay(item: Page2GalleryReplayItem): void {
+    if (item.originalImageRef.length <= 0) {
+      Column() {
+        Text('No image').fontSize(12).fontColor(Page1Theme.TEXT_TERTIARY)
+      }
+      .width('100%').height(250).justifyContent(FlexAlign.Center)
+      .backgroundColor('#F8FAFC').borderRadius(8)
+    } else {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Image(item.originalImageRef)
+          .width(GALLERY_BOX_CANVAS_W)
+          .height(GALLERY_BOX_CANVAS_H)
+          .objectFit(ImageFit.Contain)
+          .backgroundColor('#F8FAFC')
+          .borderRadius(8)
+
+        ForEach(this.overlayBoxes(item), (box: ReplayOverlayBoxViewModel, idx: number): void => {
+          Column() {}
+            .width(Math.max(1, Math.round(box.w)))
+            .height(Math.max(1, Math.round(box.h)))
+            .border({ width: 2, color: '#22C55E' })
+            .backgroundColor('#00000000')
+            .position({
+              x: Math.round(box.x),
+              y: Math.round(box.y)
+            })
+        }, (box: ReplayOverlayBoxViewModel, idx: number): string => box.key)
+      }
+      .width(GALLERY_BOX_CANVAS_W)
+      .height(GALLERY_BOX_CANVAS_H)
+      .backgroundColor('#F8FAFC')
+      .borderRadius(8)
+      .clip(true)
+    }
+  }
+
+  private overlayBoxes(item: Page2GalleryReplayItem): Array<ReplayOverlayBoxViewModel> {
+    const out: Array<ReplayOverlayBoxViewModel> = []
+    const src: Array<BBoxNorm> = Array.isArray(item.boxes) ? item.boxes : []
+    const srcW: number = item.imageWidth > 0 ? item.imageWidth : GALLERY_BOX_CANVAS_W
+    const srcH: number = item.imageHeight > 0 ? item.imageHeight : GALLERY_BOX_CANVAS_H
+    const contentRect: Rect2d = this.computeContainRect(GALLERY_BOX_CANVAS_W, GALLERY_BOX_CANVAS_H, srcW, srcH)
+    for (let i: number = 0; i < src.length; i++) {
+      const b: BBoxNorm = src[i]
+      const srcRect: Rect2d | undefined = this.toSourcePixelRectLikePage2(b, srcW, srcH)
+      if (!srcRect) continue
+      const drawX: number = contentRect.x + (srcRect.x / srcW) * contentRect.w
+      const drawY: number = contentRect.y + (srcRect.y / srcH) * contentRect.h
+      const drawW: number = (srcRect.w / srcW) * contentRect.w
+      const drawH: number = (srcRect.h / srcH) * contentRect.h
+      if (drawW < 2 || drawH < 2) continue
+      out.push({
+        key: `${b.label}-${i}-${Math.round(b.score * 1000)}`,
+        label: b.label,
+        score: b.score,
+        x: drawX,
+        y: drawY,
+        w: drawW,
+        h: drawH
+      })
+      if (out.length >= 12) break
+    }
+    return out
+  }
+
+  // Keep this mapping aligned with Page2View.toSourcePixelRect behavior.
+  private toSourcePixelRectLikePage2(box: BBoxNorm, srcW: number, srcH: number): { x: number, y: number, w: number, h: number } | undefined {
+    const maybeNormalized: boolean = box.w <= 1.0 && box.h <= 1.0
+    const rawX: number = maybeNormalized ? box.x * srcW : box.x
+    const rawY: number = maybeNormalized ? box.y * srcH : box.y
+    const rawW: number = maybeNormalized ? box.w * srcW : box.w
+    const rawH: number = maybeNormalized ? box.h * srcH : box.h
+
+    let x0: number = Math.max(0, Math.min(rawX, srcW))
+    let y0: number = Math.max(0, Math.min(rawY, srcH))
+    let x1: number = Math.max(0, Math.min(rawX + rawW, srcW))
+    let y1: number = Math.max(0, Math.min(rawY + rawH, srcH))
+
+    if (x1 <= x0 || y1 <= y0) {
+      // Fallback for corner-format (x1,y1,x2,y2)
+      x0 = Math.max(0, Math.min(Math.min(rawX, rawW), srcW))
+      y0 = Math.max(0, Math.min(Math.min(rawY, rawH), srcH))
+      x1 = Math.max(0, Math.min(Math.max(rawX, rawW), srcW))
+      y1 = Math.max(0, Math.min(Math.max(rawY, rawH), srcH))
+      if (x1 <= x0 || y1 <= y0) return undefined
+    }
+
+    return {
+      x: x0,
+      y: y0,
+      w: x1 - x0,
+      h: y1 - y0
+    }
+  }
+
+  private computeContainRect(viewW: number, viewH: number, srcW: number, srcH: number): Rect2d {
+    const scale: number = Math.min(viewW / srcW, viewH / srcH)
+    const w: number = srcW * scale
+    const h: number = srcH * scale
+    return {
+      x: (viewW - w) * 0.5,
+      y: (viewH - h) * 0.5,
+      w,
+      h
+    }
   }
 
   @Builder
@@ -366,11 +482,16 @@ export struct Page2ReplayCenter {
 
   private startPlaying(): void {
     if (this.timerId >= 0) clearInterval(this.timerId)
+    const item: Page2ObstacleReplayItem | undefined = this.selectedObstacleItem()
+    const frameCount: number = item ? item.clipFrameRefs.length : 0
+    const stepMs: number = frameCount > 0
+      ? Math.max(60, Math.round(OBSTACLE_REPLAY_LOOP_MS / frameCount))
+      : 160
     this.timerId = setInterval((): void => {
       const item: Page2ObstacleReplayItem | undefined = this.selectedObstacleItem()
       if (!item || item.clipFrameRefs.length <= 0) return
       this.playingIndex = (this.playingIndex + 1) % item.clipFrameRefs.length
-    }, 160) as number
+    }, stepMs) as number
   }
 
   private stopPlaying(): void {

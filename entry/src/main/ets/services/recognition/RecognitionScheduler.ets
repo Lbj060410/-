@@ -8,6 +8,7 @@
 // entry/src/main/ets/services/recognition/RecognitionScheduler.ets
 import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
+import fs from '@ohos.file.fs'
 
 import { RecogStore } from '../../state/RecogStore'
 import { videoStore } from '../../state/VideoStore'
@@ -606,13 +607,10 @@ export class RecognitionScheduler {
     } else if (task.input.type === RecognitionInputType.GALLERY_URI) {
       const uri: string | undefined = task.input.galleryUri
       if (!uri || uri.trim().length <= 0) throw new Error('gallery uri empty')
-      const src: image.ImageSource = image.createImageSource(uri)
-      try {
-        pm = await src.createPixelMap()
-        videoStore.setSnapshot(pm)
-      } finally {
-        try { src.release() } catch (_) {}
-      }
+      const one: PixelMap | undefined = await this.createPixelMapFromGalleryUri(uri)
+      if (!one) throw new Error('gallery uri decode failed')
+      pm = one
+      videoStore.setSnapshot(pm)
     } else {
       throw new Error('unsupported input type')
     }
@@ -688,7 +686,9 @@ export class RecognitionScheduler {
     // 离线 NCNN：所有任务都按 subtype 选模型，避免 SNAPSHOT/GALLERY 误用默认模型。
     if (this.store.recogEngineType === RecogEngineType.OFFLINE_NCNN) {
       const subtype: RecognitionSubtype = task.subtype
-      const conf: number = this.store.recogOfflineConfThresh
+      // Gallery/Snapshot 更容易出现漏检，单独使用更低阈值；实时流保持当前阈值。
+      const defaultConf: number = this.store.recogOfflineConfThresh
+      const conf: number = this.confForTask(task, defaultConf)
       const engineType: RecogEngineType = this.store.recogEngineType
       if (!this.liveService ||
         this.liveServiceSubtype !== subtype ||
@@ -704,6 +704,15 @@ export class RecognitionScheduler {
 
     this.refreshServiceIfNeeded()
     return this.service
+  }
+
+  private confForTask(task: RecognitionTask, defaultConf: number): number {
+    if (task.subtype === RecognitionSubtype.YOLOV26BARRIER &&
+      task.kind === RecognitionTaskKind.SNAPSHOT &&
+      (task.source === RecognitionTaskSource.GALLERY || task.source === RecognitionTaskSource.PAGE2_BUTTON)) {
+      return Math.min(defaultConf, 0.12)
+    }
+    return defaultConf
   }
 
   private releaseLiveFrameIfOwned(pm: PixelMap, releaseAfterUse: boolean): void {
@@ -896,5 +905,121 @@ export class RecognitionScheduler {
         reject(err)
       })
     })
+  }
+
+  private createImageSourceFromGalleryUri(uri: string): image.ImageSource | undefined {
+    const raw: string = uri.trim()
+    const noQuery: string = this.stripUriQuery(raw)
+    if (raw.length <= 0) return undefined
+
+    const candidates: Array<string> = []
+    let firstErr: string = ''
+    const pushUnique = (s: string): void => {
+      const one: string = s.trim()
+      if (one.length <= 0) return
+      for (let i: number = 0; i < candidates.length; i++) {
+        if (candidates[i] === one) return
+      }
+      candidates.push(one)
+    }
+
+    pushUnique(raw)
+    pushUnique(noQuery)
+    try { pushUnique(decodeURIComponent(raw)) } catch (_) {}
+    try { pushUnique(decodeURIComponent(noQuery)) } catch (_) {}
+
+    const lower: string = noQuery.toLowerCase()
+    if (lower.startsWith('file://')) {
+      const pathRaw: string = noQuery.substring('file://'.length)
+      pushUnique(pathRaw)
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+    }
+
+    for (let i: number = 0; i < candidates.length; i++) {
+      try {
+        const src: image.ImageSource = image.createImageSource(candidates[i])
+        if (src) return src
+      } catch (e) {
+        if (firstErr.length <= 0) firstErr = this.errorToText(e)
+      }
+    }
+
+    // Fallback: some gallery URIs cannot be passed to createImageSource directly.
+    // Try open+read bytes and decode from ArrayBuffer.
+    const maxBytes: number = 40 * 1024 * 1024
+    for (let i: number = 0; i < candidates.length; i++) {
+      let f: fs.File | undefined = undefined
+      try {
+        f = fs.openSync(candidates[i], fs.OpenMode.READ_ONLY)
+        const st = fs.statSync(candidates[i])
+        const size: number = Number(st.size)
+        if (!Number.isFinite(size) || size <= 0 || size > maxBytes) continue
+        const buf: ArrayBuffer = new ArrayBuffer(size)
+        const readLen: number = fs.readSync(f.fd, buf)
+        if (!Number.isFinite(readLen) || readLen <= 0) continue
+        const bytes: ArrayBuffer = readLen === size ? buf : buf.slice(0, readLen)
+        const src: image.ImageSource = image.createImageSource(bytes)
+        if (src) return src
+      } catch (e) {
+        if (firstErr.length <= 0) firstErr = this.errorToText(e)
+      } finally {
+        if (f) {
+          try { fs.closeSync(f.fd) } catch (_) {}
+        }
+      }
+    }
+    if (firstErr.length > 0) {
+      throw new Error(`gallery uri decode failed: ${firstErr}`)
+    }
+    return undefined
+  }
+
+  private async createPixelMapFromGalleryUri(uri: string): Promise<PixelMap | undefined> {
+    const raw: string = uri.trim()
+    let f: fs.File | undefined = undefined
+    let srcByFd: image.ImageSource | undefined = undefined
+    try {
+      f = fs.openSync(raw, fs.OpenMode.READ_ONLY)
+      srcByFd = image.createImageSource(f.fd)
+      if (srcByFd) {
+        return await srcByFd.createPixelMap()
+      }
+    } catch (_) {
+      // fallback below
+    } finally {
+      if (srcByFd) {
+        try { srcByFd.release() } catch (_) {}
+      }
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+
+    const src: image.ImageSource | undefined = this.createImageSourceFromGalleryUri(uri)
+    if (!src) return undefined
+    try {
+      return await src.createPixelMap()
+    } finally {
+      try { src.release() } catch (_) {}
+    }
+  }
+
+  private stripUriQuery(uri: string): string {
+    const qPos: number = uri.indexOf('?')
+    const hPos: number = uri.indexOf('#')
+    let end: number = uri.length
+    if (qPos >= 0 && qPos < end) end = qPos
+    if (hPos >= 0 && hPos < end) end = hPos
+    return uri.substring(0, end)
+  }
+
+  private errorToText(e: Object): string {
+    if (e instanceof Error) return e.message.length > 0 ? e.message : 'unknown error'
+    try {
+      const txt: string = JSON.stringify(e)
+      return txt.length > 0 ? txt : 'unknown error'
+    } catch (_) {
+      return 'unknown error'
+    }
   }
 }

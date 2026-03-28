@@ -266,14 +266,14 @@ export class Page2Coordinator {
       recogStore.setRecogEngineType(RecogEngineType.OFFLINE_NCNN)
     }
     // 根据模型开关设置阈值：yolov26barrier 略低，traffic 略高以减少误检。
-    const wantedConf: number = videoStore.page2Yolov26BarrierExperimentalEnabled ? 0.1 : 0.28
+    // Speed-first tuning: raise yolov26barrier confidence to cut proposals and postprocess cost.
+    const wantedConf: number = videoStore.page2Yolov26BarrierExperimentalEnabled ? 0.25 : 0.28
     if (Math.abs(recogStore.recogOfflineConfThresh - wantedConf) > 0.001) {
       recogStore.setRecogOfflineConfThresh(wantedConf)
     }
   }
 
-  private async dispatchLiveRecognition(frame: VideoFrame, recogPm: image.PixelMap): Promise<void> {
-    void frame
+  private async dispatchLiveRecognition(frame: VideoFrame, recogPm: image.PixelMap): Promise<void> { 
     try {
       const liveSubtype: RecognitionSubtype | undefined = this.currentLiveSubtype()
       if (liveSubtype === undefined) return
