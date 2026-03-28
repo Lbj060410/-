@@ -162,9 +162,9 @@ import {
   schedulerDeps as schedulerDepsOp
 } from './Page1CoordinatorPlanMotionOps'
 import {
-  isShigongBarrierLabelKey,
-  normalizeBarrierLabelKey
-} from './TrafficBarrierLabelPolicy'
+  isShigongYolov26BarrierLabelKey,
+  normalizeYolov26BarrierLabelKey
+} from './TrafficYolov26BarrierLabelPolicy'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 import hilog from '@ohos.hilog'
 
@@ -277,7 +277,7 @@ export class Page1Coordinator {
   private emergencyAlarmBurstActive: boolean = false
   private emergencyAlarmBurstAckAtMs: number = 0
   private emergencyAlarmBurstLastSendAtMs: number = 0
-  private barrierEmergencyBusy: boolean = false
+  private yolov26barrierEmergencyBusy: boolean = false
   private emergencyRecoverBypassUntilMs: number = 0
   private emergencyMotionCommandLocked: boolean = false
   private emergencyCommandSeq: number = 0
@@ -300,8 +300,8 @@ export class Page1Coordinator {
   private lightMetricQueryEnabled: boolean = false
   private lightMetricReady: boolean = false
   private lightMetricLastQueryAtMs: number = 0
-  private lastBarrierEmergencyTaskId: string = ''
-  private lastBarrierEmergencyTsMs: number = 0
+  private lastYolov26BarrierEmergencyTaskId: string = ''
+  private lastYolov26BarrierEmergencyTsMs: number = 0
   private started: boolean = false
   private starting: boolean = false
 
@@ -749,7 +749,7 @@ export class Page1Coordinator {
   private bootstrapRecognitionCenter(): void {
     const scheduler = ensureRecognitionCenter()
     scheduler.bindProtocolService(this.proto)
-    scheduler.setLiveSubtype(RecognitionSubtype.BARRIER)
+    scheduler.setLiveSubtype(RecognitionSubtype.YOLOV26BARRIER)
   }
 
   private clearDeferredConnect(): void {
@@ -800,7 +800,7 @@ export class Page1Coordinator {
     this.actionScheduler.reset()
     this.emergencyMotionCommandLocked = false
     this.emergencyRecoverBypassUntilMs = 0
-    this.barrierEmergencyBusy = false
+    this.yolov26barrierEmergencyBusy = false
     this.emergencyPendingReplan = false
     this.emergencyPendingBlockedEdgeId = ''
 
@@ -1443,15 +1443,8 @@ export class Page1Coordinator {
     const to: string = toId.trim().toUpperCase()
     if (from !== 'B4' || to !== 'B2') return
 
-    const nowMs: number = Date.now()
-    this.gateBillingRunning = true
-    this.gateBillingStartAtMs = nowMs
-    this.gateBillingElapsedMs = 0
-    s.pushLog('GATE_BILLING: 入闸完成(BD=02)，开始计时并发送 billing')
-
-    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-    s.bumpTx()
-    await this.proto.billing()
+    // billing 已废弃：道闸计时改为在 B2->B4 depart 发送时开始，B4->B2 depart 发送时结束。
+    s.pushLog('GATE_BILLING: 忽略旧的 GO-ACK billing 流程，当前使用 depart 起止计时')
   }
 
   private isGarageTerminalNode(nodeId: string): boolean {
@@ -1786,14 +1779,14 @@ export class Page1Coordinator {
     }
   }
 
-  private hasShigongBarrierFromLatestRecog(): boolean {
+  private hasShigongYolov26BarrierFromLatestRecog(): boolean {
     const r: RecognitionResult | undefined = recogStore.lastRecog
-    if (!r || !r.ok || r.subtype !== RecognitionSubtype.BARRIER || r.boxes.length <= 0) return false
+    if (!r || !r.ok || r.subtype !== RecognitionSubtype.YOLOV26BARRIER || r.boxes.length <= 0) return false
     for (let i: number = 0; i < r.boxes.length; i++) {
       const box: BBoxNorm = r.boxes[i]
       if (box.score < 0.18) continue
-      const key: string = normalizeBarrierLabelKey(box.label)
-      if (isShigongBarrierLabelKey(key)) return true
+      const key: string = normalizeYolov26BarrierLabelKey(box.label)
+      if (isShigongYolov26BarrierLabelKey(key)) return true
     }
     return false
   }
@@ -1809,7 +1802,7 @@ export class Page1Coordinator {
     }
     const blockedEdgeId: string = this.emergencyPendingBlockedEdgeId
     if (blockedEdgeId.length > 0) {
-      s.addBlockedEdgeIfAbsent(blockedEdgeId, 'EMERGENCY_BARRIER')
+      s.addBlockedEdgeIfAbsent(blockedEdgeId, 'EMERGENCY_YOLOV26BARRIER')
       const mergedNodes: Array<string> = this.promoteBlockedEdgePairsToBlockedNodes()
       if (mergedNodes.length > 0) {
         s.pushLog(`EMERGENCY_REPLAN: edge->node ${mergedNodes.join(',')}`)
@@ -1825,23 +1818,23 @@ export class Page1Coordinator {
     this.planPath(s.destApplied)
   }
 
-  maybeHandleBarrierEmergencyStop(nowMs: number): boolean {
+  maybeHandleYolov26BarrierEmergencyStop(nowMs: number): boolean {
     if (nowMs < this.emergencyRecoverBypassUntilMs) return false
     const r: RecognitionResult | undefined = recogStore.lastRecog
-    if (!r || !r.ok || r.subtype !== RecognitionSubtype.BARRIER) return false
-    if (!this.hasShigongBarrierFromLatestRecog()) return false
-    if (this.barrierEmergencyBusy) return true
-    if (r.taskId.length > 0 && r.taskId === this.lastBarrierEmergencyTaskId) return false
-    if (r.tsMs > 0 && r.tsMs <= this.lastBarrierEmergencyTsMs) return false
+    if (!r || !r.ok || r.subtype !== RecognitionSubtype.YOLOV26BARRIER) return false
+    if (!this.hasShigongYolov26BarrierFromLatestRecog()) return false
+    if (this.yolov26barrierEmergencyBusy) return true
+    if (r.taskId.length > 0 && r.taskId === this.lastYolov26BarrierEmergencyTaskId) return false
+    if (r.tsMs > 0 && r.tsMs <= this.lastYolov26BarrierEmergencyTsMs) return false
 
-    this.barrierEmergencyBusy = true
-    this.lastBarrierEmergencyTaskId = r.taskId
-    this.lastBarrierEmergencyTsMs = Math.max(this.lastBarrierEmergencyTsMs, r.tsMs)
+    this.yolov26barrierEmergencyBusy = true
+    this.lastYolov26BarrierEmergencyTaskId = r.taskId
+    this.lastYolov26BarrierEmergencyTsMs = Math.max(this.lastYolov26BarrierEmergencyTsMs, r.tsMs)
     this.emergencyPendingBlockedEdgeId = this.frontRouteEdgeIdForDriving()
     this.emergencyPendingReplan = true
 
-    void this.emergencyStopAndHold('BARRIER', 1000).finally((): void => {
-      this.barrierEmergencyBusy = false
+    void this.emergencyStopAndHold('YOLOV26BARRIER', 1000).finally((): void => {
+      this.yolov26barrierEmergencyBusy = false
     })
     return true
   }
@@ -1868,7 +1861,7 @@ export class Page1Coordinator {
 
     await this.sendDriveActionDirect(Page1Action.STOP)
     await this.sendEmergencyAlarmBurst(reason, 3, 10)
-    const keepPosOnly: boolean = reason === 'BARRIER'
+    const keepPosOnly: boolean = reason === 'YOLOV26BARRIER'
     this.resetToFreshRuntimeState(reason, keepPosOnly)
 
     s.pushLog(`EMERGENCY STOP: reason=${reason}, hold=${safeHoldMs}ms`)
@@ -1881,7 +1874,7 @@ export class Page1Coordinator {
     this.clearEmergencyAlarmTimer()
     this.clearEmergencyAutoRecoverTimer()
     this.clearMotionCommandBlock()
-    this.barrierEmergencyBusy = false
+    this.yolov26barrierEmergencyBusy = false
     this.emergencyRecoverBypassUntilMs = Date.now() + Math.max(1000, Math.round(graceMs))
     this.emergencyMotionCommandLocked = false
 

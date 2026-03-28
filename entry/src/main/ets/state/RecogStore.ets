@@ -43,7 +43,7 @@ export class RecogStore {
   // 默认使用本地 NCNN，避免 page2 实时识别误走 HTTP 端点。
   recogEngineType: RecogEngineType = RecogEngineType.OFFLINE_NCNN
   recogHttpEndpoint: string = 'http://192.168.1.100:5000/detect'  // 修改为你的电脑IP
-  recogOfflineModelName: string = 'barrier'
+  recogOfflineModelName: string = 'yolov26barrier'
   recogOfflineConfThresh: number = 0.35  // 匹配安卓 MINIMUM_CONFIDENCE_TF_OD_API = 0.3
 
   setRecogStatus(s: RecogStatus): void { this.recogStatus = s }
@@ -257,5 +257,4 @@ export class RecogStore {
 }
 
 export const recogStore: RecogStore = new RecogStore()
-
 

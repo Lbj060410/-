@@ -418,7 +418,10 @@ bool DecodeOut0(
     int bestRows = -1;
     int bestCols = -1;
     int expectedCols = 0;
-    if (modelName == "barrier" || modelName == "honglvdeng") {
+    if (modelName == "barrier" ||
+        modelName == "yolov26barrier" ||
+        modelName == "yolov5berrier" ||
+        modelName == "honglvdeng") {
         expectedCols = 7; // 4 box dims + 3 classes
     }
 

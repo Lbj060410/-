@@ -6,6 +6,7 @@
 
 export type ReplayTriggerType =
   'ULTRASONIC' |
+  'VISION_YOLOV26BARRIER' |
   'VISION_BARRIER' |
   'TRAFFIC_LIGHT' |
   'REPLAN'

@@ -281,7 +281,7 @@ export struct ReplayReviewPanel {
   }
 
   private isVisionSession(triggerType: ReplayTriggerType): boolean {
-    return triggerType === 'VISION_BARRIER' || triggerType === 'TRAFFIC_LIGHT'
+    return triggerType === 'VISION_YOLOV26BARRIER' || triggerType === 'TRAFFIC_LIGHT'
   }
 
   private selectedSession(): ReplaySession | undefined {

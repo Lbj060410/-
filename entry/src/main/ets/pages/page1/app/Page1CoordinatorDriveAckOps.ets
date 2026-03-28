@@ -59,7 +59,6 @@ function resolvePathAckCommandKey(actionText: string): string {
   if (actionText === '左半转') return 'LEFT_HALF'
   if (actionText === '右半转') return 'RIGHT_HALF'
   if (actionText === '掉头') return 'UTURN'
-  if (actionText === '道闸结算') return 'SETTLE_ACCOUNTS'
   if (actionText === '闸口放行') return 'GATE_DEPART'
   return ''
 }
@@ -110,10 +109,6 @@ async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number
   }
   if (key === 'UTURN') {
     await ctx.proto.uturn()
-    return true
-  }
-  if (key === 'SETTLE_ACCOUNTS') {
-    await ctx.proto.SrttleAccounts()
     return true
   }
   if (key === 'GATE_DEPART') {

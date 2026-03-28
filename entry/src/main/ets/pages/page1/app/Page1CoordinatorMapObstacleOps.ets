@@ -227,7 +227,7 @@ export function startsWithAny(s: string, prefixes: Array<string>): boolean {
 export function classifyLabel(label: string): VisionLabelKind {
   const x = label.trim().toLowerCase()
   if (x.length === 0) return VisionLabelKind.IGNORE
-  if (startsWithAny(x, ['obstacle/', 'block/', 'barrier/'])) return VisionLabelKind.OBSTACLE
+  if (startsWithAny(x, ['obstacle/', 'block/', 'yolov26barrier/'])) return VisionLabelKind.OBSTACLE
   if (x === 'person' || x === 'car' || x === 'truck' || x === 'bus' || x === 'cone' || x === 'barrel' || x === 'box' || x === 'obstacle') {
     return VisionLabelKind.OBSTACLE
   }
@@ -460,7 +460,7 @@ export function maybeReplanOnObstacle(ctx: any): void {
   if (!s) return
   if (ctx.trafficGateWaiting || ctx.aheadVisionPending || ctx.parkingInProgress) return
   const now = Date.now()
-  if (typeof ctx.maybeHandleBarrierEmergencyStop === 'function' && ctx.maybeHandleBarrierEmergencyStop(now)) return
+  if (typeof ctx.maybeHandleYolov26BarrierEmergencyStop === 'function' && ctx.maybeHandleYolov26BarrierEmergencyStop(now)) return
   if (s.destApplied.length === 0) return
   if (now < ctx.pauseUntilMs) return
   if (s.riskScore >= 95) commStore.bumpEStop()

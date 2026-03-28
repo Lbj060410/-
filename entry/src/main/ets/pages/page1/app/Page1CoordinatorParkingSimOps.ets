@@ -151,54 +151,9 @@ async function alignToParkingGoal(ctx: any, arrivedId: string, goalId: string): 
 async function runGateExitSettleBeforeDepart(ctx: any, curId: string, nextId: string): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
-  if (curId !== 'B2' || nextId !== 'B4') return true
-  if (!ctx.gateBillingRunning) return true
-
-  s.pushLog('GATE_SETTLE: 出闸前执行 leftHalf -> SrttleAccounts -> rightHalf')
-
-  const sentLeftHalf: boolean = await ctx.sendDriveActionDirect(Page1Action.LEFT_HALF)
-  if (!sentLeftHalf) {
-    s.pushLog('GATE_SETTLE: leftHalf 发送失败，取消本次出闸')
-    return false
+  if (curId === 'B2' && nextId === 'B4') {
+    s.pushLog('GATE_SETTLE: 已禁用 SrttleAccounts/billing，直接发送 depart')
   }
-  if (ctx.canRealSend()) {
-    const ackLeftOk: boolean = await ctx.waitForCurrentPathAckComplete(P1C.PATH_ACK_TIMEOUT_MS, 'GATE_SETTLE_LEFT_HALF')
-    if (!ackLeftOk) {
-      s.pushLog('GATE_SETTLE: leftHalf 等待BD=02超时，取消本次出闸')
-      return false
-    }
-  }
-
-  ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-  s.bumpTx()
-  await ctx.proto.SrttleAccounts()
-  if (ctx.canRealSend()) {
-    ctx.markPathCommandSent('道闸结算')
-    const ackSettleOk: boolean = await ctx.waitForCurrentPathAckComplete(P1C.PATH_ACK_TIMEOUT_MS, 'GATE_SETTLE_ACCOUNTS')
-    if (!ackSettleOk) {
-      s.pushLog('GATE_SETTLE: SrttleAccounts 等待BD=02超时，取消本次出闸')
-      return false
-    }
-  }
-
-  const sentRightHalf: boolean = await ctx.sendDriveActionDirect(Page1Action.RIGHT_HALF)
-  if (!sentRightHalf) {
-    s.pushLog('GATE_SETTLE: rightHalf 发送失败，取消本次出闸')
-    return false
-  }
-  if (ctx.canRealSend()) {
-    const ackRightOk: boolean = await ctx.waitForCurrentPathAckComplete(P1C.PATH_ACK_TIMEOUT_MS, 'GATE_SETTLE_RIGHT_HALF')
-    if (!ackRightOk) {
-      s.pushLog('GATE_SETTLE: rightHalf 等待BD=02超时，取消本次出闸')
-      return false
-    }
-  }
-
-  const elapsedMs: number = Math.max(0, Date.now() - (ctx.gateBillingStartAtMs > 0 ? ctx.gateBillingStartAtMs : Date.now()))
-  ctx.gateBillingElapsedMs = elapsedMs
-  ctx.gateBillingRunning = false
-  ctx.gateBillingStartAtMs = 0
-  s.pushLog(`GATE_SETTLE: 完成，本地计时 ${elapsedMs}ms`)
   return true
 }
 
@@ -371,6 +326,21 @@ export async function runHandleGateDepartOnArrival(ctx: any, arrivedId: string):
     }
 
     if (departSent) {
+      const departAtMs: number = Date.now()
+      if (curId === 'B2' && nextId === 'B4') {
+        ctx.gateBillingRunning = true
+        ctx.gateBillingStartAtMs = departAtMs
+        ctx.gateBillingElapsedMs = 0
+        s.pushLog(`GATE_BILLING: B2->B4 depart sent，开始内部计时 at=${departAtMs}`)
+      } else if (curId === 'B4' && nextId === 'B2') {
+        const elapsedMs: number = ctx.gateBillingStartAtMs > 0
+          ? Math.max(0, departAtMs - ctx.gateBillingStartAtMs)
+          : 0
+        ctx.gateBillingElapsedMs = elapsedMs
+        ctx.gateBillingRunning = false
+        ctx.gateBillingStartAtMs = 0
+        s.pushLog(`GATE_BILLING: B4->B2 depart sent，结束内部计时 elapsed=${elapsedMs}ms`)
+      }
       const nextActionAfterGate = ctx.peekNextActionAfterCurrentStep()
       const req = {
         action: Page1Action.GO,

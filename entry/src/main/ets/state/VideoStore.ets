@@ -70,10 +70,10 @@ export class VideoStore {
   recognitionEnabled: boolean = true
   lastRecognizeAtMs: number = 0
   recognizeIntervalMs: number = 200
-  // Page2 barrier 模型开关：默认开启。
-  page2BarrierExperimentalEnabled: boolean = true
+  // Page2 yolov26barrier 模型开关：默认开启。
+  page2Yolov26BarrierExperimentalEnabled: boolean = true
   // Page2 traffic 模型开关：默认关闭。
-  // 与 barrier 互斥：traffic 开启时 barrier 自动关闭。
+  // 与 yolov26barrier 互斥：traffic 开启时 yolov26barrier 自动关闭。
   page2TrafficEnabled: boolean = false
 
   // ==== RTSP 状态方法 ====
@@ -152,28 +152,28 @@ export class VideoStore {
   setRecognitionEnabled(enabled: boolean): void { this.recognitionEnabled = enabled }
 
   setRecognizeIntervalMs(ms: number): void { this.recognizeIntervalMs = ms }
-  setPage2BarrierEnabled(enabled: boolean): void {
+  setPage2Yolov26BarrierEnabled(enabled: boolean): void {
     if (enabled) {
-      this.page2BarrierExperimentalEnabled = true
+      this.page2Yolov26BarrierExperimentalEnabled = true
       this.page2TrafficEnabled = false
       return
     }
-    this.page2BarrierExperimentalEnabled = false
+    this.page2Yolov26BarrierExperimentalEnabled = false
     this.page2TrafficEnabled = true
   }
 
   setPage2TrafficEnabled(enabled: boolean): void {
     if (enabled) {
       this.page2TrafficEnabled = true
-      this.page2BarrierExperimentalEnabled = false
+      this.page2Yolov26BarrierExperimentalEnabled = false
       return
     }
     this.page2TrafficEnabled = false
-    this.page2BarrierExperimentalEnabled = true
+    this.page2Yolov26BarrierExperimentalEnabled = true
   }
 
-  // Compatibility: keep old API name, now mapped to barrier toggle semantics.
-  setPage2BarrierExperimentalEnabled(enabled: boolean): void { this.setPage2BarrierEnabled(enabled) }
+  // Compatibility: keep old API name, now mapped to yolov26barrier toggle semantics.
+  setPage2Yolov26BarrierExperimentalEnabled(enabled: boolean): void { this.setPage2Yolov26BarrierEnabled(enabled) }
 
   setDiagVideo(fps: number, latencyMs: number): void {
     this.diagVideoFps = fps

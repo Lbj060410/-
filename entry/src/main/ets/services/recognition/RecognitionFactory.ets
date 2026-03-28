@@ -11,28 +11,31 @@ import { HttpYoloRecognitionService } from './HttpYoloRecognitionService'
 import { NcnnRecognitionService } from './NcnnRecognitionService'
 import { RecognitionSubtype } from './RecognitionTask'
 
+const DEFAULT_YOLOV26BARRIER_MODEL: string = 'yolov26barrier'
+
 // 模型标签表（仅保留当前项目内置可用模型）
 const MODEL_LABELS: Record<string, string[]> = {
   'honglvdeng': ['red', 'yellow', 'green'],
-  'barrier': ['shigong', 'TrafficLight', 'GetOffTheCar']
+  'yolov26barrier': ['shigong', 'TrafficLight', 'GetOffTheCar']
 }
 
 /**
  * subtype → 离线模型名映射
- * - 仅映射当前保留模型，其他 subtype 统一回退到 barrier。
+ * - 仅映射当前保留模型，其他 subtype 统一回退到默认障碍模型。
  */
 export const SUBTYPE_MODEL: Record<number, string> = {
-  [RecognitionSubtype.OBSTACLE]: 'barrier',
-  [RecognitionSubtype.YOLO]: 'barrier',
+  [RecognitionSubtype.OBSTACLE]: DEFAULT_YOLOV26BARRIER_MODEL,
+  [RecognitionSubtype.YOLO]: DEFAULT_YOLOV26BARRIER_MODEL,
   [RecognitionSubtype.TRAFFIC_LIGHT]: 'honglvdeng',
-  [RecognitionSubtype.BARRIER]: 'barrier'
+  [RecognitionSubtype.YOLOV26BARRIER]: DEFAULT_YOLOV26BARRIER_MODEL
 }
 
 export class RecognitionFactory {
   private createOfflineService(engineType: RecogEngineType, modelName: string, labels: string[], conf: number): IRecognitionService {
     if (engineType === RecogEngineType.OFFLINE_NCNN) {
       const ncnnConf: number = conf > 0 ? conf : 0.3
-      return new NcnnRecognitionService(modelName, labels, ncnnConf, 0.5)
+      const fallbackModelName: string = modelName === 'yolov26barrier' ? 'barrier' : ''
+      return new NcnnRecognitionService(modelName, labels, ncnnConf, 0.5, fallbackModelName)
     }
 
     // MS 和 ONNX 已移除，降级到 MOCK
@@ -50,7 +53,7 @@ export class RecognitionFactory {
     }
 
     if (cfg.engineType === RecogEngineType.OFFLINE_NCNN) {
-      const modelName: string = cfg.offlineModelName || 'barrier'
+      const modelName: string = cfg.offlineModelName || DEFAULT_YOLOV26BARRIER_MODEL
       const labels: string[] = MODEL_LABELS[modelName] ?? []
       return this.createOfflineService(cfg.engineType, modelName, labels, cfg.offlineConfThresh)
     }
@@ -64,9 +67,8 @@ export class RecognitionFactory {
     conf: number = 0.4,
     engineType: RecogEngineType = RecogEngineType.OFFLINE_NCNN
   ): IRecognitionService {
-    const modelName: string = SUBTYPE_MODEL[subtype] ?? 'barrier'
+    const modelName: string = SUBTYPE_MODEL[subtype] ?? DEFAULT_YOLOV26BARRIER_MODEL
     const labels: string[] = MODEL_LABELS[modelName] ?? []
     return this.createOfflineService(engineType, modelName, labels, conf)
   }
 }
-

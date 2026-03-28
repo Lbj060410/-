@@ -29,7 +29,7 @@ function syncRecognitionBySegment(fromId: string, toId: string): void {
   if (trafficEnabled) {
     videoStore.setPage2TrafficEnabled(true)
   } else {
-    videoStore.setPage2BarrierEnabled(true)
+    videoStore.setPage2Yolov26BarrierEnabled(true)
   }
 }
 
@@ -38,13 +38,13 @@ function syncRecognitionByPathCursor(ctx: any): void {
   if (!s) return
   if (s.pathNodes.length <= 1) {
     videoStore.setRecognitionEnabled(true)
-    videoStore.setPage2BarrierEnabled(true)
+    videoStore.setPage2Yolov26BarrierEnabled(true)
     return
   }
   const idx: number = s.pathIndex
   if (idx < 0 || idx >= s.pathNodes.length - 1) {
     videoStore.setRecognitionEnabled(true)
-    videoStore.setPage2BarrierEnabled(true)
+    videoStore.setPage2Yolov26BarrierEnabled(true)
     return
   }
   const fromId: string = s.pathNodes[idx]
@@ -123,7 +123,7 @@ export function planPath(ctx: any, dest: string): void {
   if (!s) return
   const oldPath: Array<string> = s.pathNodes.slice()
   videoStore.setRecognitionEnabled(true)
-  videoStore.setPage2BarrierEnabled(true)
+  videoStore.setPage2Yolov26BarrierEnabled(true)
   ctx.resetGarageFlowState()
 
   ctx.clearAheadVisionReplanState()

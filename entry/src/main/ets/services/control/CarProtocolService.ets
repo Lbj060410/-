@@ -215,7 +215,7 @@ export class CarProtocolService {
   async ultrasonic(): Promise<void> {
     await this.sendControl0A(0x14, '超声波')
   }
-
+  //调用dapart小车开闸门的同时会自己前进
   async depart(): Promise<void>{
     await this.sendControl0A(0x15,"出库和入库")
   }

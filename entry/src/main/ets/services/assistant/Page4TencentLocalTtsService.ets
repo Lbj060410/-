@@ -226,10 +226,15 @@ export class Page4TencentLocalTtsService {
   private readonly region: string = 'ap-guangzhou'
   private readonly signer: Tc3Signer = new Tc3Signer()
   private readonly cacheDir: string = '/data/storage/el2/base/haps/entry/files/page4_tts'
+  private readonly playerCacheDir: string = '/data/storage/el2/base/haps/entry/cache/page4_tts'
   private queue: Promise<void> = Promise.resolve()
   private speakSeq: number = 0
   private activePlayer?: media.AVPlayer
   private readonly maxSpeakCharsPerChunk: number = 120
+  private readonly ttsConnectTimeoutMs: number = 12000
+  private readonly ttsReadTimeoutMs: number = 45000
+  private readonly ttsRequestRetryTimes: number = 1
+  private readonly ttsPlayRetryTimes: number = 1
 
   speak(text: string): Promise<void> {
     const content: string = this.normalizeText(text)
@@ -244,6 +249,11 @@ export class Page4TencentLocalTtsService {
       await this.speakPipeline(chunks, seq)
     })
     return this.queue
+  }
+
+  stop(): void {
+    this.speakSeq += 1
+    this.interruptActivePlayback()
   }
 
   private async speakPipeline(chunks: Array<string>, seq: number): Promise<void> {
@@ -262,11 +272,39 @@ export class Page4TencentLocalTtsService {
       const filePath: string = await currentPromise
       if (seq !== this.speakSeq || filePath.length <= 0) return
       try {
-        await this.playFile(filePath, seq)
+        await this.playFileWithRetry(filePath, seq)
       } finally {
         this.cleanupAudioFile(filePath)
       }
     }
+  }
+
+  private async playFileWithRetry(path: string, seq: number): Promise<void> {
+    let lastErrorText: string = 'unknown error'
+    const maxAttempts: number = 1 + this.ttsPlayRetryTimes
+    let avoidFdFallback: boolean = false
+    for (let attempt: number = 1; attempt <= maxAttempts; attempt++) {
+      if (seq !== this.speakSeq) return
+      try {
+        await this.playFile(path, seq, avoidFdFallback)
+        return
+      } catch (e) {
+        lastErrorText = this.errorToText(e)
+        if (this.isFdSourceRejectedError(lastErrorText)) {
+          avoidFdFallback = true
+        }
+        const retryable: boolean = this.isRetryablePlayError(lastErrorText)
+        this.logError('playRetry', `attempt=${attempt}/${maxAttempts}, retryable=${retryable ? 1 : 0}, err=${lastErrorText}`)
+        if (!retryable || attempt >= maxAttempts) {
+          throw e instanceof Error ? e : new Error(lastErrorText)
+        }
+        // 显式重建播放实例：释放当前 activePlayer 后，下次循环会创建新的 AVPlayer。
+        this.logInfo('playRecreatePlayer', `attempt=${attempt + 1}/${maxAttempts}`)
+        this.interruptActivePlayback()
+        await this.sleepMs(300)
+      }
+    }
+    throw new Error(lastErrorText)
   }
 
   private async synthChunkToFile(cfg: TtsRequestConfig, text: string, seq: number): Promise<string> {
@@ -340,37 +378,47 @@ export class Page4TencentLocalTtsService {
       body
     )
 
-    const req: http.HttpRequest = http.createHttp()
-    try {
-      this.logInfo('sendTtsV3Request', `host=${this.host}, action=${this.action}, textChars=${text.length}`)
-      const resp: http.HttpResponse = await req.request(`https://${this.host}`, {
-        method: http.RequestMethod.POST,
-        connectTimeout: 8000,
-        readTimeout: 30000,
-        header: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Host': this.host,
-          'X-TC-Action': this.action,
-          'X-TC-Version': this.version,
-          'X-TC-Region': this.region,
-          'X-TC-Timestamp': `${timestamp}`,
-          'Authorization': authorization
-        },
-        extraData: body,
-        expectDataType: http.HttpDataType.STRING
-      })
-      if (resp.responseCode !== http.ResponseCode.OK) {
-        this.logError('sendTtsV3HttpFail', `responseCode=${resp.responseCode}`)
-        throw new Error(`HTTP ${resp.responseCode}`)
+    let lastErrorText: string = 'unknown error'
+    const maxAttempts: number = 1 + this.ttsRequestRetryTimes
+    for (let attempt: number = 1; attempt <= maxAttempts; attempt++) {
+      const req: http.HttpRequest = http.createHttp()
+      try {
+        this.logInfo('sendTtsV3Request', `host=${this.host}, action=${this.action}, textChars=${text.length}, attempt=${attempt}/${maxAttempts}`)
+        const resp: http.HttpResponse = await req.request(`https://${this.host}`, {
+          method: http.RequestMethod.POST,
+          connectTimeout: this.ttsConnectTimeoutMs,
+          readTimeout: this.ttsReadTimeoutMs,
+          header: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Host': this.host,
+            'X-TC-Action': this.action,
+            'X-TC-Version': this.version,
+            'X-TC-Region': this.region,
+            'X-TC-Timestamp': `${timestamp}`,
+            'Authorization': authorization
+          },
+          extraData: body,
+          expectDataType: http.HttpDataType.STRING
+        })
+        if (resp.responseCode !== http.ResponseCode.OK) {
+          this.logError('sendTtsV3HttpFail', `responseCode=${resp.responseCode}`)
+          throw new Error(`HTTP ${resp.responseCode}`)
+        }
+        const textResp: string = typeof resp.result === 'string' ? resp.result : String(resp.result ?? '')
+        return this.parseAudioFromV3(textResp)
+      } catch (e) {
+        lastErrorText = this.errorToText(e)
+        const retryable: boolean = this.isRetryableNetworkError(lastErrorText)
+        this.logError('sendTtsV3RequestFail', `attempt=${attempt}/${maxAttempts}, retryable=${retryable ? 1 : 0}, err=${lastErrorText}`)
+        if (!retryable || attempt >= maxAttempts) {
+          throw new Error(this.userFriendlyTtsError(lastErrorText))
+        }
+        await this.sleepMs(600)
+      } finally {
+        req.destroy()
       }
-      const textResp: string = typeof resp.result === 'string' ? resp.result : String(resp.result ?? '')
-      return this.parseAudioFromV3(textResp)
-    } catch (e) {
-      this.logError('sendTtsV3RequestFail', this.errorToText(e))
-      throw new Error(this.errorToText(e))
-    } finally {
-      req.destroy()
     }
+    throw new Error(this.userFriendlyTtsError(lastErrorText))
   }
 
   private parseAudioFromV3(textResp: string): Uint8Array {
@@ -446,6 +494,13 @@ export class Page4TencentLocalTtsService {
     return path
   }
 
+  private copyToPlayerCache(srcPath: string): string {
+    this.ensureDir(this.playerCacheDir)
+    const dstPath: string = `${this.playerCacheDir}/tts_play_${Date.now()}_${Math.floor(Math.random() * 100000)}.mp3`
+    fs.copyFileSync(srcPath, dstPath)
+    return dstPath
+  }
+
   private ensureDir(path: string): void {
     try {
       fs.mkdirSync(path)
@@ -464,20 +519,29 @@ export class Page4TencentLocalTtsService {
     }
   }
 
-  private async playFile(path: string, seq: number): Promise<void> {
+  private async playFile(path: string, seq: number, avoidFdFallback: boolean = false): Promise<void> {
     if (seq !== this.speakSeq) return
     const player: media.AVPlayer = await media.createAVPlayer()
     this.activePlayer = player
-    this.logInfo('playStart', `seq=${seq}, path=${path}`)
-    const sourceFile: fs.File = fs.openSync(path, fs.OpenMode.READ_ONLY)
-    const stat = fs.statSync(path)
+    let usePath: string = path
+    try {
+      // 部分设备要求播放器读取 cache 路径，先复制一份到 cache。
+      usePath = this.copyToPlayerCache(path)
+    } catch (e) {
+      this.logInfo('copyToPlayerCacheSkip', this.errorToText(e))
+    }
+
+    this.logInfo('playStart', `seq=${seq}, path=${path}, usePath=${usePath}`)
+    const sourceFile: fs.File = fs.openSync(usePath, fs.OpenMode.READ_ONLY)
+    const stat = fs.statSync(usePath)
     const fileSize: number = Number(stat.size ?? 0)
     if (fileSize <= 0) {
       this.safeCloseFd(sourceFile.fd, 'playSourceEarlyClose')
       throw new Error('TTS音频文件为空')
     }
 
-    await new Promise<void>((resolve, reject): void => {
+    try {
+      await new Promise<void>((resolve, reject): void => {
       let ended: boolean = false
       const onStateChange = (state: string): void => {
         this.logInfo('playState', `seq=${seq}, state=${state}`)
@@ -532,28 +596,44 @@ export class Page4TencentLocalTtsService {
 
       const timerId: number = setTimeout((): void => {
         finish(false, 'TTS播放超时')
-      }, 30000) as number
+      }, this.computePlayTimeoutMs(fileSize)) as number
 
       player.on('stateChange', onStateChange)
       player.on('error', onError)
 
       try {
         player.reset()
-        // 对于拒绝直接 fdSrc 的平台，优先使用 fd:// URL。
-        player.url = `fd://${sourceFile.fd}`
-      } catch (e) {
+        // 该设备明确要求 fd:// 或网络地址，本地文件路径(file:// / 绝对路径)会报 401。
         try {
-          player.reset()
-          player.fdSrc = {
-            fd: sourceFile.fd,
-            offset: 0,
-            length: fileSize
+          player.url = `fd://${sourceFile.fd}`
+        } catch (eFdUrl) {
+          const errFdUrl: string = this.errorToText(eFdUrl)
+          this.logInfo('setSourceFallback', `fd:// failed: ${errFdUrl}`)
+          if (avoidFdFallback) {
+            finish(false, `set source failed fdUrl=${errFdUrl} fd=skipped`)
+            return
           }
-        } catch (e2) {
-          finish(false, `set source failed ${this.errorToText(e2)}`)
+          try {
+            player.reset()
+            player.fdSrc = {
+              fd: sourceFile.fd,
+              offset: 0,
+              length: fileSize
+            }
+          } catch (eFd) {
+            const errFd: string = this.errorToText(eFd)
+            finish(false, `set source failed fdUrl=${errFdUrl} fd=${errFd}`)
+          }
         }
+      } catch (e) {
+        finish(false, `set source failed ${this.errorToText(e)}`)
       }
-    })
+      })
+    } finally {
+      if (usePath !== path) {
+        this.cleanupAudioFile(usePath)
+      }
+    }
   }
 
   private errorToText(e: Object): string {
@@ -572,6 +652,63 @@ export class Page4TencentLocalTtsService {
       if (asJson.length > 0 && asJson !== '{}') return asJson
     } catch (_) {}
     return 'unknown error'
+  }
+
+  private isRetryableNetworkError(message: string): boolean {
+    const lower: string = message.trim().toLowerCase()
+    if (lower.length <= 0) return false
+    return lower.indexOf('time was reached') >= 0 ||
+      lower.indexOf('timeout') >= 0 ||
+      lower.indexOf('timed out') >= 0 ||
+      lower.indexOf('etimedout') >= 0 ||
+      lower.indexOf('network') >= 0 ||
+      lower.indexOf('resolve host') >= 0 ||
+      lower.indexOf('resolve host name') >= 0 ||
+      lower.indexOf('resolve hostname') >= 0 ||
+      lower.indexOf('couldn\'t resolve host') >= 0 ||
+      lower.indexOf('could not resolve host') >= 0 ||
+      lower.indexOf('name or service not known') >= 0 ||
+      lower.indexOf('eai_again') >= 0 ||
+      lower.indexOf('dns') >= 0
+  }
+
+  private userFriendlyTtsError(raw: string): string {
+    const lower: string = raw.trim().toLowerCase()
+    if (this.isRetryableNetworkError(lower)) {
+      return '网络超时，无法连接腾讯TTS服务，请检查手机外网与DNS'
+    }
+    return raw
+  }
+
+  private isRetryablePlayError(message: string): boolean {
+    const lower: string = message.trim().toLowerCase()
+    if (lower.length <= 0) return false
+    return lower.indexOf('tts播放超时') >= 0 ||
+      lower.indexOf('timeout') >= 0 ||
+      lower.indexOf('timed out') >= 0 ||
+      this.isFdSourceRejectedError(lower)
+  }
+
+  private isFdSourceRejectedError(message: string): boolean {
+    const lower: string = message.trim().toLowerCase()
+    if (lower.length <= 0) return false
+    return lower.indexOf('setsource filedescriptor failed') >= 0 ||
+      lower.indexOf('not fd:// or network address') >= 0 ||
+      (lower.indexOf('invalid parameter') >= 0 && lower.indexOf('source') >= 0)
+  }
+
+  private computePlayTimeoutMs(fileSize: number): number {
+    const size: number = Math.max(0, Math.trunc(fileSize))
+    // 以 4KB/s 粗估播放时长，并追加初始化余量；限制在 20s~90s。
+    const estimatedMs: number = 12000 + Math.round(size / 4)
+    return Math.max(20000, Math.min(90000, estimatedMs))
+  }
+
+  private async sleepMs(ms: number): Promise<void> {
+    const waitMs: number = Math.max(0, Math.trunc(ms))
+    await new Promise<void>((resolve): void => {
+      setTimeout((): void => resolve(), waitMs)
+    })
   }
 
   private safeUtf8(bytes: Uint8Array): string {
@@ -598,6 +735,11 @@ export class Page4TencentLocalTtsService {
     try {
       fs.closeSync(fd)
     } catch (e) {
+      const text: string = this.errorToText(e).trim().toLowerCase()
+      if (text.indexOf('bad file descriptor') >= 0) {
+        this.logInfo(`${name}Skip`, 'already closed')
+        return
+      }
       this.logInfo(name, this.errorToText(e))
     }
   }

@@ -1,4 +1,4 @@
-import fs from '@ohos.file.fs'
+﻿import fs from '@ohos.file.fs'
 import image from '@ohos.multimedia.image'
 import mediaLibrary from '@ohos.multimedia.mediaLibrary'
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
@@ -113,7 +113,7 @@ export class Page2ReplayService {
 
   async onVisionObstacleDetected(result: RecognitionResult): Promise<void> {
     if (!result.ok || result.boxes.length <= 0) return
-    if (result.subtype !== RecognitionSubtype.BARRIER && result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
+    if (result.subtype !== RecognitionSubtype.YOLOV26BARRIER && result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
     const nowMs: number = Date.now()
     if (result.taskId.length > 0 && result.taskId === this.lastVisionTaskId) return
     if (nowMs - this.lastVisionAtMs < 1600) return
@@ -216,7 +216,7 @@ export class Page2ReplayService {
     if (!result.ok || result.boxes.length <= 0) return false
     for (let i: number = 0; i < result.boxes.length; i++) {
       const key: string = result.boxes[i].label.trim().toLowerCase()
-      if (key === 'shigong' || key.indexOf('shigong') >= 0 || result.boxes[i].label.indexOf('施工') >= 0) {
+      if (key === 'shigong' || key.indexOf('shigong') >= 0 || result.boxes[i].label.indexOf('鏂藉伐') >= 0) {
         return true
       }
     }

@@ -24,7 +24,6 @@ export interface RecognitionConfig {
 export const defaultRecognitionConfig: RecognitionConfig = {
   engineType: RecogEngineType.OFFLINE_NCNN,  // 默认使用 ncnn
   httpEndpoint: '',
-  offlineModelName: 'barrier',
+  offlineModelName: 'yolov26barrier',
   offlineConfThresh: 0.3
 }
-

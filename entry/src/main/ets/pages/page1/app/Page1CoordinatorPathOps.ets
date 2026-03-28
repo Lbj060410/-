@@ -256,6 +256,20 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
   const fromId = s.pathNodes[idx]
   const toId = s.pathNodes[idx + 1]
 
+  const gateEdge: boolean =
+    (fromId.trim().toUpperCase() === 'B2' && toId.trim().toUpperCase() === 'B4') ||
+    (fromId.trim().toUpperCase() === 'B4' && toId.trim().toUpperCase() === 'B2')
+
+  // 硬保护：闸口边只允许走 depart 流程，禁止掉回普通 GO 发送。
+  if (gateEdge) {
+    const handledGateDepartBeforeGo: boolean = await ctx.maybeHandleGateDepartOnArrival(fromId)
+    if (!handledGateDepartBeforeGo) {
+      s.pushLog(`GATE_DEPART_GUARD: ${fromId}->${toId} 未进入放行流程，已阻断普通前进发送`)
+    }
+    s.markAutoFollow(nowMs)
+    return
+  }
+
   if ((s.isBlocked(toId) || s.isBlockedEdge(fromId, toId)) && s.destApplied.length > 0) {
     ctx.maybeReplanOnObstacle()
     s.markAutoFollow(nowMs)
@@ -330,4 +344,3 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
 export async function driveAutoStep(ctx: any, nowMs: number, force: boolean = false): Promise<void> {
   await followPathOnce(ctx, nowMs, force)
 }
-

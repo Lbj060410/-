@@ -64,11 +64,11 @@ export class ReplayArchiveService {
   onRecognition(result: RecognitionResult): void {
     this.ensureLoaded()
     if (!result.ok || result.boxes.length <= 0) return
-    if (result.subtype !== RecognitionSubtype.BARRIER &&
+    if (result.subtype !== RecognitionSubtype.YOLOV26BARRIER &&
       result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
 
     const trigger: ReplayTriggerType =
-      result.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'TRAFFIC_LIGHT' : 'VISION_BARRIER'
+      result.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'TRAFFIC_LIGHT' : 'VISION_YOLOV26BARRIER'
     const origin: ReplaySessionOrigin = this.mapOriginFromSource(result.source)
     const sid: string = this.ensureActive(trigger, '识别触发', origin)
     const detail: string = `${result.engine} boxes=${result.boxes.length} src=${this.sourceText(result.source)}`
@@ -453,7 +453,7 @@ export class ReplayArchiveService {
   }
 
   private normalizeTriggerType(v: ReplayTriggerType): ReplayTriggerType {
-    if (v === 'ULTRASONIC' || v === 'VISION_BARRIER' || v === 'TRAFFIC_LIGHT' || v === 'REPLAN') {
+    if (v === 'ULTRASONIC' || v === 'VISION_YOLOV26BARRIER' || v === 'TRAFFIC_LIGHT' || v === 'REPLAN') {
       return v
     }
     return 'REPLAN'

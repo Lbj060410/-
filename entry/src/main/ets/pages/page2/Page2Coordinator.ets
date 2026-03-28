@@ -37,7 +37,7 @@ export class Page2Coordinator {
   // Page2 实时识别节流间隔：降低以减少识别结果拖尾。
   private readonly page2LiveIntervalMs: number = 80
   // Page2 模型互斥：
-  // - barrier 默认开启，持续识别；
+  // - yolov26barrier 默认开启，持续识别；
   // - traffic 开启后仅在指定点位+方向门控命中时执行识别。
   private readonly trafficCascadeMinIntervalMs: number = 500
   private lastTrafficCascadeAtMs: number = 0
@@ -265,8 +265,8 @@ export class Page2Coordinator {
     if (recogStore.recogEngineType !== RecogEngineType.OFFLINE_NCNN) {
       recogStore.setRecogEngineType(RecogEngineType.OFFLINE_NCNN)
     }
-    // 根据模型开关设置阈值：barrier 略低，traffic 略高以减少误检。
-    const wantedConf: number = videoStore.page2BarrierExperimentalEnabled ? 0.1 : 0.28
+    // 根据模型开关设置阈值：yolov26barrier 略低，traffic 略高以减少误检。
+    const wantedConf: number = videoStore.page2Yolov26BarrierExperimentalEnabled ? 0.1 : 0.28
     if (Math.abs(recogStore.recogOfflineConfThresh - wantedConf) > 0.001) {
       recogStore.setRecogOfflineConfThresh(wantedConf)
     }
@@ -277,7 +277,7 @@ export class Page2Coordinator {
     try {
       const liveSubtype: RecognitionSubtype | undefined = this.currentLiveSubtype()
       if (liveSubtype === undefined) return
-      if (videoStore.page2BarrierExperimentalEnabled && liveSubtype === RecognitionSubtype.BARRIER) {
+      if (videoStore.page2Yolov26BarrierExperimentalEnabled && liveSubtype === RecognitionSubtype.YOLOV26BARRIER) {
         // 不要用级联快照/裁剪工作阻塞实时提交。
         void this.maybeEnqueueTrafficCascade(recogPm)
       }
@@ -306,7 +306,7 @@ export class Page2Coordinator {
 
     try {
       const last: RecognitionResult | undefined = recogStore.lastRecog
-      const marker: BBoxNorm | undefined = this.pickTrafficLightMarkerFromBarrier(last)
+      const marker: BBoxNorm | undefined = this.pickTrafficLightMarkerFromYolov26Barrier(last)
       if (!marker) return
 
       const info: image.ImageInfo = await currentPm.getImageInfo()
@@ -337,13 +337,13 @@ export class Page2Coordinator {
     videoStore.setStatus(`Page2 mode switched: ${this.modeText()}`)
   }
 
-  onBarrierModeChanged(): void {
+  onYolov26BarrierModeChanged(): void {
     this.onModelSwitchChanged()
   }
 
-  private pickTrafficLightMarkerFromBarrier(result: RecognitionResult | undefined): BBoxNorm | undefined {
+  private pickTrafficLightMarkerFromYolov26Barrier(result: RecognitionResult | undefined): BBoxNorm | undefined {
     if (!result || !result.ok) return undefined
-    if (result.subtype !== RecognitionSubtype.BARRIER) return undefined
+    if (result.subtype !== RecognitionSubtype.YOLOV26BARRIER) return undefined
     if (result.boxes.length <= 0) return undefined
 
     let best: BBoxNorm | undefined = undefined
@@ -425,13 +425,13 @@ export class Page2Coordinator {
     return this.recog.enqueueSnapshotFromPixelMapWithRoi(pm, fullRoi, subtype, source, releaseAfterUse)
   }
 
-  enqueueSnapshotRecognitionFromGalleryUri(uri: string, forceSubtype: RecognitionSubtype = RecognitionSubtype.BARRIER): string {
+  enqueueSnapshotRecognitionFromGalleryUri(uri: string, forceSubtype: RecognitionSubtype = RecognitionSubtype.YOLOV26BARRIER): string {
     return this.recog.enqueueSnapshotFromGalleryUri(uri, forceSubtype)
   }
 
   private preferredSnapshotSubtype(): RecognitionSubtype {
     if (videoStore.page2TrafficEnabled) return RecognitionSubtype.TRAFFIC_LIGHT
-    return RecognitionSubtype.BARRIER
+    return RecognitionSubtype.YOLOV26BARRIER
   }
 
   private maybeAutoSnapshotFromVision(currentPm: image.PixelMap, nowMs: number): void {
@@ -439,7 +439,7 @@ export class Page2Coordinator {
     if (!r || !r.ok || r.boxes.length <= 0) return
     if (r.source !== RecognitionTaskSource.PAGE2_BUTTON) return
     if (r.kind !== RecognitionTaskKind.LIVE) return
-    if (r.subtype !== RecognitionSubtype.BARRIER && r.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
+    if (r.subtype !== RecognitionSubtype.YOLOV26BARRIER && r.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
     if (r.taskId.length > 0 && r.taskId === this.lastAutoSnapTaskId) return
     if (nowMs - this.lastAutoSnapAtMs < this.autoSnapMinIntervalMs) return
     if (this.autoSnapBusy) return
@@ -464,7 +464,7 @@ export class Page2Coordinator {
         previewPm = undefined
       }
       if (galleryPm) {
-        const tag: string = r.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'traffic' : 'barrier'
+        const tag: string = r.subtype === RecognitionSubtype.TRAFFIC_LIGHT ? 'traffic' : 'yolov26barrier'
         await page2ReplayService.archiveOriginalSnapshotToGallery(galleryPm, tag)
       }
     } finally {
@@ -480,7 +480,7 @@ export class Page2Coordinator {
   private maybeRecordShigongReplay(): void {
     const r: RecognitionResult | undefined = recogStore.lastRecog
     if (!r || !r.ok) return
-    if (r.subtype !== RecognitionSubtype.BARRIER) return
+    if (r.subtype !== RecognitionSubtype.YOLOV26BARRIER) return
     void page2ReplayService.onShigongRecognition(r)
   }
 
@@ -488,7 +488,7 @@ export class Page2Coordinator {
     if (videoStore.page2TrafficEnabled) {
       return this.isTrafficGatePoseMatched() ? RecognitionSubtype.TRAFFIC_LIGHT : undefined
     }
-    if (videoStore.page2BarrierExperimentalEnabled) return RecognitionSubtype.BARRIER
+    if (videoStore.page2Yolov26BarrierExperimentalEnabled) return RecognitionSubtype.YOLOV26BARRIER
     return undefined
   }
 
@@ -523,7 +523,7 @@ export class Page2Coordinator {
 
   private modeText(): string {
     if (videoStore.page2TrafficEnabled) return 'traffic-gated(B4->B6|D6->F6)'
-    if (videoStore.page2BarrierExperimentalEnabled) return 'barrier'
+    if (videoStore.page2Yolov26BarrierExperimentalEnabled) return 'yolov26barrier'
     return 'none'
   }
 }

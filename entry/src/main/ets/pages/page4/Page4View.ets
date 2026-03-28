@@ -94,6 +94,7 @@ export struct Page4View {
   aboutToDisappear(): void {
     this.clearLongPressTimer()
     this.clearToastTimer()
+    page4TencentLocalTtsService.stop()
   }
 
   build(): void {
@@ -235,6 +236,11 @@ export struct Page4View {
     .onClick((): void => {
       this.voiceReplyEnabled = !this.voiceReplyEnabled
       this.showToast(this.voiceReplyEnabled ? '已开启本机播报' : '已关闭本机播报')
+      if (this.voiceReplyEnabled) {
+        void this.previewVoiceReplyAfterEnable()
+      } else {
+        page4TencentLocalTtsService.stop()
+      }
     })
   }
 
@@ -706,6 +712,30 @@ export struct Page4View {
       this.logError('autoSpeakFail', msg)
       this.showToast(`自动播报失败：${msg}`)
     }
+  }
+
+  private async previewVoiceReplyAfterEnable(): Promise<void> {
+    try {
+      await page4TencentLocalTtsService.speak('语音播报已开启')
+      const latestAssistant: string = this.latestAssistantMessageText()
+      if (latestAssistant.length > 0) {
+        await page4TencentLocalTtsService.speak(latestAssistant)
+      }
+    } catch (e) {
+      const msg: string = this.errorToText(e)
+      this.logError('previewVoiceReplyAfterEnableFail', msg)
+      this.showToast(`本机播报不可用：${msg}`)
+    }
+  }
+
+  private latestAssistantMessageText(): string {
+    for (let i: number = this.messages.length - 1; i >= 0; i--) {
+      const one: AssistantMessage = this.messages[i]
+      if (one.role === 'assistant') {
+        return one.text.trim()
+      }
+    }
+    return ''
   }
 
   private errorToText(e: Object): string {

@@ -29,13 +29,24 @@ export class NcnnRecognitionService implements IRecognitionService {
   private readonly diagTag: string = 'ncnn-bridge-20260306'
 
   private readonly modelName: string
+  private readonly fallbackModelName: string
+  private activeModelName: string
+  private fallbackUsed: boolean = false
   private readonly labels: string[]
   private readonly confThresh: number
   private readonly nmsThresh: number
   private loaded: boolean = false
 
-  constructor(modelName: string, labels: string[], confThresh: number = 0.3, nmsThresh: number = 0.6) {
+  constructor(
+    modelName: string,
+    labels: string[],
+    confThresh: number = 0.3,
+    nmsThresh: number = 0.6,
+    fallbackModelName: string = ''
+  ) {
     this.modelName = modelName
+    this.fallbackModelName = fallbackModelName.trim()
+    this.activeModelName = modelName
     this.labels = labels
     this.confThresh = confThresh
     this.nmsThresh = nmsThresh
@@ -44,10 +55,10 @@ export class NcnnRecognitionService implements IRecognitionService {
   async recognize(pm: PixelMap): Promise<RecognitionCoreResult> {
     const t0: number = Date.now()
 
-    // barrier 模型在当前 OpenHarmony 3.2 设备上存在原生段错误风险；
-    // 当 page2 显式切到 traffic-only 保守模式时，跳过 barrier 推理。
-    if (this.modelName === 'barrier' && !videoStore.page2BarrierExperimentalEnabled) {
-      return this.errorResult(t0, '[ncnn-bridge] barrier ncnn disabled by page2 model switch')
+    // yolov26barrier 模型在当前 OpenHarmony 3.2 设备上存在原生段错误风险；
+    // 当 page2 显式切到 traffic-only 保守模式时，跳过 yolov26barrier 推理。
+    if (this.activeModelName === 'yolov26barrier' && !videoStore.page2Yolov26BarrierExperimentalEnabled) {
+      return this.errorResult(t0, '[ncnn-bridge] yolov26barrier ncnn disabled by page2 model switch')
     }
 
     try {
@@ -67,7 +78,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       await pm.readPixelsToBuffer(buf)
 
       const libentry = this.requireNative()
-      const json: string = libentry.detectNcnn(this.modelName, buf, w, h, this.confThresh, this.nmsThresh)
+      const json: string = libentry.detectNcnn(this.activeModelName, buf, w, h, this.confThresh, this.nmsThresh)
       const nativeErr: string = (typeof libentry.getLastError === 'function') ? String(libentry.getLastError()) : ''
       if (nativeErr.length > 0) {
         return this.errorResult(t0, `[${this.diagTag}] detect failed: ${nativeErr}`)
@@ -163,24 +174,35 @@ export class NcnnRecognitionService implements IRecognitionService {
   }
   private async ensureModelLoaded(): Promise<boolean> {
     if (!this.loaded) {
-      const ok: boolean = await this.loadModel()
-      if (!ok) {
-        return false
+      try {
+        await this.loadModelByName(this.activeModelName)
+        this.loaded = true
+      } catch (primaryErr) {
+        const canFallback: boolean =
+          this.fallbackModelName.length > 0 &&
+          this.fallbackModelName !== this.activeModelName
+        if (!canFallback) throw primaryErr
+
+        console.warn(`[${this.diagTag}] model load failed: ${this.activeModelName}, fallback => ${this.fallbackModelName}, err=${String(primaryErr)}`)
+        this.activeModelName = this.fallbackModelName
+        this.fallbackUsed = true
+        await this.loadModelByName(this.activeModelName)
+        this.loaded = true
+        console.warn(`[${this.diagTag}] fallback model active: ${this.activeModelName} (requested=${this.modelName})`)
       }
-      this.loaded = true
     }
     return true
   }
 
-  private async loadModel(): Promise<boolean> {
+  private async loadModelByName(targetModelName: string): Promise<boolean> {
     const ctx = globalThis.abilityContext as { resourceManager: resourceManager.ResourceManager }
     if (!ctx || !ctx.resourceManager) {
       throw new Error(`[${this.diagTag}] abilityContext.resourceManager missing`)
     }
 
     const rm: resourceManager.ResourceManager = ctx.resourceManager
-    const paramFileName: string = `${this.modelName}.param`
-    const binFileName: string = `${this.modelName}.bin`
+    const paramFileName: string = `${targetModelName}.param`
+    const binFileName: string = `${targetModelName}.bin`
 
     let paramBuf: ArrayBuffer
     try {
@@ -199,15 +221,16 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
 
     const libentry = this.requireNative()
-    const ok: boolean = libentry.loadNcnnModel(this.modelName, paramBuf, binBuf)
+    const ok: boolean = libentry.loadNcnnModel(targetModelName, paramBuf, binBuf)
     if (!ok) {
       const nativeErr: string = (typeof libentry.getLastError === 'function') ? libentry.getLastError() : ''
-      console.error(`NCNNLOAD|model=${this.modelName}|ok=0|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|err=${nativeErr.length > 0 ? nativeErr : '-'}`)
-      throw new Error(`[${this.diagTag}] native loadNcnnModel false: ${this.modelName}, err=${nativeErr}`)
+      console.error(`NCNNLOAD|model=${targetModelName}|ok=0|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|err=${nativeErr.length > 0 ? nativeErr : '-'}`)
+      throw new Error(`[${this.diagTag}] native loadNcnnModel false: ${targetModelName}, err=${nativeErr}`)
     }
 
     const nativeErr: string = (typeof libentry.getLastError === 'function') ? libentry.getLastError() : ''
-    console.info(`NCNNLOAD|model=${this.modelName}|ok=1|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|${nativeErr}`)
+    const fallbackTag: string = this.fallbackUsed ? '|fallback=1' : ''
+    console.info(`NCNNLOAD|model=${targetModelName}|ok=1|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|${nativeErr}${fallbackTag}`)
     return true
   }
 
@@ -290,4 +313,3 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
   }
 }
-

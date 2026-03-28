@@ -358,17 +358,17 @@ export struct Page2View {
             }
           })
 
-        Button(this.videoStore.page2BarrierExperimentalEnabled ? '开障' : '关障')
+        Button(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '开障' : '关障')
           .layoutWeight(1)
           .height(36)
           .borderRadius(6)
-          .backgroundColor(this.videoStore.page2BarrierExperimentalEnabled ? '#EFF6FF' : '#F8FAFC')
-          .fontColor(this.videoStore.page2BarrierExperimentalEnabled ? '#1D4ED8' : Page1Theme.TEXT_SECONDARY)
+          .backgroundColor(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#EFF6FF' : '#F8FAFC')
+          .fontColor(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#1D4ED8' : Page1Theme.TEXT_SECONDARY)
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.videoStore.page2BarrierExperimentalEnabled ? '#BFDBFE' : '#E2E8F0' })
+          .border({ width: 1, color: this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#BFDBFE' : '#E2E8F0' })
           .onClick((): void => {
-            this.videoStore.setPage2BarrierEnabled(!this.videoStore.page2BarrierExperimentalEnabled)
+            this.videoStore.setPage2Yolov26BarrierEnabled(!this.videoStore.page2Yolov26BarrierExperimentalEnabled)
             this.c.onModelSwitchChanged()
           })
 
@@ -556,7 +556,7 @@ export struct Page2View {
     Row({ space: 12 }) {
       Stack() {
         Circle({ width: 40, height: 40 }).fill(bg)
-        Text('•').fontColor(color).fontSize(24) // placeholder for icon
+        Text('?').fontColor(color).fontSize(24) // placeholder for icon
       }
       Column() {
         Text(label).fontSize(10).fontWeight(FontWeight.Bold).fontColor(Page1Theme.TEXT_TERTIARY)
@@ -728,8 +728,8 @@ export struct Page2View {
     return this.recogStore.recogBusy ? 'Running' : 'Idle'
   }
 
-  private latestPage2BarrierLiveResult(): RecognitionResult | undefined {
-    if (!this.videoStore.page2BarrierExperimentalEnabled) return undefined
+  private latestPage2Yolov26BarrierLiveResult(): RecognitionResult | undefined {
+    if (!this.videoStore.page2Yolov26BarrierExperimentalEnabled) return undefined
     const r: RecognitionResult | undefined = this.recogStore.lastRecog
 
     if (
@@ -737,14 +737,14 @@ export struct Page2View {
       r.ok &&
         r.kind === RecognitionTaskKind.LIVE &&
         r.source === RecognitionTaskSource.PAGE2_BUTTON &&
-        r.subtype === RecognitionSubtype.BARRIER
+        r.subtype === RecognitionSubtype.YOLOV26BARRIER
     ) {
       return r
     }
 
     return this.findLatestTaskResult(
       RecognitionTaskKind.LIVE,
-      RecognitionSubtype.BARRIER,
+      RecognitionSubtype.YOLOV26BARRIER,
       RecognitionTaskSource.PAGE2_BUTTON
     )
   }
@@ -827,9 +827,9 @@ export struct Page2View {
     const contentRect: Rect2d = this.computeContainRect(viewW, viewH, srcW, srcH)
     const overlays: Array<OverlayBoxViewModel> = []
 
-    const barrier: RecognitionResult | undefined = this.latestPage2BarrierLiveResult()
-    if (barrier) {
-      this.appendOverlayFromResult(overlays, barrier, contentRect, srcW, srcH, 12)
+    const yolov26barrier: RecognitionResult | undefined = this.latestPage2Yolov26BarrierLiveResult()
+    if (yolov26barrier) {
+      this.appendOverlayFromResult(overlays, yolov26barrier, contentRect, srcW, srcH, 12)
     }
 
     const traffic: RecognitionResult | undefined = this.latestPage2TrafficResult()
@@ -894,7 +894,7 @@ export struct Page2View {
   }
 
   private minOverlayScore(subtype: RecognitionSubtype, label: string): number {
-    if (subtype === RecognitionSubtype.BARRIER) {
+    if (subtype === RecognitionSubtype.YOLOV26BARRIER) {
       const normalized: string = label.trim().toLowerCase()
       if (normalized === 'trafficlight' || normalized === 'traffic_light') return 0.12
       return 0.2
@@ -904,7 +904,7 @@ export struct Page2View {
   }
 
   private maxVisiblePerSubtype(subtype: RecognitionSubtype): number {
-    if (subtype === RecognitionSubtype.BARRIER) return 4
+    if (subtype === RecognitionSubtype.YOLOV26BARRIER) return 4
     if (subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 1
     return 2
   }
@@ -1059,7 +1059,7 @@ export struct Page2View {
   }
 
   private overlayTag(subtype: RecognitionSubtype): string {
-    if (subtype === RecognitionSubtype.BARRIER) return 'B'
+    if (subtype === RecognitionSubtype.YOLOV26BARRIER) return 'B'
     if (subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 'T'
     return '-'
   }
@@ -1069,7 +1069,7 @@ export struct Page2View {
     if (label === 'yellow') return '#D48806'
     if (label === 'green') return '#389E0D'
     if (subtype === RecognitionSubtype.TRAFFIC_LIGHT) return '#13A8A8'
-    if (subtype === RecognitionSubtype.BARRIER) return '#1677FF'
+    if (subtype === RecognitionSubtype.YOLOV26BARRIER) return '#1677FF'
     return '#1677FF'
   }
 
@@ -1151,7 +1151,7 @@ export struct Page2View {
 
       const taskId: string = this.c.enqueueSnapshotRecognitionFromGalleryUri(
         selectedUri,
-        RecognitionSubtype.BARRIER
+        RecognitionSubtype.YOLOV26BARRIER
       )
       this.videoStore.setStatus(`选图识别已提交: ${taskId}`)
       void this.waitAndArchiveGalleryReplay(taskId, selectedUri)
@@ -1242,7 +1242,7 @@ export struct Page2View {
     return {
       taskId,
       kind: task ? task.kind : RecognitionTaskKind.SNAPSHOT,
-      subtype: task ? task.subtype : RecognitionSubtype.BARRIER,
+      subtype: task ? task.subtype : RecognitionSubtype.YOLOV26BARRIER,
       source: task ? task.source : RecognitionTaskSource.GALLERY,
       tsMs: Date.now(),
       costMs: task ? task.costMs : 0,
