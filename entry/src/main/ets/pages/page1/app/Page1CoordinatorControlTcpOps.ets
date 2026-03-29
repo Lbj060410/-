@@ -84,6 +84,9 @@ export function onTcpState(ctx: any, state: CarConnectionState, text: string): v
     commStore.setCommState(true, 'CONNECTED')
     commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
     commStore.setCommLastError('')
+    if (typeof ctx.tryQueryLightMetricOnceOnPageOpen === 'function') {
+      void ctx.tryQueryLightMetricOnceOnPageOpen()
+    }
     return
   }
 
@@ -418,65 +421,15 @@ function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
 }
 
 async function triggerLightBaselineBeforeMotion(ctx: any, s: Page1UiStore): Promise<void> {
-  if (!!ctx.lightMetricReady) return
-  const nowMs: number = Date.now()
-  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
-  const shouldQuery: boolean =
-    !ctx.lightMetricQueryEnabled ||
-    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
-  if (!shouldQuery) return
-
-  if (typeof ctx.armLightMetricQuery === 'function') {
-    ctx.armLightMetricQuery()
-  }
-  ctx.lightMetricLastQueryAtMs = nowMs
-  s.bumpTx()
-  void ctx.proto.light()
-    .then((): void => {
-      s.pushLog('LIGHT: 出发前自动查询光照基准(异步)')
-    })
-    .catch((): void => {
-      s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
-    })
+  void ctx
+  void s
 }
 
 async function waitLightBaselineReadyForManualGo(ctx: any, s: Page1UiStore, timeoutMs: number): Promise<boolean> {
-  const nowMs: number = Date.now()
-  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
-  const shouldQueryNow: boolean =
-    !ctx.lightMetricQueryEnabled ||
-    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
-  let gateAtMs: number = lastQueryAtMs > 0 ? lastQueryAtMs : nowMs
-
-  if (shouldQueryNow) {
-    try {
-      if (typeof ctx.armLightMetricQuery === 'function') {
-        ctx.armLightMetricQuery()
-      }
-      gateAtMs = Date.now()
-      ctx.lightMetricLastQueryAtMs = gateAtMs
-      s.bumpTx()
-      await ctx.proto.light()
-      s.pushLog('LIGHT: 手动起步前已发送光照查询，等待BD=02后再发前进')
-    } catch (_) {
-      s.pushLog('LIGHT: 手动起步前光照查询发送失败，本轮前进取消')
-      return false
-    }
-  } else {
-    s.pushLog('LIGHT: 手动起步前等待最近一次光照查询的BD=02')
-  }
-
-  const waitMs: number = Math.max(300, timeoutMs)
-  const deadlineMs: number = Date.now() + waitMs
-  while (Date.now() <= deadlineMs) {
-    const statusCode: number = Number(ctx.pathAckLastStatusCode) || 0
-    const statusAtMs: number = Number(ctx.pathAckLastStatusAtMs) || 0
-    if (statusCode === 0x02 && statusAtMs >= gateAtMs) return true
-    await ctx.sleep(120)
-  }
-
-  s.pushLog(`LIGHT: 手动起步等待BD=02超时(${waitMs}ms)，本轮前进取消`)
-  return false
+  void ctx
+  void s
+  void timeoutMs
+  return true
 }
 
 export async function sendManualGoCommand(ctx: any, actionText: string, commandSeq: number): Promise<void> {
@@ -689,11 +642,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.LIGHT) {
     s.setAction('光照查询')
     s.bumpTx()
-    if (typeof ctx.armLightMetricQuery === 'function') {
-      ctx.armLightMetricQuery()
-    }
-    await ctx.proto.light()
-    s.pushLog('LIGHT: 已发送光照查询，等待设备返回基准值')
+    s.pushLog('LIGHT: 已改为页面启动时自动查询一次；当前入口不再发送')
     return
   }
 

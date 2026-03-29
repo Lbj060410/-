@@ -34,8 +34,12 @@ export class Page2Coordinator {
   private readonly snapshotProbe: HttpSnapshotService = new HttpSnapshotService()
   // 全局识别中心单例（跨页面复用），Page2 在此投喂实时帧。
   private readonly recog: RecognitionScheduler = ensureRecognitionCenter()
-  // Page2 实时识别节流间隔：降低以减少识别结果拖尾。
+  // 前台：高频预览 + 高频识别
   private readonly page2LiveIntervalMs: number = 80
+  private readonly page2FrameIntervalMs: number = 120
+  // 后台：低频拉流 + 低频识别（保留跨页面识别结果，同时降低全局负载）
+  private readonly page2BgLiveIntervalMs: number = 420
+  private readonly page2BgFrameIntervalMs: number = 480
   // Page2 模型互斥：
   // - yolov26barrier 默认开启，持续识别；
   // - traffic 开启后仅在指定点位+方向门控命中时执行识别。
@@ -53,6 +57,7 @@ export class Page2Coordinator {
   private activeSnapshotUrl: string = ''
   private started: boolean = false
   private starting: boolean = false
+  private backgroundMode: boolean = false
   private prewarming: boolean = false
   private prewarmed: boolean = false
   private readonly prewarmHttpIntervalMs: number = 280
@@ -68,11 +73,14 @@ export class Page2Coordinator {
       // 2) 识别任务按时间节流并防重入，避免抢占预览线程
       const now: number = Date.now()
       page2ReplayService.ingestFrameJpeg(frame.jpeg, now)
-      this.maybeAutoSnapshotFromVision(pm, now)
-      this.maybeRecordShigongReplay()
+      if (!this.backgroundMode) {
+        this.maybeAutoSnapshotFromVision(pm, now)
+        this.maybeRecordShigongReplay()
+      }
       if (!videoStore.recognitionEnabled) return
 
-      if (now - this.lastLiveSubmitAtMs < this.page2LiveIntervalMs) return
+      const liveIntervalMs: number = this.backgroundMode ? this.page2BgLiveIntervalMs : this.page2LiveIntervalMs
+      if (now - this.lastLiveSubmitAtMs < liveIntervalMs) return
       if (this.liveDecodeBusy) return
 
       this.lastLiveSubmitAtMs = now
@@ -194,8 +202,8 @@ export class Page2Coordinator {
 
       videoStore.setDisplayMode(DisplayMode.HTTP, 'startup')
       // 平衡预览新鲜度和控制路径稳定性。
-      this.frames.startHttp(httpUrl, 120)
-      this.recog.setLiveIntervalMs(this.page2LiveIntervalMs)
+      this.frames.startHttp(httpUrl, this.backgroundMode ? this.page2BgFrameIntervalMs : this.page2FrameIntervalMs)
+      this.recog.setLiveIntervalMs(this.backgroundMode ? this.page2BgLiveIntervalMs : this.page2LiveIntervalMs)
       this.lastLiveSubmitAtMs = 0
       this.lastTrafficCascadeAtMs = 0
       this.liveDecodeBusy = false
@@ -245,6 +253,7 @@ export class Page2Coordinator {
     this.lifeToken += 1
     console.info('[Page2] STOP CALLED')
     this.starting = false
+    this.backgroundMode = false
     this.prewarming = false
     this.prewarmed = false
     this.started = false
@@ -258,6 +267,34 @@ export class Page2Coordinator {
     })
 
     videoStore.setStatus('Page2 stopped')
+  }
+
+  enterBackgroundMode(): void {
+    if (!this.started || this.backgroundMode) return
+    this.backgroundMode = true
+    const httpUrl: string = this.activeSnapshotUrl.length > 0
+      ? this.activeSnapshotUrl
+      : buildCameraSnapshotUrl(videoStore.cameraHost, videoStore.cameraUser, videoStore.cameraPass)
+    this.frames.startHttp(httpUrl, this.page2BgFrameIntervalMs)
+    this.recog.setLiveIntervalMs(this.page2BgLiveIntervalMs)
+    this.lastLiveSubmitAtMs = 0
+    this.lastTrafficCascadeAtMs = 0
+    this.liveDecodeBusy = false
+    videoStore.setStatus(`Page2后台模式: frame=${this.page2BgFrameIntervalMs}ms, recog=${this.page2BgLiveIntervalMs}ms`)
+  }
+
+  exitBackgroundMode(): void {
+    if (!this.started || !this.backgroundMode) return
+    this.backgroundMode = false
+    const httpUrl: string = this.activeSnapshotUrl.length > 0
+      ? this.activeSnapshotUrl
+      : buildCameraSnapshotUrl(videoStore.cameraHost, videoStore.cameraUser, videoStore.cameraPass)
+    this.frames.startHttp(httpUrl, this.page2FrameIntervalMs)
+    this.recog.setLiveIntervalMs(this.page2LiveIntervalMs)
+    this.lastLiveSubmitAtMs = 0
+    this.lastTrafficCascadeAtMs = 0
+    this.liveDecodeBusy = false
+    videoStore.setStatus(`Page2前台模式: frame=${this.page2FrameIntervalMs}ms, recog=${this.page2LiveIntervalMs}ms`)
   }
 
   private ensurePage2RecognitionConfig(): void {

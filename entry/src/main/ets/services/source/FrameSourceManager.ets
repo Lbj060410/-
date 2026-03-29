@@ -33,6 +33,8 @@ export class FrameSourceManager {
   private httpIntervalMs: number = 150
   private fpsWindowStartMs: number = Date.now()
   private fpsWindowCount: number = 0
+  private lastOkLogAtMs: number = 0
+  private lastFailLogAtMs: number = 0
 
   private onFrame?: FrameListener
 
@@ -108,7 +110,11 @@ export class FrameSourceManager {
       this.store.setLivePixelMap(pm)
       this.store.markFrame(true, 'http ok')
       this.updateDiag(Date.now() - reqStartAtMs)
-      console.info(`[HTTP] frame ok bytes=${frame.jpeg.byteLength} ts=${frame.tsMs}`)
+      const nowMs: number = Date.now()
+      if (nowMs - this.lastOkLogAtMs >= 3000) {
+        this.lastOkLogAtMs = nowMs
+        console.info(`[HTTP] frame ok bytes=${frame.jpeg.byteLength} ts=${frame.tsMs}`)
+      }
 
       const cb = this.onFrame
       if (cb) cb(frame, pm)
@@ -118,7 +124,11 @@ export class FrameSourceManager {
       this.store.markFrame(false, msg)
       this.store.setError(msg)
       this.updateDiag(0)
-      console.error(`[HTTP] frame fail ${msg}`)
+      const nowMs: number = Date.now()
+      if (nowMs - this.lastFailLogAtMs >= 1500) {
+        this.lastFailLogAtMs = nowMs
+        console.error(`[HTTP] frame fail ${msg}`)
+      }
     } finally {
       if (this.inFlightSession === token) {
         this.inFlightSession = -1
@@ -161,6 +171,5 @@ export class FrameSourceManager {
     }
   }
 }
-
 
 

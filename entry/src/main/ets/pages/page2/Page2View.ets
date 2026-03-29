@@ -72,12 +72,13 @@ export struct Page2View {
       this.videoStore.setError('ability context is undefined')
     }
 
+    this.c.exitBackgroundMode()
     void this.c.start()
   }
 
   aboutToDisappear(): void {
-    // 在切换标签页/页面时保持 page2 流/识别运行。
-    // 仍可通过"重启"按钮手动重启。
+    // 其他页面也需要识别结果：切到后台低频模式，而不是完全停止。
+    this.c.enterBackgroundMode()
   }
 
   build(): void {
