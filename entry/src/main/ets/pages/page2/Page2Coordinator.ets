@@ -431,6 +431,14 @@ export class Page2Coordinator {
     }
   }
 
+  enterBackgroundMode(): void {
+    this.stop()
+  }
+
+  async exitBackgroundMode(): Promise<void> {
+    await this.start()
+  }
+
   async prewarm(): Promise<void> {
     if (this.started || this.starting || this.prewarming || this.prewarmed) return
 
