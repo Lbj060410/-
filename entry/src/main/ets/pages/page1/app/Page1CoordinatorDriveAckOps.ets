@@ -163,44 +163,9 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
 }
 
 async function waitLightBaselineReadyForInitialGo(ctx: any, timeoutMs: number): Promise<boolean> {
-  const s = ctx.store
-  if (!s) return false
-
-  const nowMs: number = Date.now()
-  const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
-  const shouldQueryNow: boolean =
-    !ctx.lightMetricQueryEnabled ||
-    (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
-  let gateAtMs: number = lastQueryAtMs > 0 ? lastQueryAtMs : nowMs
-
-  if (shouldQueryNow) {
-    try {
-      if (typeof ctx.armLightMetricQuery === 'function') {
-        ctx.armLightMetricQuery()
-      }
-      gateAtMs = Date.now()
-      ctx.lightMetricLastQueryAtMs = gateAtMs
-      s.bumpTx()
-      await ctx.proto.light()
-      s.pushLog('LIGHT: 起步前已发送光照查询，等待BD=02后再发前进')
-    } catch (_) {
-      s.pushLog('LIGHT: 起步前光照查询发送失败，本轮前进取消')
-      return false
-    }
-  } else {
-    s.pushLog('LIGHT: 起步前等待最近一次光照查询的BD=02')
-  }
-
-  const waitMs: number = Math.max(300, timeoutMs)
-  const deadlineMs: number = Date.now() + waitMs
-  while (Date.now() <= deadlineMs) {
-    const statusCode: number = Number(ctx.pathAckLastStatusCode) || 0
-    const statusAtMs: number = Number(ctx.pathAckLastStatusAtMs) || 0
-    if (statusCode === 0x02 && statusAtMs >= gateAtMs) return true
-    await ctx.sleep(120)
-  }
-  s.pushLog(`LIGHT: 起步等待BD=02超时(${waitMs}ms)，本轮前进取消`)
-  return false
+  void ctx
+  void timeoutMs
+  return true
 }
 
 export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<boolean> {
@@ -255,27 +220,6 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
     if (isInitialPathGo) {
       const ready: boolean = await waitLightBaselineReadyForInitialGo(ctx, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
       if (!ready) return false
-    }
-    if (!ctx.lightMetricReady) {
-      const nowMs: number = Date.now()
-      const lastQueryAtMs: number = Number(ctx.lightMetricLastQueryAtMs) || 0
-      const shouldQuery: boolean =
-        !ctx.lightMetricQueryEnabled ||
-        (nowMs - lastQueryAtMs >= P1C.LIGHT_QUERY_MIN_INTERVAL_MS)
-      if (shouldQuery) {
-        if (typeof ctx.armLightMetricQuery === 'function') {
-          ctx.armLightMetricQuery()
-        }
-        ctx.lightMetricLastQueryAtMs = nowMs
-        s.bumpTx()
-        void ctx.proto.light()
-          .then((): void => {
-            s.pushLog('LIGHT: 出发前自动查询光照基准(异步)')
-          })
-          .catch((): void => {
-            s.pushLog('LIGHT: 出发前自动查询失败，继续发送运动指令')
-          })
-      }
     }
   }
 

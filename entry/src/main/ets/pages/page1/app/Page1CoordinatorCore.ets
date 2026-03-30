@@ -300,6 +300,7 @@ export class Page1Coordinator {
   private lightMetricQueryEnabled: boolean = false
   private lightMetricReady: boolean = false
   private lightMetricLastQueryAtMs: number = 0
+  private lightMetricQueriedOnPageOpen: boolean = false
   private lastYolov26BarrierEmergencyTaskId: string = ''
   private lastYolov26BarrierEmergencyTsMs: number = 0
   private started: boolean = false
@@ -593,6 +594,23 @@ export class Page1Coordinator {
     s.setMetricLightLux(this.simLightBaseLux)
   }
 
+  private async tryQueryLightMetricOnceOnPageOpen(): Promise<void> {
+    if (this.lightMetricQueriedOnPageOpen) return
+    if (!this.canRealSend()) return
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+
+    this.lightMetricQueriedOnPageOpen = true
+    this.armLightMetricQuery()
+    s.bumpTx()
+    try {
+      await this.proto.light()
+      s.pushLog('LIGHT: 页面启动后首次连接，已执行一次光照查询')
+    } catch (_) {
+      s.pushLog('LIGHT: 页面启动后光照查询发送失败（本次页面不再重试）')
+    }
+  }
+
   private onSimTelemetryTick(speed: number, headingDeg: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
@@ -640,6 +658,7 @@ export class Page1Coordinator {
     }
 
     try {
+      this.lightMetricQueriedOnPageOpen = false
       this.startSimulator()
       this.bootstrapRecognitionCenter()
 
