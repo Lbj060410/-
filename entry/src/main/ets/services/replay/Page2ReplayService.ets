@@ -38,8 +38,8 @@ interface FrameClipBufferItem {
 const PAGE2_REPLAY_DIR: string = '/data/storage/el2/base/haps/entry/files/page2_replay'
 const MAX_OBSTACLE_ITEMS: number = 20
 const MAX_GALLERY_ITEMS: number = 20
-const MAX_FRAME_BUFFER: number = 36
-const FRAME_SAMPLE_INTERVAL_MS: number = 120
+const MAX_FRAME_BUFFER: number = 20
+const FRAME_SAMPLE_INTERVAL_MS: number = 200
 const SHIGONG_COOLDOWN_MS: number = 1400
 
 @Observed

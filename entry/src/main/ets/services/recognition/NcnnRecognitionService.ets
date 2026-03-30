@@ -10,10 +10,12 @@ import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
 import resourceManager from '@ohos.resourceManager'
 import { videoStore } from '../../state/VideoStore'
+import { recogStore } from '../../state/RecogStore'
 
 import { IRecognitionService } from './RecognitionService'
 import { BBoxNorm, RecognitionCoreResult } from './RecognitionResult'
 import { getLibEntryLastError, resolveLibEntryApi } from './LibEntryBridge'
+import { getNcnnIpcClient, NcnnIpcClient } from './NcnnIpcClient'
 
 interface RawBox {
   cls: number
@@ -36,6 +38,22 @@ export class NcnnRecognitionService implements IRecognitionService {
   private readonly confThresh: number
   private readonly nmsThresh: number
   private loaded: boolean = false
+  private rgbaScratch?: ArrayBuffer
+  private rgbaScratchBytes: number = 0
+  private rgbaDownsampleScratch?: ArrayBuffer
+  private rgbaDownsampleScratchBytes: number = 0
+  private readonly detectMaxLongEdgePx: number = 640
+  private readonly ipcClient: NcnnIpcClient = getNcnnIpcClient()
+  private readonly ipcEnabled: boolean = false
+  private ipcFaultCount: number = 0
+  private ipcBypassUntilMs: number = 0
+  private ipcHardBypassUntilMs: number = 0
+  private ipcLastCostMs: number = 0
+  private perfTotalDetect: number = 0
+  private perfIpcOk: number = 0
+  private perfIpcFail: number = 0
+  private perfFallbackUsed: number = 0
+  private perfLastLogAtMs: number = 0
 
   constructor(
     modelName: string,
@@ -71,18 +89,19 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
 
     try {
-      const info: image.ImageInfo = await pm.getImageInfo()
-      const w: number = info.size.width
-      const h: number = info.size.height
-      const buf: ArrayBuffer = new ArrayBuffer(w * h * 4)
+      let w: number = Math.max(0, Math.trunc(videoStore.liveFrameWidth))
+      let h: number = Math.max(0, Math.trunc(videoStore.liveFrameHeight))
+      if (w <= 0 || h <= 0) {
+        const info: image.ImageInfo = await pm.getImageInfo()
+        w = Math.max(0, info.size.width)
+        h = Math.max(0, info.size.height)
+      }
+      const requiredBytes: number = Math.max(0, w * h * 4)
+      const buf: ArrayBuffer = this.ensureScratchBuffer(requiredBytes)
       await pm.readPixelsToBuffer(buf)
 
-      const libentry = this.requireNative()
-      const json: string = libentry.detectNcnn(this.activeModelName, buf, w, h, this.confThresh, this.nmsThresh)
-      const nativeErr: string = (typeof libentry.getLastError === 'function') ? String(libentry.getLastError()) : ''
-      if (nativeErr.length > 0) {
-        return this.errorResult(t0, `[${this.diagTag}] detect failed: ${nativeErr}`)
-      }
+      const sampled: { rgba: ArrayBuffer; w: number; h: number } = this.maybeDownsampleRgba(buf, w, h)
+      const json: string = await this.detectWithIpcOrFallback(sampled.rgba, sampled.w, sampled.h)
 
       let rawBoxes: RawBox[]
       try {
@@ -311,5 +330,135 @@ export class NcnnRecognitionService implements IRecognitionService {
       ok: false,
       errorText: msg
     }
+  }
+
+  private ensureScratchBuffer(requiredBytes: number): ArrayBuffer {
+    const safeBytes: number = Math.max(0, Math.trunc(requiredBytes))
+    if (!this.rgbaScratch || this.rgbaScratchBytes !== safeBytes) {
+      this.rgbaScratch = new ArrayBuffer(safeBytes)
+      this.rgbaScratchBytes = safeBytes
+    }
+    return this.rgbaScratch
+  }
+
+  private ensureDownsampleScratchBuffer(requiredBytes: number): ArrayBuffer {
+    const safeBytes: number = Math.max(0, Math.trunc(requiredBytes))
+    if (!this.rgbaDownsampleScratch || this.rgbaDownsampleScratchBytes !== safeBytes) {
+      this.rgbaDownsampleScratch = new ArrayBuffer(safeBytes)
+      this.rgbaDownsampleScratchBytes = safeBytes
+    }
+    return this.rgbaDownsampleScratch
+  }
+
+  private maybeDownsampleRgba(src: ArrayBuffer, srcW: number, srcH: number): { rgba: ArrayBuffer; w: number; h: number } {
+    const w: number = Math.max(0, Math.trunc(srcW))
+    const h: number = Math.max(0, Math.trunc(srcH))
+    if (w <= 0 || h <= 0) return { rgba: src, w, h }
+    const longEdge: number = Math.max(w, h)
+    if (longEdge <= this.detectMaxLongEdgePx) {
+      return { rgba: src, w, h }
+    }
+
+    const scale: number = this.detectMaxLongEdgePx / longEdge
+    const dstW: number = Math.max(1, Math.round(w * scale))
+    const dstH: number = Math.max(1, Math.round(h * scale))
+    const dstBuf: ArrayBuffer = this.ensureDownsampleScratchBuffer(dstW * dstH * 4)
+
+    const srcU8: Uint8Array = new Uint8Array(src)
+    const dstU8: Uint8Array = new Uint8Array(dstBuf)
+    const xRatio: number = w / dstW
+    const yRatio: number = h / dstH
+
+    let di: number = 0
+    for (let y: number = 0; y < dstH; y++) {
+      const sy: number = Math.min(h - 1, Math.floor(y * yRatio))
+      const rowStart: number = sy * w * 4
+      for (let x: number = 0; x < dstW; x++) {
+        const sx: number = Math.min(w - 1, Math.floor(x * xRatio))
+        const si: number = rowStart + sx * 4
+        dstU8[di++] = srcU8[si]
+        dstU8[di++] = srcU8[si + 1]
+        dstU8[di++] = srcU8[si + 2]
+        dstU8[di++] = srcU8[si + 3]
+      }
+    }
+    return { rgba: dstBuf, w: dstW, h: dstH }
+  }
+
+  private async detectWithIpcOrFallback(rgba: ArrayBuffer, w: number, h: number): Promise<string> {
+    const nowMs: number = Date.now()
+    this.perfTotalDetect += 1
+    if (!this.ipcEnabled) {
+      this.perfFallbackUsed += 1
+      const jsonDirect: string = this.detectOnMainFallback(rgba, w, h)
+      this.maybeLogPerf()
+      return jsonDirect
+    }
+    const bypassUntilMs: number = Math.max(this.ipcBypassUntilMs, this.ipcHardBypassUntilMs)
+    if (nowMs < bypassUntilMs) {
+      this.perfFallbackUsed += 1
+      const jsonBypass: string = this.detectOnMainFallback(rgba, w, h)
+      this.maybeLogPerf()
+      return jsonBypass
+    }
+    const t0: number = Date.now()
+    try {
+      const json: string = await this.ipcClient.detect(
+        this.activeModelName,
+        rgba,
+        w,
+        h,
+        this.confThresh,
+        this.nmsThresh
+      )
+      this.ipcFaultCount = 0
+      this.ipcBypassUntilMs = 0
+      this.ipcHardBypassUntilMs = 0
+      this.ipcLastCostMs = Date.now() - t0
+      this.perfIpcOk += 1
+      this.maybeLogPerf()
+      return json
+    } catch (e) {
+      this.ipcFaultCount += 1
+      this.perfIpcFail += 1
+      const errText: string = e instanceof Error ? e.message : String(e)
+      console.error(`[${this.diagTag}] ipc detect failed #${this.ipcFaultCount}: ${errText}`)
+      const timeoutFail: boolean = errText.indexOf('timeout') >= 0 || errText.indexOf('timed') >= 0
+      const stepMs: number = timeoutFail ? 2800 : 1600
+      const capMs: number = timeoutFail ? 20000 : 10000
+      const backoffMs: number = Math.min(capMs, stepMs * this.ipcFaultCount)
+      this.ipcBypassUntilMs = Date.now() + backoffMs
+      if (timeoutFail && this.ipcFaultCount >= 3) {
+        this.ipcHardBypassUntilMs = Date.now() + 60000
+      }
+      this.perfFallbackUsed += 1
+      const jsonFallback: string = this.detectOnMainFallback(rgba, w, h)
+      this.maybeLogPerf()
+      return jsonFallback
+    }
+  }
+
+  private detectOnMainFallback(rgba: ArrayBuffer, w: number, h: number): string {
+    const libentry = this.requireNative()
+    const json: string = libentry.detectNcnn(this.activeModelName, rgba, w, h, this.confThresh, this.nmsThresh)
+    const nativeErr: string = (typeof libentry.getLastError === 'function') ? String(libentry.getLastError()) : ''
+    if (nativeErr.length > 0) {
+      throw new Error(`fallback detect failed: ${nativeErr}`)
+    }
+    return json
+  }
+
+  private maybeLogPerf(): void {
+    const nowMs: number = Date.now()
+    if (nowMs - this.perfLastLogAtMs < 2000) return
+    this.perfLastLogAtMs = nowMs
+    recogStore.setNcnnPerf(
+      this.perfTotalDetect,
+      this.perfIpcOk,
+      this.perfIpcFail,
+      this.perfFallbackUsed,
+      this.ipcLastCostMs,
+      !this.ipcEnabled || nowMs < Math.max(this.ipcBypassUntilMs, this.ipcHardBypassUntilMs)
+    )
   }
 }

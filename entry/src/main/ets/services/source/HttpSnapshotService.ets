@@ -14,6 +14,8 @@ interface HttpBusinessErrorLike {
 }
 
 export class HttpSnapshotService {
+  private client?: http.HttpRequest
+
   async fetchJpeg(url: string, timeoutMs: number): Promise<ArrayBuffer> {
     // 低延迟模式：不再强制 3500ms 下限，避免慢请求把实时预览拖成“旧帧”。
     const effectiveTimeoutMs: number = Math.max(250, Math.min(5000, timeoutMs))
@@ -34,7 +36,7 @@ export class HttpSnapshotService {
   }
 
   private async requestJpeg(url: string, timeoutMs: number, basicAuth: string = ''): Promise<ArrayBuffer> {
-    const client: http.HttpRequest = http.createHttp()
+    const client: http.HttpRequest = this.ensureClient()
     try {
       const reqHeaders: Record<string, string> = {
         'Accept': 'image/jpeg,*/*',
@@ -42,8 +44,7 @@ export class HttpSnapshotService {
         'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
         'Expires': '0',
-        'If-Modified-Since': '0',
-        'Connection': 'close'
+        'If-Modified-Since': '0'
       }
       if (basicAuth.length > 0) {
         reqHeaders['Authorization'] = basicAuth
@@ -83,10 +84,23 @@ export class HttpSnapshotService {
         const msgText: string = typeof be.message === 'string' && be.message.length > 0 ? be.message : 'http request failed'
         msg = `${codeText}msg=${msgText}`.trim()
       }
+      this.resetClient()
       throw new Error(msg)
-    } finally {
-      try { client.destroy() } catch (e) {}
     }
+  }
+
+  private ensureClient(): http.HttpRequest {
+    if (!this.client) {
+      this.client = http.createHttp()
+    }
+    return this.client
+  }
+
+  private resetClient(): void {
+    const c: http.HttpRequest | undefined = this.client
+    this.client = undefined
+    if (!c) return
+    try { c.destroy() } catch (_) {}
   }
 
   private tryBuildBasicAuthFromUrl(url: string): string {
@@ -161,4 +175,3 @@ export class HttpSnapshotService {
     return new Uint8Array(bytes)
   }
 }
-

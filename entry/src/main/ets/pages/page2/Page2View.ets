@@ -80,6 +80,14 @@ export struct Page2View {
     // 仍可通过"重启"按钮手动重启。
   }
 
+  onPageShow(): void {
+    void this.c.start()
+  }
+
+  onPageHide(): void {
+    this.c.stop()
+  }
+
   build(): void {
     Stack() {
       Row({ space: 0 }) {
@@ -703,11 +711,17 @@ export struct Page2View {
 
   private cameraConnStateText(): string {
     const nowMs: number = Date.now()
-    const lastMs: number = this.videoStore.lastFrameTimeMs
-    if (lastMs <= 0) return '连接中'
-    const ageMs: number = nowMs - lastMs
-    if (ageMs <= 2500) return '已连接'
-    if (ageMs <= 7000) return '弱连接'
+    const lastOkMs: number = this.videoStore.lastOkFrameTimeMs
+    const failStreak: number = Math.max(0, Math.trunc(this.videoStore.consecutiveFrameFailCount))
+    if (lastOkMs <= 0) {
+      if (failStreak >= 3) return '异常'
+      return '连接中'
+    }
+    const okAgeMs: number = nowMs - lastOkMs
+    if (failStreak >= 4 && okAgeMs > 1200) return '异常'
+    if (failStreak >= 2 && okAgeMs > 600) return '弱连接'
+    if (okAgeMs <= 2500) return '已连接'
+    if (okAgeMs <= 7000) return '弱连接'
     return '异常'
   }
 

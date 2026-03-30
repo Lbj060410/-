@@ -9,6 +9,9 @@ import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import UIAbility from '@ohos.app.ability.UIAbility';
 import Want from '@ohos.app.ability.Want';
 import window from '@ohos.window';
+import { page1Coordinator } from '../pages/page1/app/Page1Coordinator'
+import { page2Coordinator } from '../pages/page2/Page2Coordinator'
+import { shutdownRecognitionCenter } from '../services/recognition/RecognitionCenter'
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -27,5 +30,15 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     // no-op
   }
-}
 
+  onBackground(): void {
+    // App enters background: promptly stop heavy loops/inference to avoid lifecycle timeout freeze.
+    page1Coordinator.pausePage()
+    page2Coordinator.stop()
+    shutdownRecognitionCenter()
+  }
+
+  onForeground(): void {
+    // Views will re-arm their own loops in onPageShow/aboutToAppear; keep ability hook lightweight.
+  }
+}

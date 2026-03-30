@@ -27,6 +27,12 @@ export class RecogStore {
   recogDroppedFrames: number = 0
   recogProcessedFrames: number = 0
   recogBusy: boolean = false
+  ncnnTotalDetect: number = 0
+  ncnnWorkerOk: number = 0
+  ncnnWorkerFail: number = 0
+  ncnnFallbackUsed: number = 0
+  ncnnWorkerCostMs: number = 0
+  ncnnWorkerBypass: boolean = false
 
   // ==== Milestone 2：识别任务中枢（Page2） ====
   recogTasksMax: number = 30
@@ -70,6 +76,28 @@ export class RecogStore {
     this.recogDroppedFrames = 0
     this.recogProcessedFrames = 0
     this.recogBusy = false
+    this.ncnnTotalDetect = 0
+    this.ncnnWorkerOk = 0
+    this.ncnnWorkerFail = 0
+    this.ncnnFallbackUsed = 0
+    this.ncnnWorkerCostMs = 0
+    this.ncnnWorkerBypass = false
+  }
+
+  setNcnnPerf(
+    totalDetect: number,
+    workerOk: number,
+    workerFail: number,
+    fallbackUsed: number,
+    workerCostMs: number,
+    workerBypass: boolean
+  ): void {
+    this.ncnnTotalDetect = Math.max(0, Math.trunc(totalDetect))
+    this.ncnnWorkerOk = Math.max(0, Math.trunc(workerOk))
+    this.ncnnWorkerFail = Math.max(0, Math.trunc(workerFail))
+    this.ncnnFallbackUsed = Math.max(0, Math.trunc(fallbackUsed))
+    this.ncnnWorkerCostMs = Math.max(0, Math.trunc(workerCostMs))
+    this.ncnnWorkerBypass = workerBypass
   }
 
   setAutoReportEnabled(enabled: boolean): void { this.autoReportEnabled = enabled }
@@ -257,4 +285,3 @@ export class RecogStore {
 }
 
 export const recogStore: RecogStore = new RecogStore()
-

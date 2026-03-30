@@ -63,14 +63,26 @@ export function resolveOpenClawHostCandidates(gatewayIp: string): Array<string> 
   }
 
   const configured: string = OPENCLAW_GATEWAY_HOST.trim()
+  const appendSubnetCandidates = (ip: string): void => {
+    const one: string = ip.trim()
+    const idx: number = one.lastIndexOf('.')
+    if (idx <= 0) return
+    const prefix: string = one.substring(0, idx)
+    pushUnique(`${prefix}.100`)
+    pushUnique(`${prefix}.101`)
+  }
+
   if (configured.length > 0) {
     pushUnique(configured)
     pushUnique(gatewayIp)
+    appendSubnetCandidates(configured)
+    appendSubnetCandidates(gatewayIp)
     pushUnique(OPENCLAW_GATEWAY_FALLBACK_HOST)
     return out
   }
 
   pushUnique(gatewayIp)
+  appendSubnetCandidates(gatewayIp)
   pushUnique(OPENCLAW_GATEWAY_FALLBACK_HOST)
   return out
 }

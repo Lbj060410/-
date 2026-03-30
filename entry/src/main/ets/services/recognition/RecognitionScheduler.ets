@@ -64,6 +64,8 @@ export class RecognitionScheduler {
 
   private enabled: boolean = false
   private inFlight: boolean = false
+  private inFlightTaskId: string = ''
+  private inFlightTaskToken: number = 0
   private runToken: number = 0
 
   private seq: number = 0
@@ -120,7 +122,7 @@ export class RecognitionScheduler {
   start(): void {
     this.enabled = true
     this.runToken += 1
-    this.queue.length = 0
+    this.clearQueuedTasks()
     this.cancelSet.clear()
 
     this.fpsWindowStartMs = Date.now()
@@ -138,9 +140,12 @@ export class RecognitionScheduler {
     // ✅ 关键：切 token，杜绝 inFlight finally 后写 store
     this.runToken += 1
     this.enabled = false
-    this.inFlight = false
-    this.queue.length = 0
-    this.cancelSet.clear()
+    this.clearQueuedTasks()
+    if (this.inFlightTaskId.length > 0) {
+      this.cancelSet.add(this.inFlightTaskId)
+    } else {
+      this.cancelSet.clear()
+    }
 
     this.store.setRecogStatus(RecogStatus.IDLE)
     this.store.setRecogText('recognition stopped')
@@ -408,7 +413,11 @@ export class RecognitionScheduler {
     const next: Array<RecognitionTask> = []
     for (let i: number = 0; i < this.queue.length; i++) {
       const t: RecognitionTask = this.queue[i]
-      if (t.id !== taskId) next.push(t)
+      if (t.id !== taskId) {
+        next.push(t)
+      } else {
+        this.releaseTaskInputIfOwned(t)
+      }
     }
     this.queue.length = 0
     for (let i: number = 0; i < next.length; i++) this.queue.push(next[i])
@@ -460,13 +469,15 @@ export class RecognitionScheduler {
     if (!this.enabled) return
     if (this.inFlight) return
     this.inFlight = true
+    this.inFlightTaskId = task.id
+    this.inFlightTaskToken = token
 
     const startAt: number = Date.now()
     this.store.updateRecogTaskState(task.id, RecognitionTaskState.RUNNING, '')
     this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.START, 'RUNNING'))
 
     // busy 标识：Page4 overlay/面板显示
-    this.store.setRecogStat(this.fps, this.lastCostMs, this.droppedLiveFrames, this.processedFrames, true)
+    this.syncStatToStore()
 
     try {
       this.throwIfCancelled(task.id)
@@ -551,13 +562,18 @@ export class RecognitionScheduler {
       this.store.updateRecogTaskCost(task.id, costMsTotal)
     } finally {
       this.cancelSet.delete(task.id)
-      if (token !== this.runToken) return
+      if (this.inFlightTaskId === task.id && this.inFlightTaskToken === token) {
+        this.inFlight = false
+        this.inFlightTaskId = ''
+        this.inFlightTaskToken = 0
+      }
 
-      this.inFlight = false
-      this.store.setRecogStat(this.fps, this.lastCostMs, this.droppedLiveFrames, this.processedFrames, false)
+      this.syncStatToStore()
 
-      // Pull next queued task.
-      this.pump()
+      // Pull next queued task (including after token switch on stop/start).
+      if (this.enabled) {
+        this.pump()
+      }
     }
   }
 
@@ -720,6 +736,23 @@ export class RecognitionScheduler {
     try { pm.release() } catch (e) {}
   }
 
+  private releaseTaskInputIfOwned(task: RecognitionTask): void {
+    if (task.input.type !== RecognitionInputType.PIXEL_MAP) return
+    if (!task.input.releaseAfterUse) return
+    const pm: PixelMap | undefined = task.input.pixelMap
+    if (!pm) return
+    task.input.pixelMap = undefined
+    try { pm.release() } catch (_) {}
+  }
+
+  private clearQueuedTasks(): void {
+    if (this.queue.length <= 0) return
+    for (let i: number = 0; i < this.queue.length; i++) {
+      this.releaseTaskInputIfOwned(this.queue[i])
+    }
+    this.queue.length = 0
+  }
+
   private async captureCarTaskSnapshot(task: RecognitionTask): Promise<void> {
     if (task.source !== RecognitionTaskSource.CAR_FRAME_TRIGGER) return
 
@@ -788,7 +821,13 @@ export class RecognitionScheduler {
   }
 
   private syncStatToStore(): void {
-    this.store.setRecogStat(this.fps, this.lastCostMs, this.droppedLiveFrames, this.processedFrames, this.inFlight)
+    this.store.setRecogStat(
+      this.fps,
+      this.lastCostMs,
+      this.droppedLiveFrames,
+      this.processedFrames,
+      this.enabled && this.inFlight
+    )
   }
 
   private nextId(prefix: string): string {

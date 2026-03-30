@@ -40,6 +40,15 @@ export struct Page1View {
     // continue in background; full teardown is handled by explicit app/page stop paths.
   }
 
+  onPageShow(): void {
+    page1Coordinator.bind(this.store)
+    void page1Coordinator.start()
+  }
+
+  onPageHide(): void {
+    page1Coordinator.pausePage()
+  }
+
   private clearDeferredStart(): void {
     if (this.startDeferredTimerId >= 0) {
       clearTimeout(this.startDeferredTimerId)

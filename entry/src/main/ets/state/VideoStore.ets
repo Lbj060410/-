@@ -46,9 +46,14 @@ export class VideoStore {
   // ==== HTTP/Rtsp 帧统计 ====
   diagVideoFps: number = 0
   diagVideoLatencyMs: number = 0
+  diagVideoPullIntervalMs: number = 0
   lastFrameTimeMs: number = 0
+  lastOkFrameTimeMs: number = 0
+  lastFailFrameTimeMs: number = 0
   frameOkCount: number = 0
   frameFailCount: number = 0
+  consecutiveFrameOkCount: number = 0
+  consecutiveFrameFailCount: number = 0
   statusText: string = ''
   lastErrorText: string = ''
 
@@ -137,9 +142,15 @@ export class VideoStore {
     const now: number = Date.now()
     this.lastFrameTimeMs = now
     if (ok) {
+      this.lastOkFrameTimeMs = now
       this.frameOkCount += 1
+      this.consecutiveFrameOkCount += 1
+      this.consecutiveFrameFailCount = 0
     } else {
+      this.lastFailFrameTimeMs = now
       this.frameFailCount += 1
+      this.consecutiveFrameFailCount += 1
+      this.consecutiveFrameOkCount = 0
       this.lastErrorText = reason
     }
   }
@@ -147,6 +158,8 @@ export class VideoStore {
   clearHttpStats(): void {
     this.frameOkCount = 0
     this.frameFailCount = 0
+    this.consecutiveFrameOkCount = 0
+    this.consecutiveFrameFailCount = 0
   }
 
   setRecognitionEnabled(enabled: boolean): void { this.recognitionEnabled = enabled }
@@ -175,9 +188,12 @@ export class VideoStore {
   // Compatibility: keep old API name, now mapped to yolov26barrier toggle semantics.
   setPage2Yolov26BarrierExperimentalEnabled(enabled: boolean): void { this.setPage2Yolov26BarrierEnabled(enabled) }
 
-  setDiagVideo(fps: number, latencyMs: number): void {
+  setDiagVideo(fps: number, latencyMs: number, pullIntervalMs?: number): void {
     this.diagVideoFps = fps
     this.diagVideoLatencyMs = latencyMs
+    if (typeof pullIntervalMs === 'number' && Number.isFinite(pullIntervalMs)) {
+      this.diagVideoPullIntervalMs = Math.max(0, Math.trunc(pullIntervalMs))
+    }
   }
 }
 

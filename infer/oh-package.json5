@@ -1,0 +1,12 @@
+{
+  "license": "",
+  "devDependencies": {},
+  "author": "",
+  "name": "infer",
+  "description": "ncnn infer feature module",
+  "main": "",
+  "version": "1.0.0",
+  "dependencies": {
+    "libentry.so": "file:../entry/src/main/cpp/types/libentry"
+  }
+}
