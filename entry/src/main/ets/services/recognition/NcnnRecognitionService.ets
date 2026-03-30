@@ -15,7 +15,6 @@ import { recogStore } from '../../state/RecogStore'
 import { IRecognitionService } from './RecognitionService'
 import { BBoxNorm, RecognitionCoreResult } from './RecognitionResult'
 import { getLibEntryLastError, resolveLibEntryApi } from './LibEntryBridge'
-import { getNcnnIpcClient, NcnnIpcClient } from './NcnnIpcClient'
 
 interface RawBox {
   cls: number
@@ -43,11 +42,6 @@ export class NcnnRecognitionService implements IRecognitionService {
   private rgbaDownsampleScratch?: ArrayBuffer
   private rgbaDownsampleScratchBytes: number = 0
   private readonly detectMaxLongEdgePx: number = 640
-  private readonly ipcClient: NcnnIpcClient = getNcnnIpcClient()
-  private readonly ipcEnabled: boolean = false
-  private ipcFaultCount: number = 0
-  private ipcBypassUntilMs: number = 0
-  private ipcHardBypassUntilMs: number = 0
   private ipcLastCostMs: number = 0
   private perfTotalDetect: number = 0
   private perfIpcOk: number = 0
@@ -386,55 +380,22 @@ export class NcnnRecognitionService implements IRecognitionService {
   }
 
   private async detectWithIpcOrFallback(rgba: ArrayBuffer, w: number, h: number): Promise<string> {
-    const nowMs: number = Date.now()
+    const t0: number = Date.now()
     this.perfTotalDetect += 1
-    if (!this.ipcEnabled) {
-      this.perfFallbackUsed += 1
+    try {
       const jsonDirect: string = this.detectOnMainFallback(rgba, w, h)
+      this.perfIpcOk += 1
+      this.ipcLastCostMs = Date.now() - t0
       this.maybeLogPerf()
       return jsonDirect
-    }
-    const bypassUntilMs: number = Math.max(this.ipcBypassUntilMs, this.ipcHardBypassUntilMs)
-    if (nowMs < bypassUntilMs) {
-      this.perfFallbackUsed += 1
-      const jsonBypass: string = this.detectOnMainFallback(rgba, w, h)
-      this.maybeLogPerf()
-      return jsonBypass
-    }
-    const t0: number = Date.now()
-    try {
-      const json: string = await this.ipcClient.detect(
-        this.activeModelName,
-        rgba,
-        w,
-        h,
-        this.confThresh,
-        this.nmsThresh
-      )
-      this.ipcFaultCount = 0
-      this.ipcBypassUntilMs = 0
-      this.ipcHardBypassUntilMs = 0
-      this.ipcLastCostMs = Date.now() - t0
-      this.perfIpcOk += 1
-      this.maybeLogPerf()
-      return json
     } catch (e) {
-      this.ipcFaultCount += 1
-      this.perfIpcFail += 1
-      const errText: string = e instanceof Error ? e.message : String(e)
-      console.error(`[${this.diagTag}] ipc detect failed #${this.ipcFaultCount}: ${errText}`)
-      const timeoutFail: boolean = errText.indexOf('timeout') >= 0 || errText.indexOf('timed') >= 0
-      const stepMs: number = timeoutFail ? 2800 : 1600
-      const capMs: number = timeoutFail ? 20000 : 10000
-      const backoffMs: number = Math.min(capMs, stepMs * this.ipcFaultCount)
-      this.ipcBypassUntilMs = Date.now() + backoffMs
-      if (timeoutFail && this.ipcFaultCount >= 3) {
-        this.ipcHardBypassUntilMs = Date.now() + 60000
-      }
       this.perfFallbackUsed += 1
-      const jsonFallback: string = this.detectOnMainFallback(rgba, w, h)
+      this.perfIpcFail += 1
+      this.ipcLastCostMs = Date.now() - t0
+      const errText: string = e instanceof Error ? e.message : String(e)
+      console.error(`[${this.diagTag}] local detect failed: ${errText}`)
       this.maybeLogPerf()
-      return jsonFallback
+      throw e
     }
   }
 
@@ -458,7 +419,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       this.perfIpcFail,
       this.perfFallbackUsed,
       this.ipcLastCostMs,
-      !this.ipcEnabled || nowMs < Math.max(this.ipcBypassUntilMs, this.ipcHardBypassUntilMs)
+      false
     )
   }
 }
