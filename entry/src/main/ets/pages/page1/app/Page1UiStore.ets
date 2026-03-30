@@ -186,10 +186,8 @@ export class Page1UiStore {
 
   // ===== Step4：路径自动跟随（演示闭环）=====
   autoFollowEnabled: boolean = true
-  // 智能车位切换：
-  // - false: F1 为智能车位（默认）
-  // - true:  F7 为智能车位
-  smartParkingUseF7: boolean = false
+  // 智能停车位固定为 F7（不再提供切换开关）。
+  smartParkingUseF7: boolean = true
   // 自动跟随节拍冷却：
   // - 调大：动作频率低，控制更稳但更慢
   // - 调小：动作频率高，响应更快但更容易叠命令
@@ -223,12 +221,13 @@ export class Page1UiStore {
   }
 
   smartParkingGoalId(): string {
-    return this.smartParkingUseF7 ? 'F7' : 'F1'
+    return 'F7'
   }
 
   toggleSmartParkingGoal(): void {
-    this.smartParkingUseF7 = !this.smartParkingUseF7
-    this.pushLog(`智能车位：${this.smartParkingGoalId()}`)
+    // 兼容旧调用：策略固定 F7，不再切换。
+    this.smartParkingUseF7 = true
+    this.pushLog('智能车位：F7')
   }
 
   // ===== C0：Pose + 融合状态 =====

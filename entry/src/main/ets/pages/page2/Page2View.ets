@@ -72,8 +72,7 @@ export struct Page2View {
       this.videoStore.setError('ability context is undefined')
     }
 
-    this.c.exitBackgroundMode()
-    void this.c.start()
+    void this.c.exitBackgroundMode()
   }
 
   aboutToDisappear(): void {
@@ -82,11 +81,11 @@ export struct Page2View {
   }
 
   onPageShow(): void {
-    void this.c.start()
+    void this.c.exitBackgroundMode()
   }
 
   onPageHide(): void {
-    this.c.stop()
+    this.c.enterBackgroundMode()
   }
 
   build(): void {
@@ -714,15 +713,18 @@ export struct Page2View {
     const nowMs: number = Date.now()
     const lastOkMs: number = this.videoStore.lastOkFrameTimeMs
     const failStreak: number = Math.max(0, Math.trunc(this.videoStore.consecutiveFrameFailCount))
+    const pullMs: number = Math.max(80, Math.trunc(this.videoStore.diagVideoPullIntervalMs || 120))
+    const connectedAgeMs: number = Math.max(2500, pullMs * 8)
+    const weakAgeMs: number = Math.max(7000, pullMs * 20)
     if (lastOkMs <= 0) {
       if (failStreak >= 3) return '异常'
       return '连接中'
     }
     const okAgeMs: number = nowMs - lastOkMs
-    if (failStreak >= 4 && okAgeMs > 1200) return '异常'
-    if (failStreak >= 2 && okAgeMs > 600) return '弱连接'
-    if (okAgeMs <= 2500) return '已连接'
-    if (okAgeMs <= 7000) return '弱连接'
+    if (failStreak >= 4 && okAgeMs > Math.max(1200, pullMs * 4)) return '异常'
+    if (failStreak >= 2 && okAgeMs > Math.max(600, pullMs * 2)) return '弱连接'
+    if (okAgeMs <= connectedAgeMs) return '已连接'
+    if (okAgeMs <= weakAgeMs) return '弱连接'
     return '异常'
   }
 

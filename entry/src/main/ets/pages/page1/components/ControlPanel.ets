@@ -15,6 +15,7 @@ import { Page1Theme } from '../Page1Theme'
 @Component
 export struct ControlPanel {
   @State private store: Page1UiStore = page1Store
+  @State private custom0AInput: string = ''
   onDiag: () => void = () => {}
 
   build() {
@@ -100,18 +101,36 @@ export struct ControlPanel {
           .width('100%')
           .textAlign(TextAlign.Start)
 
-        Button(this.store.smartParkingUseF7 ? '智能车位：F7（开）' : '智能车位：F1（关）')
-          .width('100%')
-          .height(40)
-          .borderRadius(12)
-          .backgroundColor(this.store.smartParkingUseF7 ? '#E0F2FE' : '#F8FAFC')
-          .fontColor(this.store.smartParkingUseF7 ? '#0369A1' : Page1Theme.TEXT_SECONDARY)
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.store.smartParkingUseF7 ? '#BAE6FD' : Page1Theme.BORDER })
-          .onClick((): void => {
-            this.store.toggleSmartParkingGoal()
-          })
+        Row({ space: 8 }) {
+          TextInput({ text: this.custom0AInput, placeholder: '输入指令码' })
+            .layoutWeight(1)
+            .height(40)
+            .backgroundColor('#F8FAFC')
+            .borderRadius(12)
+            .fontSize(13)
+            .fontColor(Page1Theme.TEXT_PRIMARY)
+            .padding({ left: 12, right: 12 })
+            .onChange((v: string): void => {
+              this.custom0AInput = v
+            })
+            .onSubmit((): void => {
+              void this.onSendCustom0A()
+            })
+
+          Button('发送')
+            .height(40)
+            .padding({ left: 14, right: 14 })
+            .borderRadius(12)
+            .backgroundColor('#EEF2FF')
+            .fontColor('#3730A3')
+            .fontSize(12)
+            .fontWeight(FontWeight.Bold)
+            .border({ width: 1, color: '#C7D2FE' })
+            .onClick((): void => {
+              void this.onSendCustom0A()
+            })
+        }
+        .width('100%')
 
         // 第1行：基本移动
         Row({ space: 10 }) {
@@ -246,6 +265,27 @@ export struct ControlPanel {
       this.store.setAction('目标清空')
       this.store.pushLog('目标点选：长按已清空')
     }
+  }
+
+  private parseCustom0AInput(): number | undefined {
+    let raw: string = this.custom0AInput.trim().toUpperCase()
+    if (raw.length <= 0) return undefined
+    if (raw.startsWith('0X')) raw = raw.substring(2)
+    if (!/^[0-9A-F]{1,2}$/.test(raw)) return undefined
+    const parsed: number = Number.parseInt(raw, 16)
+    if (!Number.isFinite(parsed)) return undefined
+    if (parsed < 0 || parsed > 0xFF) return undefined
+    return parsed
+  }
+
+  private async onSendCustom0A(): Promise<void> {
+    const code: number | undefined = this.parseCustom0AInput()
+    if (code === undefined) {
+      this.store.pushLog('自定义0x0A输入非法：请输入 1~2 位十六进制（如 1 / A / 1C / 0x0A）')
+      this.store.setAction('自定义0x0A输入错误')
+      return
+    }
+    await page1Coordinator.sendCustomControl0A(code)
   }
 
   private alarmBtnText(): string {

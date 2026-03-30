@@ -254,11 +254,25 @@ export class CarProtocolService {
     await this.sendControl0A(0x1B,"LED标志物结束计时")
   }
 
+  async StarGetoffcar(): Promise<void>{
+    await this.sendControl0A(0x1C,"从车启动")
+  }
+
+
+
   // 注意：
   // stopTask(0xBB) 只会终止小车端部分任务（如警报/播报等非运动任务），
   // 不能可靠停止小车行动任务（行驶/转向）。业务层应尽量不要用它做“停车”。
   async stopTask(): Promise<void> {
     await this.sendControl0A(0xBB, '终止非行动任务（不保证停止运动）')
+  }
+
+  // 自定义 0x0A 控制码发送（0x00~0xFF）。
+  async sendCustomControl0A(code: number, text: string = ''): Promise<void> {
+    const safeCode: number = Math.max(0, Math.min(0xFF, Math.trunc(code)))
+    const hexCode: string = `0x${safeCode.toString(16).toUpperCase().padStart(2, '0')}`
+    const actionText: string = text.trim().length > 0 ? text : `自定义控制 ${hexCode}`
+    await this.sendControl0A(safeCode, actionText)
   }
 
   //=====0x0B 特定语音发送=====
@@ -408,4 +422,3 @@ export class CarProtocolService {
     })
   }
 }
-

@@ -52,6 +52,36 @@ struct ModelState {
     ncnn::Net net;
 };
 
+struct DetectAsyncContext {
+    napi_env env = nullptr;
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+
+    std::string modelName;
+    int width = 0;
+    int height = 0;
+    float conf = 0.25f;
+    float nms = 0.45f;
+    std::vector<uint8_t> rgba;
+
+    bool ok = false;
+    std::string json;
+    std::string err;
+};
+
+struct LoadAsyncContext {
+    napi_env env = nullptr;
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+
+    std::string modelName;
+    std::vector<uint8_t> paramBytes;
+    std::vector<uint8_t> binBytes;
+
+    bool ok = false;
+    std::string err;
+};
+
 static std::string g_lastError;
 static std::mutex g_errorMutex;
 static std::mutex g_modelsMutex;
@@ -724,6 +754,193 @@ std::string ObjectsToJson(const std::vector<Object>& objects) {
     return oss.str();
 }
 
+bool RunDetectCore(
+    const std::string& modelName,
+    const uint8_t* rgbaData,
+    int width,
+    int height,
+    float conf,
+    float nms,
+    std::string& outJson,
+    std::string& outErr) {
+    std::shared_ptr<ModelState> state;
+    {
+        std::lock_guard<std::mutex> lock(g_modelsMutex);
+        auto it = g_models.find(modelName);
+        if (it != g_models.end()) {
+            state = it->second;
+        }
+    }
+
+    if (!state) {
+        outErr = "detectNcnn model not loaded: " + modelName;
+        return false;
+    }
+
+    std::vector<Object> objects;
+    std::string decodeErr;
+    bool ok = false;
+    {
+        // g_blobPoolAllocator/g_workspacePoolAllocator are shared globals.
+        // Serialize inference to avoid allocator races under concurrent detect calls.
+        std::lock_guard<std::mutex> lock(g_inferMutex);
+        ok = DecodeYolo(
+            *state,
+            reinterpret_cast<const unsigned char*>(rgbaData),
+            width,
+            height,
+            conf,
+            nms,
+            objects,
+            decodeErr);
+    }
+
+    if (!ok) {
+        outErr = "detectNcnn failed for model " + modelName + ": " + decodeErr;
+        return false;
+    }
+
+    outJson = ObjectsToJson(objects);
+    return true;
+}
+
+bool RunLoadModelCore(
+    const std::string& modelName,
+    const uint8_t* paramData,
+    size_t paramLen,
+    const uint8_t* binData,
+    size_t binLen,
+    std::string& outErr) {
+    if (paramData == nullptr || paramLen == 0) {
+        outErr = "loadNcnnModel param buffer invalid";
+        return false;
+    }
+    if (binData == nullptr || binLen == 0) {
+        outErr = "loadNcnnModel bin buffer invalid";
+        return false;
+    }
+
+    auto state = std::make_shared<ModelState>();
+    state->modelName = modelName;
+    state->preferredOutputs = GuessOutputs(modelName);
+    const char* paramChars = reinterpret_cast<const char*>(paramData);
+    state->paramText.assign(paramChars, paramChars + paramLen);
+    state->paramText.push_back('\0');
+    state->modelWords.assign((binLen + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0u);
+    std::memcpy(state->modelWords.data(), binData, binLen);
+
+    ConfigureNet(state->net);
+
+    const int paramRet = state->net.load_param_mem(state->paramText.data());
+    if (paramRet != 0) {
+        outErr = "load_param_mem failed for model " + modelName + ", ret=" + std::to_string(paramRet);
+        return false;
+    }
+
+    const size_t modelConsumed = state->net.load_model(reinterpret_cast<const unsigned char*>(state->modelWords.data()));
+    if (modelConsumed == 0) {
+        outErr = "load_model failed for model " + modelName;
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_modelsMutex);
+        g_models[modelName] = state;
+    }
+
+    OH_LOG_INFO(LOG_APP, "loadNcnnModel ok: model=%{public}s param=%{public}zu bin=%{public}zu consumed=%{public}zu",
+        modelName.c_str(), paramLen, binLen, modelConsumed);
+    return true;
+}
+
+void DetectNcnnAsyncExecute(napi_env env, void* data) {
+    (void)env;
+    auto* ctx = static_cast<DetectAsyncContext*>(data);
+    if (!ctx) return;
+    ctx->ok = RunDetectCore(
+        ctx->modelName,
+        ctx->rgba.data(),
+        ctx->width,
+        ctx->height,
+        ctx->conf,
+        ctx->nms,
+        ctx->json,
+        ctx->err);
+    if (!ctx->ok && ctx->err.empty()) {
+        ctx->err = "detectNcnnAsync failed";
+    }
+}
+
+void DetectNcnnAsyncComplete(napi_env env, napi_status status, void* data) {
+    auto* ctx = static_cast<DetectAsyncContext*>(data);
+    if (!ctx) return;
+
+    if (status != napi_ok && ctx->err.empty()) {
+        ctx->err = "detectNcnnAsync canceled";
+    }
+
+    if (!ctx->ok || status != napi_ok) {
+        MakeError(ctx->err);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, ctx->err.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, ctx->deferred, errValue);
+    } else {
+        ClearError();
+        napi_value outValue = nullptr;
+        napi_create_string_utf8(env, ctx->json.c_str(), NAPI_AUTO_LENGTH, &outValue);
+        napi_resolve_deferred(env, ctx->deferred, outValue);
+    }
+
+    if (ctx->work) {
+        napi_delete_async_work(env, ctx->work);
+        ctx->work = nullptr;
+    }
+    delete ctx;
+}
+
+void LoadNcnnModelAsyncExecute(napi_env env, void* data) {
+    (void)env;
+    auto* ctx = static_cast<LoadAsyncContext*>(data);
+    if (!ctx) return;
+    ctx->ok = RunLoadModelCore(
+        ctx->modelName,
+        ctx->paramBytes.data(),
+        ctx->paramBytes.size(),
+        ctx->binBytes.data(),
+        ctx->binBytes.size(),
+        ctx->err);
+    if (!ctx->ok && ctx->err.empty()) {
+        ctx->err = "loadNcnnModelAsync failed";
+    }
+}
+
+void LoadNcnnModelAsyncComplete(napi_env env, napi_status status, void* data) {
+    auto* ctx = static_cast<LoadAsyncContext*>(data);
+    if (!ctx) return;
+
+    if (status != napi_ok && ctx->err.empty()) {
+        ctx->err = "loadNcnnModelAsync canceled";
+    }
+
+    if (!ctx->ok || status != napi_ok) {
+        MakeError(ctx->err);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, ctx->err.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, ctx->deferred, errValue);
+    } else {
+        ClearError();
+        napi_value okValue = nullptr;
+        napi_get_boolean(env, true, &okValue);
+        napi_resolve_deferred(env, ctx->deferred, okValue);
+    }
+
+    if (ctx->work) {
+        napi_delete_async_work(env, ctx->work);
+        ctx->work = nullptr;
+    }
+    delete ctx;
+}
+
 } // namespace
 
 static napi_value LoadNcnnModel(napi_env env, napi_callback_info info) {
@@ -756,38 +973,114 @@ static napi_value LoadNcnnModel(napi_env env, napi_callback_info info) {
         return MakeBool(env, false);
     }
 
-    auto state = std::make_shared<ModelState>();
-    state->modelName = modelName;
-    state->preferredOutputs = GuessOutputs(modelName);
-    const char* paramChars = reinterpret_cast<const char*>(paramData);
-    state->paramText.assign(paramChars, paramChars + paramLen);
-    state->paramText.push_back('\0');
-    state->modelWords.assign((binLen + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0u);
-    std::memcpy(state->modelWords.data(), binData, binLen);
-
-    ConfigureNet(state->net);
-
-    const int paramRet = state->net.load_param_mem(state->paramText.data());
-    if (paramRet != 0) {
-        MakeError("load_param_mem failed for model " + modelName + ", ret=" + std::to_string(paramRet));
+    std::string err;
+    const bool ok = RunLoadModelCore(
+        modelName,
+        static_cast<const uint8_t*>(paramData),
+        paramLen,
+        static_cast<const uint8_t*>(binData),
+        binLen,
+        err);
+    if (!ok) {
+        MakeError(err);
         return MakeBool(env, false);
     }
-
-    const size_t modelConsumed = state->net.load_model(reinterpret_cast<const unsigned char*>(state->modelWords.data()));
-    if (modelConsumed == 0) {
-        MakeError("load_model failed for model " + modelName);
-        return MakeBool(env, false);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_modelsMutex);
-        g_models[modelName] = state;
-    }
-
     ClearError();
-    OH_LOG_INFO(LOG_APP, "loadNcnnModel ok: model=%{public}s param=%{public}zu bin=%{public}zu consumed=%{public}zu",
-        modelName.c_str(), paramLen, binLen, modelConsumed);
     return MakeBool(env, true);
+}
+
+static napi_value LoadNcnnModelAsync(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    napi_value promise = nullptr;
+    napi_deferred deferred = nullptr;
+    napi_create_promise(env, &deferred, &promise);
+
+    if (argc < 3) {
+        const std::string msg = "loadNcnnModelAsync requires 3 arguments";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    std::string modelName;
+    if (!ReadUtf8(env, args[0], modelName)) {
+        const std::string msg = "loadNcnnModelAsync failed to read model name";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    void* paramData = nullptr;
+    size_t paramLen = 0;
+    if (!ReadArrayBuffer(env, args[1], paramData, paramLen) || paramData == nullptr || paramLen == 0) {
+        const std::string msg = "loadNcnnModelAsync param buffer invalid";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    void* binData = nullptr;
+    size_t binLen = 0;
+    if (!ReadArrayBuffer(env, args[2], binData, binLen) || binData == nullptr || binLen == 0) {
+        const std::string msg = "loadNcnnModelAsync bin buffer invalid";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    auto* ctx = new LoadAsyncContext();
+    ctx->env = env;
+    ctx->deferred = deferred;
+    ctx->modelName = modelName;
+    ctx->paramBytes.resize(paramLen);
+    ctx->binBytes.resize(binLen);
+    std::memcpy(ctx->paramBytes.data(), paramData, paramLen);
+    std::memcpy(ctx->binBytes.data(), binData, binLen);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "loadNcnnModelAsync", NAPI_AUTO_LENGTH, &resourceName);
+    const napi_status createStatus = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        LoadNcnnModelAsyncExecute,
+        LoadNcnnModelAsyncComplete,
+        ctx,
+        &ctx->work);
+    if (createStatus != napi_ok) {
+        const std::string msg = "loadNcnnModelAsync create work failed";
+        delete ctx;
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    const napi_status queueStatus = napi_queue_async_work(env, ctx->work);
+    if (queueStatus != napi_ok) {
+        const std::string msg = "loadNcnnModelAsync queue work failed";
+        napi_delete_async_work(env, ctx->work);
+        delete ctx;
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    return promise;
 }
 
 static napi_value DetectNcnn(napi_env env, napi_callback_info info) {
@@ -833,45 +1126,137 @@ static napi_value DetectNcnn(napi_env env, napi_callback_info info) {
         return MakeString(env, "[]");
     }
 
-    std::shared_ptr<ModelState> state;
-    {
-        std::lock_guard<std::mutex> lock(g_modelsMutex);
-        auto it = g_models.find(modelName);
-        if (it != g_models.end()) {
-            state = it->second;
-        }
-    }
-
-    if (!state) {
-        MakeError("detectNcnn model not loaded: " + modelName);
-        return MakeString(env, "[]");
-    }
-
-    std::vector<Object> objects;
+    std::string json;
     std::string err;
-    bool ok = false;
-    {
-        // g_blobPoolAllocator/g_workspacePoolAllocator are shared globals.
-        // Serialize inference to avoid allocator races under concurrent detect calls.
-        std::lock_guard<std::mutex> lock(g_inferMutex);
-        ok = DecodeYolo(
-            *state,
-            static_cast<const unsigned char*>(rgbaData),
-            width,
-            height,
-            static_cast<float>(conf),
-            static_cast<float>(nms),
-            objects,
-            err);
-    }
-
+    const bool ok = RunDetectCore(
+        modelName,
+        static_cast<const uint8_t*>(rgbaData),
+        width,
+        height,
+        static_cast<float>(conf),
+        static_cast<float>(nms),
+        json,
+        err);
     if (!ok) {
-        MakeError("detectNcnn failed for model " + modelName + ": " + err);
+        MakeError(err);
         return MakeString(env, "[]");
     }
 
     ClearError();
-    return MakeString(env, ObjectsToJson(objects));
+    return MakeString(env, json);
+}
+
+static napi_value DetectNcnnAsync(napi_env env, napi_callback_info info) {
+    size_t argc = 6;
+    napi_value args[6] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    napi_value promise = nullptr;
+    napi_deferred deferred = nullptr;
+    napi_create_promise(env, &deferred, &promise);
+
+    if (argc < 6) {
+        const std::string msg = "detectNcnnAsync requires 6 arguments";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    std::string modelName;
+    if (!ReadUtf8(env, args[0], modelName)) {
+        const std::string msg = "detectNcnnAsync failed to read model name";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    void* rgbaData = nullptr;
+    size_t rgbaLen = 0;
+    if (!ReadArrayBuffer(env, args[1], rgbaData, rgbaLen) || rgbaData == nullptr) {
+        const std::string msg = "detectNcnnAsync rgba buffer invalid";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    int32_t width = 0;
+    int32_t height = 0;
+    double conf = 0.25;
+    double nms = 0.45;
+    napi_get_value_int32(env, args[2], &width);
+    napi_get_value_int32(env, args[3], &height);
+    napi_get_value_double(env, args[4], &conf);
+    napi_get_value_double(env, args[5], &nms);
+
+    if (width <= 0 || height <= 0) {
+        const std::string msg = "detectNcnnAsync invalid image size";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    const size_t expectedBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    if (rgbaLen < expectedBytes) {
+        const std::string msg = "detectNcnnAsync rgba buffer too small";
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    auto* ctx = new DetectAsyncContext();
+    ctx->env = env;
+    ctx->deferred = deferred;
+    ctx->modelName = modelName;
+    ctx->width = width;
+    ctx->height = height;
+    ctx->conf = static_cast<float>(conf);
+    ctx->nms = static_cast<float>(nms);
+    ctx->rgba.resize(expectedBytes);
+    std::memcpy(ctx->rgba.data(), rgbaData, expectedBytes);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "detectNcnnAsync", NAPI_AUTO_LENGTH, &resourceName);
+    const napi_status createStatus = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        DetectNcnnAsyncExecute,
+        DetectNcnnAsyncComplete,
+        ctx,
+        &ctx->work);
+    if (createStatus != napi_ok) {
+        const std::string msg = "detectNcnnAsync create work failed";
+        delete ctx;
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    const napi_status queueStatus = napi_queue_async_work(env, ctx->work);
+    if (queueStatus != napi_ok) {
+        const std::string msg = "detectNcnnAsync queue work failed";
+        napi_delete_async_work(env, ctx->work);
+        delete ctx;
+        MakeError(msg);
+        napi_value errValue = nullptr;
+        napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &errValue);
+        napi_reject_deferred(env, deferred, errValue);
+        return promise;
+    }
+
+    return promise;
 }
 
 static napi_value GetNcnnLastError(napi_env env, napi_callback_info info) {
@@ -890,7 +1275,9 @@ static napi_value GetLastError(napi_env env, napi_callback_info info) {
 napi_status NcnnRegisterExports(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
         {"loadNcnnModel", nullptr, LoadNcnnModel, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"loadNcnnModelAsync", nullptr, LoadNcnnModelAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"detectNcnn", nullptr, DetectNcnn, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"detectNcnnAsync", nullptr, DetectNcnnAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getNcnnLastError", nullptr, GetNcnnLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getLastError", nullptr, GetLastError, nullptr, nullptr, nullptr, napi_default, nullptr}
     };

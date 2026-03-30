@@ -64,8 +64,7 @@ export class Page1CoordinatorGridUtils {
     const x: string = goalId.trim().toUpperCase()
     if (!GridIdCodec.isValidId(x)) return x
     if (x === 'B1') return 'F1'
-    if (x === 'F1') return 'B1'
-    return 'F1'
+    return x
   }
 
   static norm360(v: number): number {
@@ -83,5 +82,4 @@ export class Page1CoordinatorGridUtils {
     return e
   }
 }
-
 

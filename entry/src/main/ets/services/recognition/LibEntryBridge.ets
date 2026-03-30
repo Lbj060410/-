@@ -14,7 +14,9 @@ type LibEntryApi = {
   loadOnnxModel?: (name: string, buf: ArrayBuffer) => boolean
   detectOnnx?: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => string
   loadNcnnModel?: (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => boolean
+  loadNcnnModelAsync?: (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => Promise<boolean>
   detectNcnn?: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => string
+  detectNcnnAsync?: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => Promise<string>
   getLastError?: () => string
   getNcnnLastError?: () => string
   detectPlate: (
@@ -54,8 +56,9 @@ function hasApi(v: Object | undefined | null): boolean {
   const hasLegacyApi: boolean = typeof mm['loadModel'] === 'function' &&
     typeof mm['detectOffline'] === 'function' &&
     typeof mm['decodeQr'] === 'function'
-  const hasNcnnApi: boolean = typeof mm['loadNcnnModel'] === 'function' &&
-    typeof mm['detectNcnn'] === 'function'
+  const hasNcnnLoad: boolean = typeof mm['loadNcnnModel'] === 'function' || typeof mm['loadNcnnModelAsync'] === 'function'
+  const hasNcnnApi: boolean = hasNcnnLoad &&
+    (typeof mm['detectNcnn'] === 'function' || typeof mm['detectNcnnAsync'] === 'function')
   return hasLegacyApi || hasNcnnApi
 }
 
@@ -65,7 +68,8 @@ function apiScore(v: Object | undefined | null): number {
   if (!hasApi(mm)) return -1
   let score: number = 1
   if (typeof mm['loadModel'] === 'function' && typeof mm['detectOffline'] === 'function') score += 1
-  if (typeof mm['loadNcnnModel'] === 'function' && typeof mm['detectNcnn'] === 'function') score += 3
+  if ((typeof mm['loadNcnnModel'] === 'function' || typeof mm['loadNcnnModelAsync'] === 'function') &&
+      (typeof mm['detectNcnn'] === 'function' || typeof mm['detectNcnnAsync'] === 'function')) score += 3
   if (typeof mm['getLastError'] === 'function' || typeof mm['getNcnnLastError'] === 'function') score += 2
   if (typeof mm['detectPlate'] === 'function') score += 1
   return score
@@ -128,8 +132,14 @@ function asApi(v: Object): LibEntryApi {
     loadNcnnModel: (typeof mm['loadNcnnModel'] === 'function')
       ? (mm['loadNcnnModel'] as (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => boolean)
       : undefined,
+    loadNcnnModelAsync: (typeof mm['loadNcnnModelAsync'] === 'function')
+      ? (mm['loadNcnnModelAsync'] as (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => Promise<boolean>)
+      : undefined,
     detectNcnn: (typeof mm['detectNcnn'] === 'function')
       ? (mm['detectNcnn'] as (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => string)
+      : undefined,
+    detectNcnnAsync: (typeof mm['detectNcnnAsync'] === 'function')
+      ? (mm['detectNcnnAsync'] as (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => Promise<string>)
       : undefined,
     getLastError: (typeof getLastErrorObj === 'function')
       ? (getLastErrorObj as () => string)
@@ -256,7 +266,9 @@ export function resolveLibEntryApi(): LibEntryApi | null {
     const tPlate: string = safeType(cand, 'detectPlate')
     const tQr: string = safeType(cand, 'decodeQr')
     const tNcnnLoad: string = safeType(cand, 'loadNcnnModel')
+    const tNcnnLoadAsync: string = safeType(cand, 'loadNcnnModelAsync')
     const tNcnnDet: string = safeType(cand, 'detectNcnn')
+    const tNcnnDetAsync: string = safeType(cand, 'detectNcnnAsync')
     const tAdd: string = safeType(cand, 'add')
     const tDef: string = safeType(cand, 'default')
     const tEntry: string = safeType(cand, 'entry')
@@ -270,7 +282,7 @@ export function resolveLibEntryApi(): LibEntryApi | null {
     const hPlate: string = String(safeGet(cand, '__hasDetectPlate') ?? 'na')
     const hQr: string = String(safeGet(cand, '__hasDecodeQr') ?? 'na')
     const hErr: string = String(safeGet(cand, '__hasGetLastError') ?? 'na')
-    sigs.push(`c${i}[L${tLoad} D${tDet} NL${tNcnnLoad} ND${tNcnnDet} P${tPlate} Q${tQr} A${tAdd} Def${tDef} E${tEntry} RS${sInfer}/${sAdd}/${sNcnn} H${hLoad}${hDet}${hNcnnLoad}${hNcnnDet}${hPlate}${hQr}${hErr}]`)
+    sigs.push(`c${i}[L${tLoad} D${tDet} NL${tNcnnLoad} NLA${tNcnnLoadAsync} ND${tNcnnDet} NDA${tNcnnDetAsync} P${tPlate} Q${tQr} A${tAdd} Def${tDef} E${tEntry} RS${sInfer}/${sAdd}/${sNcnn} H${hLoad}${hDet}${hNcnnLoad}${hNcnnDet}${hPlate}${hQr}${hErr}]`)
   }
   lastError = `noapi c=${candidates.length} ${sigs.join(' ')} r=${reqMsgs.join('')}`
   return null
@@ -287,7 +299,9 @@ export function hasOnnxNativeApi(): boolean {
 
 export function hasNcnnNativeApi(): boolean {
   const api = resolveLibEntryApi()
-  return api !== null && typeof api.loadNcnnModel === 'function' && typeof api.detectNcnn === 'function'
+  return api !== null &&
+    (typeof api.loadNcnnModel === 'function' || typeof api.loadNcnnModelAsync === 'function') &&
+    (typeof api.detectNcnn === 'function' || typeof api.detectNcnnAsync === 'function')
 }
 
 

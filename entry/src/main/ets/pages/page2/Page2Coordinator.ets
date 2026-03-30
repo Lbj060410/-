@@ -21,7 +21,7 @@ import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResol
 import { ensureRecognitionCenter } from '../../services/recognition/RecognitionCenter'
 import { RecognitionScheduler } from '../../services/recognition/RecognitionScheduler'
 import { RecognitionSubtype, RecognitionTaskSource, RoiNorm } from '../../services/recognition/RecognitionTask'
-import { RecognitionTaskKind } from '../../services/recognition/RecognitionTask'
+import { RecognitionTaskKind, RecognitionTaskState } from '../../services/recognition/RecognitionTask'
 import { RecogEngineType } from '../../services/recognition/RecognitionConfig'
 import { BBoxNorm, RecognitionResult } from '../../services/recognition/RecognitionResult'
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
@@ -44,6 +44,10 @@ export class Page2Coordinator {
   private readonly page2LiveIntervalMinMs: number = 80
   private readonly page2LiveIntervalMaxMs: number = 420
   private currentLiveIntervalMs: number = 120
+  private readonly foregroundHttpIntervalMs: number = 120
+  private readonly backgroundHttpIntervalMs: number = 280
+  private readonly foregroundLiveIntervalMs: number = 120
+  private readonly backgroundLiveIntervalMs: number = 360
   private readonly liveCadenceTuneStepUpMs: number = 20
   private readonly liveCadenceTuneStepDownMs: number = 10
   private readonly liveCadenceTuneWindowMs: number = 1200
@@ -94,6 +98,7 @@ export class Page2Coordinator {
   private lastLiveFrameSignature: number = 0
   private lastLiveSignatureAtMs: number = 0
   private readonly liveUnchangedSkipWindowMs: number = 1200
+  private pageBackgroundMode: boolean = false
 
   constructor() {
     this.loadPersistedSnapshotEndpoint()
@@ -116,7 +121,8 @@ export class Page2Coordinator {
         this.lastReplayIngestAtMs = now
         page2ReplayService.ingestFrameJpeg(frame.jpeg, now)
       }
-      if (!overloaded) {
+      const allowReplayCapture: boolean = !overloaded || this.pageBackgroundMode
+      if (allowReplayCapture) {
         this.maybeAutoSnapshotFromVision(pm, now)
         this.maybeRecordShigongReplay(now)
       }
@@ -142,10 +148,14 @@ export class Page2Coordinator {
     const nowMs: number = Date.now()
     this.recognitionPauseUntilMs = Math.max(this.recognitionPauseUntilMs, nowMs + 1200)
     if (!this.started || this.starting || this.prewarming) return
-    if (failStreak >= 2) {
+    const restartFailThreshold: number = this.pageBackgroundMode ? 4 : 2
+    if (failStreak >= restartFailThreshold) {
       this.maybeSoftRestartHttpPipeline(nowMs, `frame fail streak=${failStreak}`)
     }
-    if (failStreak < this.snapshotRecoverFailThreshold) return
+    const recoverFailThreshold: number = this.pageBackgroundMode
+      ? Math.max(this.snapshotRecoverFailThreshold + 2, 5)
+      : this.snapshotRecoverFailThreshold
+    if (failStreak < recoverFailThreshold) return
     if (this.snapshotRecovering) return
     if (nowMs - this.lastSnapshotRecoverAtMs < this.snapshotRecoverCooldownMs) return
     this.lastSnapshotRecoverAtMs = nowMs
@@ -155,12 +165,18 @@ export class Page2Coordinator {
   private maybeSoftRestartHttpPipeline(nowMs: number, reason: string): void {
     if (!this.started || this.starting || this.prewarming) return
     if (this.activeSnapshotUrl.length <= 0) return
-    if (nowMs - this.lastHttpSoftRestartAtMs < this.httpSoftRestartCooldownMs) return
+    const restartCooldownMs: number = this.pageBackgroundMode
+      ? Math.max(9000, this.httpSoftRestartCooldownMs * 2)
+      : this.httpSoftRestartCooldownMs
+    if (nowMs - this.lastHttpSoftRestartAtMs < restartCooldownMs) return
     this.lastHttpSoftRestartAtMs = nowMs
-    const baseIntervalMs: number = Math.max(120, Math.trunc(videoStore.diagVideoPullIntervalMs || 120))
+    const targetBaseIntervalMs: number = this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs
+    const baseIntervalMs: number = Math.max(targetBaseIntervalMs, Math.trunc(videoStore.diagVideoPullIntervalMs || targetBaseIntervalMs))
     this.frames.startHttp(this.activeSnapshotUrl, baseIntervalMs)
     console.warn(`[Page2] http soft restart reason=${reason} url=${this.activeSnapshotUrl} interval=${baseIntervalMs}`)
-    videoStore.setStatus('Camera stream unstable, auto restarting...')
+    if (!this.pageBackgroundMode) {
+      videoStore.setStatus('Camera stream unstable, auto restarting...')
+    }
   }
 
   private async tryRecoverSnapshotEndpoint(reason: string): Promise<void> {
@@ -182,7 +198,8 @@ export class Page2Coordinator {
           this.lastGoodSnapshotUrl = one
           this.lastGoodCameraHost = host
           this.persistSnapshotEndpoint(host, one)
-          this.frames.startHttp(one, 120)
+          const recoverIntervalMs: number = this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs
+          this.frames.startHttp(one, recoverIntervalMs)
           videoStore.setStatus(`Camera endpoint recovered: ${one}`)
           console.warn(`[Page2] snapshot endpoint switched reason=${reason} url=${one}`)
           switched = true
@@ -384,8 +401,10 @@ export class Page2Coordinator {
     this.ensurePage2RecognitionConfig()
 
     try {
-      this.activeSnapshotUrl = ''
-      if (this.activeSnapshotUrl.length <= 0) {
+      const quickUrl: string = this.resolveCachedSnapshotUrlForQuickStart()
+      if (quickUrl.length > 0) {
+        this.activeSnapshotUrl = quickUrl
+      } else {
         const found: boolean = await this.prepareVideoEndpoint()
         if (!found || this.activeSnapshotUrl.length <= 0) {
           console.error(`[Page2] start blocked: camera probe unresolved (found=${found}, url=${this.activeSnapshotUrl})`)
@@ -401,10 +420,11 @@ export class Page2Coordinator {
       console.info(`[Page2] start http host=${videoStore.cameraHost} url=${httpUrl}`)
 
       videoStore.setDisplayMode(DisplayMode.HTTP, 'startup')
+      this.resetVideoConnStateForNewSession()
       // 平衡预览新鲜度和控制路径稳定性。
-      this.frames.startHttp(httpUrl, 120)
+      this.frames.startHttp(httpUrl, this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs)
       this.ensurePulseTimer()
-      this.currentLiveIntervalMs = 120
+      this.currentLiveIntervalMs = this.pageBackgroundMode ? this.backgroundLiveIntervalMs : this.foregroundLiveIntervalMs
       this.lastLiveCadenceTuneAtMs = 0
       this.lastRecogFailCount = recogStore.recogFail
       this.recog.setLiveIntervalMs(this.currentLiveIntervalMs)
@@ -432,10 +452,16 @@ export class Page2Coordinator {
   }
 
   enterBackgroundMode(): void {
-    this.stop()
+    this.pageBackgroundMode = true
+    this.applyPerformanceProfileForMode()
   }
 
   async exitBackgroundMode(): Promise<void> {
+    this.pageBackgroundMode = false
+    if (this.started) {
+      this.applyPerformanceProfileForMode()
+      return
+    }
     await this.start()
   }
 
@@ -445,11 +471,15 @@ export class Page2Coordinator {
     this.prewarming = true
     const token: number = this.lifeToken
     try {
-      this.activeSnapshotUrl = ''
-      const found: boolean = await this.prepareVideoEndpoint()
-      if (!found || this.activeSnapshotUrl.length <= 0) {
-        console.error(`[Page2] prewarm blocked: camera probe unresolved (found=${found}, url=${this.activeSnapshotUrl})`)
-        return
+      const quickUrl: string = this.resolveCachedSnapshotUrlForQuickStart()
+      if (quickUrl.length > 0) {
+        this.activeSnapshotUrl = quickUrl
+      } else {
+        const found: boolean = await this.prepareVideoEndpoint()
+        if (!found || this.activeSnapshotUrl.length <= 0) {
+          console.error(`[Page2] prewarm blocked: camera probe unresolved (found=${found}, url=${this.activeSnapshotUrl})`)
+          return
+        }
       }
       if (token !== this.lifeToken || this.started || this.starting) return
 
@@ -459,9 +489,10 @@ export class Page2Coordinator {
       console.info(`[Page2] prewarm http host=${videoStore.cameraHost} url=${httpUrl}`)
 
       videoStore.setDisplayMode(DisplayMode.HTTP, 'prewarm')
+      this.resetVideoConnStateForNewSession()
       this.frames.startHttp(httpUrl, this.prewarmHttpIntervalMs)
       this.ensurePulseTimer()
-      this.currentLiveIntervalMs = 120
+      this.currentLiveIntervalMs = this.pageBackgroundMode ? this.backgroundLiveIntervalMs : this.foregroundLiveIntervalMs
       this.lastLiveCadenceTuneAtMs = 0
       this.lastRecogFailCount = recogStore.recogFail
       this.lastLiveSubmitAtMs = 0
@@ -485,6 +516,7 @@ export class Page2Coordinator {
     this.prewarming = false
     this.prewarmed = false
     this.started = false
+    this.pageBackgroundMode = false
     this.liveDecodeBusy = false
     this.lastTrafficCascadeAtMs = 0
     this.snapshotRecovering = false
@@ -493,11 +525,58 @@ export class Page2Coordinator {
     this.switcher.stop()
     this.frames.stop()
     this.stopPulseTimer()
+    this.resetVideoConnStateForNewSession()
     this.rtsp.pause().catch((e: Error): void => {
       console.error('[Page2] rtsp pause error:', e.message)
     })
 
     videoStore.setStatus('Page2 stopped')
+  }
+
+  private resetVideoConnStateForNewSession(): void {
+    videoStore.clearHttpStats()
+    videoStore.lastFrameTimeMs = 0
+    videoStore.lastOkFrameTimeMs = 0
+    videoStore.lastFailFrameTimeMs = 0
+    videoStore.setDiagVideo(0, 0, 0)
+    videoStore.setError('')
+  }
+
+  private applyPerformanceProfileForMode(): void {
+    if (!this.started) return
+    if (this.activeSnapshotUrl.length <= 0) return
+
+    const httpIntervalMs: number = this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs
+    this.frames.startHttp(this.activeSnapshotUrl, httpIntervalMs)
+
+    this.currentLiveIntervalMs = this.pageBackgroundMode ? this.backgroundLiveIntervalMs : this.foregroundLiveIntervalMs
+    this.lastLiveCadenceTuneAtMs = 0
+    this.recog.setLiveIntervalMs(this.currentLiveIntervalMs)
+
+    this.dynamicReplayIngestIntervalMs = this.pageBackgroundMode
+      ? this.replayIngestMaxIntervalMs
+      : this.replayIngestMinIntervalMs
+    this.lastReplayCadenceTuneAtMs = 0
+
+    videoStore.setStatus(
+      this.pageBackgroundMode
+        ? `Page2 background mode: low-frequency, camera=${videoStore.cameraHost}`
+        : `Page2 foreground mode: high-frequency, camera=${videoStore.cameraHost}`
+    )
+  }
+
+  private resolveCachedSnapshotUrlForQuickStart(): string {
+    const active: string = this.activeSnapshotUrl.trim()
+    if (active.length > 0) return active
+
+    const cached: string = this.lastGoodSnapshotUrl.trim()
+    if (cached.length <= 0) return ''
+
+    const host: string = videoStore.cameraHost.trim()
+    if (host.length > 0 && this.lastGoodCameraHost.length > 0 && host !== this.lastGoodCameraHost) {
+      return ''
+    }
+    return cached
   }
 
   private ensurePulseTimer(): void {
@@ -679,7 +758,10 @@ export class Page2Coordinator {
     if (this.activeSnapshotUrl.length <= 0) return
     const lastOkAtMs: number = Math.max(0, Math.trunc(videoStore.lastOkFrameTimeMs))
     if (lastOkAtMs <= 0) return
-    if (nowMs - lastOkAtMs < this.frameStallThresholdMs) return
+    const stallThresholdMs: number = this.pageBackgroundMode
+      ? Math.max(9000, this.backgroundHttpIntervalMs * 20)
+      : this.frameStallThresholdMs
+    if (nowMs - lastOkAtMs < stallThresholdMs) return
     this.maybeSoftRestartHttpPipeline(nowMs, `frame stall ${nowMs - lastOkAtMs}ms`)
   }
 
@@ -781,10 +863,8 @@ export class Page2Coordinator {
   }
 
   private maybeAutoSnapshotFromVision(currentPm: image.PixelMap, nowMs: number): void {
-    const r: RecognitionResult | undefined = recogStore.lastRecog
-    if (!r || !r.ok || r.boxes.length <= 0) return
-    if (r.source !== RecognitionTaskSource.PAGE2_BUTTON) return
-    if (r.kind !== RecognitionTaskKind.LIVE) return
+    const r: RecognitionResult | undefined = this.latestSuccessfulPage2LiveResult()
+    if (!r) return
     if (r.subtype !== RecognitionSubtype.YOLOV26BARRIER && r.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
     if (r.taskId.length > 0 && r.taskId === this.lastAutoSnapTaskId) return
     if (nowMs - this.lastAutoSnapAtMs < this.autoSnapMinIntervalMs) return
@@ -824,8 +904,8 @@ export class Page2Coordinator {
   }
 
   private maybeRecordShigongReplay(nowMs: number): void {
-    const r: RecognitionResult | undefined = recogStore.lastRecog
-    if (!r || !r.ok) return
+    const r: RecognitionResult | undefined = this.latestSuccessfulPage2LiveResult()
+    if (!r) return
     if (r.subtype !== RecognitionSubtype.YOLOV26BARRIER) return
     if (r.taskId.length > 0 && r.taskId === this.lastShigongReplayTaskId) return
     if (nowMs - this.lastShigongReplaySubmitAtMs < this.shigongReplaySubmitMinIntervalMs) return
@@ -838,6 +918,15 @@ export class Page2Coordinator {
     const videoLatencyMs: number = Math.max(0, Math.trunc(videoStore.diagVideoLatencyMs))
     const pullMs: number = Math.max(0, Math.trunc(videoStore.diagVideoPullIntervalMs))
     const vFps: number = Math.max(0, Math.trunc(videoStore.diagVideoFps))
+    if (this.pageBackgroundMode) {
+      // 后台低频模式下避免“持续延期暂停窗口”导致识别饥饿，只在明显拥塞时短暂停顿。
+      if (videoLatencyMs >= 1800) {
+        this.recognitionPauseUntilMs = Math.max(this.recognitionPauseUntilMs, nowMs + 1200)
+      } else if (videoLatencyMs >= 1200) {
+        this.recognitionPauseUntilMs = Math.max(this.recognitionPauseUntilMs, nowMs + 600)
+      }
+      return
+    }
     if (videoLatencyMs >= 1200) {
       this.recognitionPauseUntilMs = Math.max(this.recognitionPauseUntilMs, nowMs + 1800)
       return
@@ -849,6 +938,29 @@ export class Page2Coordinator {
     if (pullMs >= 300 || vFps <= 1) {
       this.recognitionPauseUntilMs = Math.max(this.recognitionPauseUntilMs, nowMs + 800)
     }
+  }
+
+  private latestSuccessfulPage2LiveResult(): RecognitionResult | undefined {
+    const latest: RecognitionResult | undefined = recogStore.lastRecog
+    if (this.isSuccessfulPage2LiveResult(latest)) return latest
+
+    const tasks = recogStore.recogTasks
+    for (let i: number = 0; i < tasks.length; i++) {
+      const one = tasks[i]
+      if (one.state !== RecognitionTaskState.SUCCESS) continue
+      if (one.kind !== RecognitionTaskKind.LIVE) continue
+      if (one.source !== RecognitionTaskSource.PAGE2_BUTTON) continue
+      if (this.isSuccessfulPage2LiveResult(one.result)) return one.result
+    }
+    return undefined
+  }
+
+  private isSuccessfulPage2LiveResult(r: RecognitionResult | undefined): r is RecognitionResult {
+    if (!r) return false
+    if (!r.ok || r.boxes.length <= 0) return false
+    if (r.source !== RecognitionTaskSource.PAGE2_BUTTON) return false
+    if (r.kind !== RecognitionTaskKind.LIVE) return false
+    return true
   }
 
   private isVideoOverloaded(): boolean {

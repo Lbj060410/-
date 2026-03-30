@@ -10,12 +10,19 @@ import { Page2View } from './page2/Page2View'
 import { Page3View } from './page3/Page3View'
 import { Page4View } from './page4/Page4View'
 import { Page1Theme } from './page1/Page1Theme'
+import { page2Coordinator } from './page2/Page2Coordinator'
 
 @Entry
 @Component
 struct Index {
   @State private currentIndex: number = 0
   @State private showFloatingNav: boolean = false
+
+  aboutToAppear(): void {
+    // Page2 识别链路需要在非 Page2 页面也持续工作；入口页先以后台低频模式拉起。
+    page2Coordinator.enterBackgroundMode()
+    void page2Coordinator.start()
+  }
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {

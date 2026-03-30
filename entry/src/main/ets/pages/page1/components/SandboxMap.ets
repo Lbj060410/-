@@ -53,6 +53,8 @@ interface MapTurnNode {
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
+  // 取消 Page1 分层式渲染显示：统一按单一细节层渲染。
+  private readonly flatRenderModeEnabled: boolean = true
 
   private readonly DEFAULT_ROUTE_ZOOM: number = 1.5
   @State private zoomScale: number = 1.5
@@ -1371,6 +1373,7 @@ export struct SandboxMap {
   }
 
   private detailLevel(): MapDetailLevel {
+    if (this.flatRenderModeEnabled) return 'DETAIL'
     if (this.zoomScale < 1.2) return 'OVERVIEW'
     if (this.zoomScale < 2.2) return 'ROUTE'
     return 'DETAIL'

@@ -39,15 +39,13 @@ export class NcnnRecognitionService implements IRecognitionService {
   private loaded: boolean = false
   private rgbaScratch?: ArrayBuffer
   private rgbaScratchBytes: number = 0
-  private rgbaDownsampleScratch?: ArrayBuffer
-  private rgbaDownsampleScratchBytes: number = 0
-  private readonly detectMaxLongEdgePx: number = 640
   private ipcLastCostMs: number = 0
   private perfTotalDetect: number = 0
   private perfIpcOk: number = 0
   private perfIpcFail: number = 0
   private perfFallbackUsed: number = 0
   private perfLastLogAtMs: number = 0
+  private nativeAsyncEnabled: boolean = false
 
   constructor(
     modelName: string,
@@ -93,9 +91,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       const requiredBytes: number = Math.max(0, w * h * 4)
       const buf: ArrayBuffer = this.ensureScratchBuffer(requiredBytes)
       await pm.readPixelsToBuffer(buf)
-
-      const sampled: { rgba: ArrayBuffer; w: number; h: number } = this.maybeDownsampleRgba(buf, w, h)
-      const json: string = await this.detectWithIpcOrFallback(sampled.rgba, sampled.w, sampled.h)
+      const json: string = await this.detectWithIpcOrFallback(buf, w, h)
 
       let rawBoxes: RawBox[]
       try {
@@ -234,7 +230,14 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
 
     const libentry = this.requireNative()
-    const ok: boolean = libentry.loadNcnnModel(targetModelName, paramBuf, binBuf)
+    let ok: boolean = false
+    if (typeof libentry.loadNcnnModelAsync === 'function') {
+      ok = await libentry.loadNcnnModelAsync(targetModelName, paramBuf, binBuf)
+    } else if (typeof libentry.loadNcnnModel === 'function') {
+      ok = libentry.loadNcnnModel(targetModelName, paramBuf, binBuf)
+    } else {
+      throw new Error(`[${this.diagTag}] native load api unavailable`)
+    }
     if (!ok) {
       const nativeErr: string = (typeof libentry.getLastError === 'function') ? libentry.getLastError() : ''
       console.error(`NCNNLOAD|model=${targetModelName}|ok=0|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|err=${nativeErr.length > 0 ? nativeErr : '-'}`)
@@ -296,17 +299,26 @@ export class NcnnRecognitionService implements IRecognitionService {
   }
 
   private requireNative(): {
-    loadNcnnModel: (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => boolean
-    detectNcnn: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => string
+    loadNcnnModel?: (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => boolean
+    loadNcnnModelAsync?: (name: string, paramBuf: ArrayBuffer, binBuf: ArrayBuffer) => Promise<boolean>
+    detectNcnn?: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => string
+    detectNcnnAsync?: (name: string, rgba: ArrayBuffer, w: number, h: number, conf: number, nms: number) => Promise<string>
     getLastError?: () => string
   } {
     const api = resolveLibEntryApi()
     const loadNcnnModel = api?.loadNcnnModel
+    const loadNcnnModelAsync = api?.loadNcnnModelAsync
     const detectNcnn = api?.detectNcnn
-    if (typeof loadNcnnModel === 'function' && typeof detectNcnn === 'function') {
+    const detectNcnnAsync = api?.detectNcnnAsync
+    if (
+      (typeof loadNcnnModel === 'function' || typeof loadNcnnModelAsync === 'function') &&
+      (typeof detectNcnn === 'function' || typeof detectNcnnAsync === 'function')
+    ) {
       return {
         loadNcnnModel,
+        loadNcnnModelAsync,
         detectNcnn,
+        detectNcnnAsync,
         getLastError: api?.getLastError
       }
     }
@@ -335,55 +347,11 @@ export class NcnnRecognitionService implements IRecognitionService {
     return this.rgbaScratch
   }
 
-  private ensureDownsampleScratchBuffer(requiredBytes: number): ArrayBuffer {
-    const safeBytes: number = Math.max(0, Math.trunc(requiredBytes))
-    if (!this.rgbaDownsampleScratch || this.rgbaDownsampleScratchBytes !== safeBytes) {
-      this.rgbaDownsampleScratch = new ArrayBuffer(safeBytes)
-      this.rgbaDownsampleScratchBytes = safeBytes
-    }
-    return this.rgbaDownsampleScratch
-  }
-
-  private maybeDownsampleRgba(src: ArrayBuffer, srcW: number, srcH: number): { rgba: ArrayBuffer; w: number; h: number } {
-    const w: number = Math.max(0, Math.trunc(srcW))
-    const h: number = Math.max(0, Math.trunc(srcH))
-    if (w <= 0 || h <= 0) return { rgba: src, w, h }
-    const longEdge: number = Math.max(w, h)
-    if (longEdge <= this.detectMaxLongEdgePx) {
-      return { rgba: src, w, h }
-    }
-
-    const scale: number = this.detectMaxLongEdgePx / longEdge
-    const dstW: number = Math.max(1, Math.round(w * scale))
-    const dstH: number = Math.max(1, Math.round(h * scale))
-    const dstBuf: ArrayBuffer = this.ensureDownsampleScratchBuffer(dstW * dstH * 4)
-
-    const srcU8: Uint8Array = new Uint8Array(src)
-    const dstU8: Uint8Array = new Uint8Array(dstBuf)
-    const xRatio: number = w / dstW
-    const yRatio: number = h / dstH
-
-    let di: number = 0
-    for (let y: number = 0; y < dstH; y++) {
-      const sy: number = Math.min(h - 1, Math.floor(y * yRatio))
-      const rowStart: number = sy * w * 4
-      for (let x: number = 0; x < dstW; x++) {
-        const sx: number = Math.min(w - 1, Math.floor(x * xRatio))
-        const si: number = rowStart + sx * 4
-        dstU8[di++] = srcU8[si]
-        dstU8[di++] = srcU8[si + 1]
-        dstU8[di++] = srcU8[si + 2]
-        dstU8[di++] = srcU8[si + 3]
-      }
-    }
-    return { rgba: dstBuf, w: dstW, h: dstH }
-  }
-
   private async detectWithIpcOrFallback(rgba: ArrayBuffer, w: number, h: number): Promise<string> {
     const t0: number = Date.now()
     this.perfTotalDetect += 1
     try {
-      const jsonDirect: string = this.detectOnMainFallback(rgba, w, h)
+      const jsonDirect: string = await this.detectOnMainFallback(rgba, w, h)
       this.perfIpcOk += 1
       this.ipcLastCostMs = Date.now() - t0
       this.maybeLogPerf()
@@ -399,9 +367,18 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
   }
 
-  private detectOnMainFallback(rgba: ArrayBuffer, w: number, h: number): string {
+  private async detectOnMainFallback(rgba: ArrayBuffer, w: number, h: number): Promise<string> {
     const libentry = this.requireNative()
-    const json: string = libentry.detectNcnn(this.activeModelName, rgba, w, h, this.confThresh, this.nmsThresh)
+    let json: string = ''
+    if (typeof libentry.detectNcnnAsync === 'function') {
+      this.nativeAsyncEnabled = true
+      json = await libentry.detectNcnnAsync(this.activeModelName, rgba, w, h, this.confThresh, this.nmsThresh)
+    } else if (typeof libentry.detectNcnn === 'function') {
+      this.nativeAsyncEnabled = false
+      json = libentry.detectNcnn(this.activeModelName, rgba, w, h, this.confThresh, this.nmsThresh)
+    } else {
+      throw new Error('ncnn detect api missing')
+    }
     const nativeErr: string = (typeof libentry.getLastError === 'function') ? String(libentry.getLastError()) : ''
     if (nativeErr.length > 0) {
       throw new Error(`fallback detect failed: ${nativeErr}`)
@@ -419,7 +396,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       this.perfIpcFail,
       this.perfFallbackUsed,
       this.ipcLastCostMs,
-      false
+      !this.nativeAsyncEnabled
     )
   }
 }

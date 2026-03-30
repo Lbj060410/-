@@ -945,6 +945,18 @@ export class Page1Coordinator {
     await onActionOp(this as object, a)
   }
 
+  async sendCustomControl0A(code: number): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const safeCode: number = Math.max(0, Math.min(0xFF, Math.trunc(code)))
+    const hexCode: string = `0x${safeCode.toString(16).toUpperCase().padStart(2, '0')}`
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    s.bumpTx()
+    s.setAction(`自定义0x0A=${hexCode}`)
+    s.pushLog(`自定义控制发送：${hexCode}`)
+    await this.proto.sendCustomControl0A(safeCode, `自定义0x0A=${hexCode}`)
+  }
+
   private async sendDriveActionDirect(a: Page1Action): Promise<boolean> {
     return await sendDriveActionDirectOp(this as object, a)
   }
@@ -1472,7 +1484,7 @@ export class Page1Coordinator {
 
   private smartParkingGoalId(): string {
     const s: Page1UiStore | undefined = this.store
-    if (!s) return 'F1'
+    if (!s) return 'F7'
     return s.smartParkingGoalId()
   }
 
@@ -1982,8 +1994,7 @@ export class Page1Coordinator {
   private fallbackParkingGoalOnObstacle(goalId: string): string {
     const x: string = goalId.trim().toUpperCase()
     if (x === 'B1') return 'F1'
-    if (x === 'F1') return 'B1'
-    return 'F1'
+    return x
   }
 
   private async maybeRunNormalFinalParkingAfterArrival(fromId: string, toId: string): Promise<boolean> {

@@ -43,6 +43,13 @@ export function handleParkingSlotOccupied(ctx: any, arrivedId: string, goalId: s
     return
   }
 
+  // 新规则：仅 B1 车位占用时才改去 F1；其他车位（含 F1/F7）占用都忽略。
+  if (targetGoalId !== 'B1') {
+    s.pushLog(`停车位占用：忽略 goal=${targetGoalId} source=${sourceTag}`)
+    clearParkingUltrasonicDecisionContext(ctx)
+    return
+  }
+
   if (ctx.isSmartParkingGoal(targetGoalId)) {
     ctx.garageWaitingParkDone04 = false
     ctx.garagePendingCarportLevel = 0
