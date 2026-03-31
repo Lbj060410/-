@@ -165,6 +165,7 @@ import {
   isShigongYolov26BarrierLabelKey,
   normalizeYolov26BarrierLabelKey
 } from './TrafficYolov26BarrierLabelPolicy'
+import { TimerManager } from './Page1TimerManager'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 import hilog from '@ohos.hilog'
 
@@ -179,12 +180,10 @@ export class Page1Coordinator {
   private readonly timingRegistry: ActionTimingRegistry = new ActionTimingRegistry()
   private readonly motionPlayer: VehicleMotionPlayer = new VehicleMotionPlayer(this.timingRegistry)
   private readonly actionScheduler: VehicleActionScheduler = new VehicleActionScheduler()
+  private readonly timerManager: TimerManager = new TimerManager()
 
-  private simTimerId: number = -1
   private simTick: number = 0
   private simLoopBusy: boolean = false
-  private connectDeferredTimerId: number = -1
-  private frameDestApplyTimerId: number = -1
   private pendingFrameDestNodeId: string = ''
 
   private readonly rxDecoder: CarRx55StreamDecoder = new CarRx55StreamDecoder()
@@ -242,7 +241,6 @@ export class Page1Coordinator {
   private pathAckLastStatusAtMs: number = 0
   private pathAckLastCommandText: string = ''
   private pathAckLastWaitLogAtMs: number = 0
-  private pathAckRetryTimerId: number = -1
   private pathAckRetrySentCount: number = 0
   private pathAckCommandKey: string = ''
   private pathAckCommandSeq: number = 0
@@ -253,12 +251,10 @@ export class Page1Coordinator {
   private pendingDrivingUltrasonicObstacleAtMs: number = 0
   private garageDepartStopSent: boolean = false
   private garageDepartReady03: boolean = false
-  private garageDepartAckWatchTimerId: number = -1
   private garageDepartAckRetryCount: number = 0
   private garageFinalCarportSent: boolean = false
   private garageWaitingParkDone04: boolean = false
   private garagePendingCarportLevel: number = 0
-  private garageCarportAckWatchTimerId: number = -1
   private garageCarportAckPending: boolean = false
   private garageCarportAckRetryDone: boolean = false
   private garageCarportAckPendingLevel: number = 0
@@ -272,8 +268,6 @@ export class Page1Coordinator {
   private motionCommandBlockUntilMs: number = 0
   private motionCommandBlockReason: string = ''
   private motionCommandBlockLastLogAtMs: number = 0
-  private emergencyAlarmTimerId: number = -1
-  private emergencyAutoRecoverTimerId: number = -1
   private emergencyAlarmBurstActive: boolean = false
   private emergencyAlarmBurstAckAtMs: number = 0
   private emergencyAlarmBurstLastSendAtMs: number = 0
@@ -283,12 +277,9 @@ export class Page1Coordinator {
   private emergencyCommandSeq: number = 0
   private emergencyPendingReplan: boolean = false
   private emergencyPendingBlockedEdgeId: string = ''
-  private metricSpeedAnimTimerId: number = -1
   private metricSpeedAnimToken: number = 0
-  private metricHeadingAnimTimerId: number = -1
   private metricHeadingAnimToken: number = 0
   private metricHeadingTargetDeg: number = 0
-  private metricDistanceAckAnimTimerId: number = -1
   private metricDistanceAckAnimToken: number = 0
   private metricDistanceTotalCm: number = 0
   private metricDistanceAckKey: string = ''
@@ -340,6 +331,37 @@ export class Page1Coordinator {
       }
     })
   }
+
+  private getTimer(timerName: string): number {
+    return this.timerManager.get(timerName)
+  }
+
+  private setTimer(timerName: string, timerId: number): void {
+    this.timerManager.set(timerName, timerId)
+  }
+
+  private get simTimerId(): number { return this.getTimer('simTimerId') }
+  private set simTimerId(v: number) { this.setTimer('simTimerId', v) }
+  private get connectDeferredTimerId(): number { return this.getTimer('connectDeferredTimerId') }
+  private set connectDeferredTimerId(v: number) { this.setTimer('connectDeferredTimerId', v) }
+  private get frameDestApplyTimerId(): number { return this.getTimer('frameDestApplyTimerId') }
+  private set frameDestApplyTimerId(v: number) { this.setTimer('frameDestApplyTimerId', v) }
+  private get pathAckRetryTimerId(): number { return this.getTimer('pathAckRetryTimerId') }
+  private set pathAckRetryTimerId(v: number) { this.setTimer('pathAckRetryTimerId', v) }
+  private get garageDepartAckWatchTimerId(): number { return this.getTimer('garageDepartAckWatchTimerId') }
+  private set garageDepartAckWatchTimerId(v: number) { this.setTimer('garageDepartAckWatchTimerId', v) }
+  private get garageCarportAckWatchTimerId(): number { return this.getTimer('garageCarportAckWatchTimerId') }
+  private set garageCarportAckWatchTimerId(v: number) { this.setTimer('garageCarportAckWatchTimerId', v) }
+  private get emergencyAlarmTimerId(): number { return this.getTimer('emergencyAlarmTimerId') }
+  private set emergencyAlarmTimerId(v: number) { this.setTimer('emergencyAlarmTimerId', v) }
+  private get emergencyAutoRecoverTimerId(): number { return this.getTimer('emergencyAutoRecoverTimerId') }
+  private set emergencyAutoRecoverTimerId(v: number) { this.setTimer('emergencyAutoRecoverTimerId', v) }
+  private get metricSpeedAnimTimerId(): number { return this.getTimer('metricSpeedAnimTimerId') }
+  private set metricSpeedAnimTimerId(v: number) { this.setTimer('metricSpeedAnimTimerId', v) }
+  private get metricHeadingAnimTimerId(): number { return this.getTimer('metricHeadingAnimTimerId') }
+  private set metricHeadingAnimTimerId(v: number) { this.setTimer('metricHeadingAnimTimerId', v) }
+  private get metricDistanceAckAnimTimerId(): number { return this.getTimer('metricDistanceAckAnimTimerId') }
+  private set metricDistanceAckAnimTimerId(v: number) { this.setTimer('metricDistanceAckAnimTimerId', v) }
 
   private clearMetricSpeedAnimation(): void {
     this.metricSpeedAnimToken += 1
@@ -716,6 +738,7 @@ export class Page1Coordinator {
     }
     this.clearEmergencyAlarmTimer()
     this.clearEmergencyAutoRecoverTimer()
+    this.timerManager.clearAll()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
@@ -757,6 +780,7 @@ export class Page1Coordinator {
     }
     this.clearEmergencyAlarmTimer()
     this.clearEmergencyAutoRecoverTimer()
+    this.timerManager.clearAll()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
@@ -814,6 +838,7 @@ export class Page1Coordinator {
     this.simLightBaseLux = 0
     this.clearEmergencyAlarmTimer()
     this.clearEmergencyAutoRecoverTimer()
+    this.timerManager.clearAll()
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()

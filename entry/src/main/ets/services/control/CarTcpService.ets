@@ -44,6 +44,9 @@ export class CarTcpService {
   // - 调大：弱网下更容易自恢复，但等待时间更长、日志更多
   // - 调小：失败更快暴露给上层，但容错变差
   private readonly maxReconnect: number = 3
+  private readonly reconnectBaseDelayMs: number = 700
+  private readonly reconnectMaxDelayMs: number = 5000
+  private readonly reconnectJitterMs: number = 250
   private reconnectCount: number = 0
 
   // 心跳用于维持链路活性，避免长时间静默后连接被动断开
@@ -489,15 +492,15 @@ export class CarTcpService {
     if (this.reconnectCount >= this.maxReconnect) {
       const reason: string = this.lastErrorText.length > 0 ? `连接超时，已达最大重连次数 | ${this.lastErrorText}` : '连接超时，已达最大重连次数'
       this.updateState(CarConnectionState.FAILED, reason)
-      this.logError(TAG_CONNECTSS, '已达最大重连次数（3次），停止重连')
+      this.logError(TAG_CONNECTSS, `已达最大重连次数（${this.maxReconnect}次），停止重连`)
       return
     }
 
     this.reconnectCount += 1
-    const delay: number = this.reconnectCount * 1000
+    const delay: number = this.computeReconnectDelayMs(this.reconnectCount)
 
     this.updateState(CarConnectionState.RECONNECTING, `重连中(${this.reconnectCount})`)
-    this.logError(TAG_CONNECTSS, `第${this.reconnectCount}次重连（延迟${delay}ms），目标IP：${this.currentIp}`)
+    this.logError(TAG_CONNECTSS, `第${this.reconnectCount}次重连（指数退避，延迟${delay}ms），目标IP：${this.currentIp}`)
 
     this.reconnectTimerId = setTimeout(() => {
       this.reconnectTimerId = -1
@@ -505,6 +508,14 @@ export class CarTcpService {
         void this.connectInternal()
       }
     }, delay) as number
+  }
+
+  private computeReconnectDelayMs(attempt: number): number {
+    const expLevel: number = Math.max(0, attempt - 1)
+    const expDelay: number = this.reconnectBaseDelayMs * (2 ** expLevel)
+    const bounded: number = Math.min(this.reconnectMaxDelayMs, expDelay)
+    const jitter: number = Math.floor(Math.random() * this.reconnectJitterMs)
+    return bounded + jitter
   }
 
   private cancelReconnect(): void {
@@ -593,11 +604,14 @@ export class CarTcpService {
 
   private formatSocketError(e: Object, fallback: string): string {
     if (e instanceof Error && e.message.length > 0) {
-      return `${fallback} | ${e.message}`
+      return `${fallback} | ${this.classifySocketError(e.message, undefined)} | ${e.message}`
     }
     if (typeof e === 'object' && e !== null) {
       const err: SocketErrorLike = e as SocketErrorLike
       const parts: Array<string> = [fallback]
+      const codeText: string | undefined = (typeof err.code === 'undefined') ? undefined : `${err.code}`
+      const category: string = this.classifySocketError(err.message, codeText)
+      parts.push(category)
       if (typeof err.code !== 'undefined') parts.push(`code=${err.code}`)
       if (typeof err.message === 'string' && err.message.length > 0) parts.push(err.message)
       return parts.join(' | ')
@@ -605,8 +619,17 @@ export class CarTcpService {
     return fallback
   }
 
+  private classifySocketError(message?: string, codeText?: string): string {
+    const m: string = (typeof message === 'string') ? message.toLowerCase() : ''
+    const c: string = (typeof codeText === 'string') ? codeText : ''
+    if (m.indexOf('timeout') >= 0 || c === '2301021') return 'TIMEOUT'
+    if (m.indexOf('refused') >= 0 || c === '111') return 'CONNECTION_REFUSED'
+    if (m.indexOf('unreachable') >= 0 || m.indexOf('network') >= 0) return 'NETWORK_UNREACHABLE'
+    if (m.indexOf('reset') >= 0 || m.indexOf('broken pipe') >= 0) return 'CONNECTION_RESET'
+    return 'NETWORK_ERROR'
+  }
+
   private toArrayBuffer(data: Uint8Array): ArrayBuffer {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
   }
 }
-

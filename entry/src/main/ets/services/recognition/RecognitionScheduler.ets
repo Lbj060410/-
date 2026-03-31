@@ -79,6 +79,7 @@ export class RecognitionScheduler {
   // ===== Queue =====
   private readonly queue: Array<RecognitionTask> = []
   private readonly cancelSet: Set<string> = new Set<string>()
+  private readonly snapshotQueueMax: number = 24
 
   // ===== 统计（用于 Page4/Diagnostics）=====
   private lastCostMs: number = 0
@@ -441,10 +442,32 @@ export class RecognitionScheduler {
     this.store.addOrUpdateRecogTask(this.toRecordQueued(task))
     this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.ENQUEUE, reason))
 
+    if (task.kind === RecognitionTaskKind.SNAPSHOT) {
+      const snapshotQueued: number = this.snapshotQueueSize()
+      if (snapshotQueued >= this.snapshotQueueMax) {
+        this.store.updateRecogTaskState(task.id, RecognitionTaskState.DROPPED, 'snapshot queue full')
+        this.store.appendRecogEvent(
+          this.toEvent(task.id, RecognitionStage.DONE, `DROPPED(queue full:${snapshotQueued}/${this.snapshotQueueMax})`)
+        )
+        this.releaseTaskInputIfOwned(task)
+        return
+      }
+    }
+
     this.queue.push(task)
     this.sortQueue()
 
     this.pump()
+  }
+
+  private snapshotQueueSize(): number {
+    let n: number = 0
+    for (let i: number = 0; i < this.queue.length; i++) {
+      if (this.queue[i].kind === RecognitionTaskKind.SNAPSHOT) {
+        n += 1
+      }
+    }
+    return n
   }
 
   private sortQueue(): void {
