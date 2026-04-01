@@ -70,6 +70,7 @@ export class VideoStore {
   // ==== Page2 自动预览（来自 Page4），与业务快照解耦 ====
   page2AutoPreviewPixelMap?: PixelMap
   page2AutoPreviewAtMs: number = 0
+  private readonly pinnedPixelMaps: Set<PixelMap> = new Set<PixelMap>()
 
   // ==== 识别调度预留 ====
   recognitionEnabled: boolean = true
@@ -130,8 +131,30 @@ export class VideoStore {
   private releasePixelMapLater(pm: PixelMap): void {
     // Avoid immediate free while UI/render thread may still reference previous frame.
     setTimeout((): void => {
-      try { pm.release() } catch (_) {}
+      this.releasePixelMapWhenSafe(pm, 20)
     }, 1500)
+  }
+
+  pinPixelMap(pm?: PixelMap): void {
+    if (!pm) return
+    this.pinnedPixelMaps.add(pm)
+  }
+
+  unpinPixelMap(pm?: PixelMap): void {
+    if (!pm) return
+    this.pinnedPixelMaps.delete(pm)
+  }
+
+  private releasePixelMapWhenSafe(pm: PixelMap, retries: number): void {
+    if (this.pinnedPixelMaps.has(pm)) {
+      if (retries > 0) {
+        setTimeout((): void => {
+          this.releasePixelMapWhenSafe(pm, retries - 1)
+        }, 120)
+      }
+      return
+    }
+    try { pm.release() } catch (_) {}
   }
 
   setStatus(text: string): void { this.statusText = text }

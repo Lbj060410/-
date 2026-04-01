@@ -15,6 +15,7 @@ import { recogStore } from '../../state/RecogStore'
 import { IRecognitionService } from './RecognitionService'
 import { BBoxNorm, RecognitionCoreResult } from './RecognitionResult'
 import { getLibEntryLastError, resolveLibEntryApi } from './LibEntryBridge'
+import { parseAndPostprocessNcnnBoxes } from '../../utils/BackgroundCompute'
 
 interface RawBox {
   cls: number
@@ -93,14 +94,13 @@ export class NcnnRecognitionService implements IRecognitionService {
       await pm.readPixelsToBuffer(buf)
       const json: string = await this.detectWithIpcOrFallback(buf, w, h)
 
-      let rawBoxes: RawBox[]
-      try {
-        rawBoxes = JSON.parse(json) as RawBox[]
-      } catch (e) {
-        return this.errorResult(t0, `[${this.diagTag}] detect json parse failed: ${String(e)}`)
+      const postBoxes: RawBox[] = await parseAndPostprocessNcnnBoxes(json, this.confThresh, this.nmsThresh)
+      if (postBoxes.length <= 0) {
+        const trimmed: string = json.trim()
+        if (trimmed.length > 0 && trimmed !== '[]') {
+          return this.errorResult(t0, `[${this.diagTag}] detect json parse failed`)
+        }
       }
-
-      const postBoxes: RawBox[] = this.postprocessRawBoxes(rawBoxes)
       const boxes: BBoxNorm[] = postBoxes.map((b: RawBox): BBoxNorm => {
         const label: string = (b.cls >= 0 && b.cls < this.labels.length)
           ? this.labels[b.cls]

@@ -132,7 +132,8 @@ export struct ControlPanel {
         }
         .width('100%')
 
-        // 第1行：基本移动
+        // 第1行：比赛演示核心四按钮（建议现场优先展示这一行）
+        // 讲解口径：UI按钮 -> onClick -> page1Coordinator.onAction -> 协议下发
         Row({ space: 10 }) {
           this.controlBtn('前进', Page1Action.GO, 'basic')
           this.controlBtn('后退', Page1Action.BACK, 'basic')
@@ -184,6 +185,7 @@ export struct ControlPanel {
     })
     .shadow(style === 'basic' ? { radius: 4, color: '#00000005', offsetX: 0, offsetY: 1 } : { radius: 0 })
     .onClick((): void => {
+      // 比赛讲解点：所有手动动作统一收口到 onAction，便于展示“统一控制入口”
       void page1Coordinator.onAction(action)
     })
   }

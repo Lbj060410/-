@@ -1,4 +1,3 @@
-﻿// @ts-nocheck
 /**
  * 代码指南：
  * 文件：services/control/CarTcpService.ets

@@ -448,6 +448,9 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
+  // 比赛讲解上下文：
+  // ControlPanel.ets 的按钮点击最终都会进入这个函数。
+  // 现场可按“动作进入 -> 模式选择 -> 协议发送 -> 日志回执”顺序讲解。
 
   // 急停优先级最高：立即中断自动运行并执行统一急停流程。
   if (a === Page1Action.SCRAM) {
@@ -468,6 +471,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     }
   }
 
+  // 关键讲解点：统一切换发送模式（已连接真发；未连接或演示模式仅记录）
   ctx.proto.setMode(canRealSend(ctx) ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
 
   let actionText: string = ''
@@ -492,6 +496,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (!canRealSend(ctx)) {
+    // DRY_RUN / 未连接分支：不真实发车，但保留动作日志和地图预览，便于现场展示链路
     kickTcpConnectForRealSendIfNeeded(ctx, s)
     const mode: string = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
     s.bumpTx()
@@ -502,6 +507,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.GO) {
+    // GO 分支示例：包含去重、道闸/车库约束、光照前置检查，再进入真实发送
     ctx.pathAckLastCommandText = actionText
     if (await ctx.maybeHandleGarageDepartBeforeDrive(Date.now())) {
       return
@@ -524,6 +530,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   }
 
   if (a === Page1Action.BACK) {
+    // BACK/LEFT/RIGHT 分支用于展示“按钮动作 -> 协议动作”的直接映射关系
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return

@@ -438,6 +438,7 @@ export class RecognitionScheduler {
   // ===== 内部：入队 =====
   private enqueue(task: RecognitionTask, reason: string): void {
     if (!this.enabled) this.start()
+    this.dropExpiredQueuedTasks()
 
     this.store.addOrUpdateRecogTask(this.toRecordQueued(task))
     this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.ENQUEUE, reason))
@@ -480,12 +481,35 @@ export class RecognitionScheduler {
   private pump(): void {
     if (!this.enabled) return
     if (this.inFlight) return
+    this.dropExpiredQueuedTasks()
     if (this.queue.length <= 0) return
 
     const task: RecognitionTask | undefined = this.queue.shift()
     if (!task) return
 
     void this.runTask(task, this.runToken)
+  }
+
+  private dropExpiredQueuedTasks(): void {
+    if (this.queue.length <= 0) return
+    const now: number = Date.now()
+    const keep: Array<RecognitionTask> = []
+    for (let i: number = 0; i < this.queue.length; i++) {
+      const task: RecognitionTask = this.queue[i]
+      const ageMs: number = now - task.createdAtMs
+      if (ageMs <= task.timeoutMs) {
+        keep.push(task)
+        continue
+      }
+      this.releaseTaskInputIfOwned(task)
+      this.store.updateRecogTaskState(task.id, RecognitionTaskState.TIMEOUT, 'queued timeout')
+      this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.DONE, `TIMEOUT(queued:${ageMs}ms)`))
+    }
+    if (keep.length === this.queue.length) return
+    this.queue.length = 0
+    for (let i: number = 0; i < keep.length; i++) {
+      this.queue.push(keep[i])
+    }
   }
 
   private async runTask(task: RecognitionTask, token: number): Promise<void> {
@@ -607,6 +631,7 @@ export class RecognitionScheduler {
     let pm: PixelMap
     let releaseAfterUse: boolean = false
     let allowCropOnInput: boolean = true
+    let pinnedSharedPm: PixelMap | undefined = undefined
 
     if (task.input.type === RecognitionInputType.HTTP_SNAPSHOT) {
       this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.PREPROCESS, 'HTTP snapshot fetch'))
@@ -634,6 +659,8 @@ export class RecognitionScheduler {
         } else {
           // Shared fallback frame cannot be safely mutated by ROI crop.
           pm = fallback
+          pinnedSharedPm = fallback
+          videoStore.pinPixelMap(pinnedSharedPm)
           allowCropOnInput = false
           this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.PREPROCESS, 'fallback shared frame'))
         }
@@ -643,6 +670,10 @@ export class RecognitionScheduler {
       if (!v) throw new Error('pixelMap undefined')
       pm = v
       releaseAfterUse = !!task.input.releaseAfterUse
+      if (!releaseAfterUse) {
+        pinnedSharedPm = v
+        videoStore.pinPixelMap(pinnedSharedPm)
+      }
     } else if (task.input.type === RecognitionInputType.GALLERY_URI) {
       const uri: string | undefined = task.input.galleryUri
       if (!uri || uri.trim().length <= 0) throw new Error('gallery uri empty')
@@ -689,6 +720,9 @@ export class RecognitionScheduler {
       }
       return result
     } finally {
+      if (pinnedSharedPm) {
+        videoStore.unpinPixelMap(pinnedSharedPm)
+      }
       if (releaseAfterUse) {
         try { pm.release() } catch (e) {}
       }

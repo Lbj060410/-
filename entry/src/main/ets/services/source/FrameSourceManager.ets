@@ -9,6 +9,7 @@ import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
 import { HttpSnapshotService } from './HttpSnapshotService'
 import { VideoStore } from '../../state/VideoStore'
+import { decodeJpegToRgba } from '../../utils/BackgroundCompute'
 
 export enum FrameSourceType {
   HTTP = 0
@@ -47,6 +48,8 @@ export class FrameSourceManager {
   private lastFailText: string = ''
   private consecutiveHttpOkCount: number = 0
   private consecutiveHttpFailCount: number = 0
+  private offthreadDecodeEnabled: boolean = true
+  private offthreadDecodeFailCount: number = 0
 
   private onFrame?: FrameListener
   private onFrameHealth?: FrameHealthListener
@@ -85,6 +88,8 @@ export class FrameSourceManager {
     this.lastFailText = ''
     this.consecutiveHttpOkCount = 0
     this.consecutiveHttpFailCount = 0
+    this.offthreadDecodeEnabled = true
+    this.offthreadDecodeFailCount = 0
     this.scheduleNextLoop(url, token, 0)
   }
 
@@ -114,7 +119,7 @@ export class FrameSourceManager {
       const requestUrl: string = this.withNoCache(url)
       const timeoutMs: number = this.resolveRequestTimeoutMs()
       const frame: VideoFrame = await this.pullHttpFrame(requestUrl, timeoutMs)
-      const pm: PixelMap = await this.jpegToPixelMap(frame.jpeg)
+      const pm: PixelMap = await this.jpegToPixelMapPreferOffthread(frame.jpeg)
       if (!this.isSessionActive(token)) {
         try { pm.release() } catch (_) {}
         return
@@ -302,5 +307,29 @@ export class FrameSourceManager {
     } finally {
       src.release()
     }
+  }
+
+  private async jpegToPixelMapPreferOffthread(jpeg: ArrayBuffer): Promise<PixelMap> {
+    if (this.offthreadDecodeEnabled) {
+      try {
+        const decoded = await decodeJpegToRgba(jpeg)
+        if (decoded.ok && decoded.rgba && decoded.width > 0 && decoded.height > 0) {
+          const opts: image.InitializationOptions = {
+            size: { width: decoded.width, height: decoded.height },
+            pixelFormat: image.PixelMapFormat.RGBA_8888
+          }
+          const pm: PixelMap = await image.createPixelMap(decoded.rgba, opts)
+          this.offthreadDecodeFailCount = 0
+          return pm
+        }
+      } catch (_) {
+      }
+      this.offthreadDecodeFailCount += 1
+      if (this.offthreadDecodeFailCount >= 3) {
+        this.offthreadDecodeEnabled = false
+        console.warn('[HTTP] offthread decode disabled, fallback to main decode')
+      }
+    }
+    return await this.jpegToPixelMap(jpeg)
   }
 }

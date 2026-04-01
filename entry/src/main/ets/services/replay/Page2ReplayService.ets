@@ -38,6 +38,7 @@ interface FrameClipBufferItem {
 const PAGE2_REPLAY_DIR: string = '/data/storage/el2/base/haps/entry/files/page2_replay'
 const MAX_OBSTACLE_ITEMS: number = 20
 const MAX_GALLERY_ITEMS: number = 20
+const MAX_ITEMS_PER_REPLAY_TYPE: number = 3
 const MAX_FRAME_BUFFER: number = 20
 const FRAME_SAMPLE_INTERVAL_MS: number = 200
 const SHIGONG_COOLDOWN_MS: number = 1400
@@ -275,7 +276,7 @@ export class Page2ReplayService {
   }
 
   private pushObstacle(item: Page2ObstacleReplayItem): void {
-    const cap: number = this.obstacleCap(item.triggerType)
+    const cap: number = this.obstacleCap()
     const next: Array<Page2ObstacleReplayItem> = [item]
     let sameTypeCount: number = 1
     for (let i: number = 0; i < this.obstacleItems.length; i++) {
@@ -301,8 +302,17 @@ export class Page2ReplayService {
 
   private pushGallery(item: Page2GalleryReplayItem): void {
     const next: Array<Page2GalleryReplayItem> = [item]
+    let sameTypeCount: number = 1
+    const cap: number = this.galleryCap()
     for (let i: number = 0; i < this.galleryItems.length; i++) {
-      next.push(this.galleryItems[i])
+      const oldItem: Page2GalleryReplayItem = this.galleryItems[i]
+      if (oldItem.buttonName === item.buttonName) {
+        if (sameTypeCount >= cap) {
+          continue
+        }
+        sameTypeCount += 1
+      }
+      next.push(oldItem)
       if (next.length >= MAX_GALLERY_ITEMS) break
     }
     this.galleryItems = next
@@ -313,10 +323,12 @@ export class Page2ReplayService {
     return `${prefix}-${Date.now()}-${this.seq}`
   }
 
-  private obstacleCap(triggerType: 'SHIGONG' | 'ULTRASONIC_01' | 'VISION'): number {
-    if (triggerType === 'ULTRASONIC_01') return 2
-    if (triggerType === 'SHIGONG') return 3
-    return 1
+  private obstacleCap(): number {
+    return MAX_ITEMS_PER_REPLAY_TYPE
+  }
+
+  private galleryCap(): number {
+    return MAX_ITEMS_PER_REPLAY_TYPE
   }
 
   private recycleObstacleItem(item: Page2ObstacleReplayItem): void {

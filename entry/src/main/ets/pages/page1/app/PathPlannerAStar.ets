@@ -177,13 +177,6 @@ export class PathPlannerAStar {
 
   /**
    * A* 最短路径规划入口。
-   * 输入：
-   * - startId/goalId：起终点；
-   * - blocked：禁用节点；
-   * - blockedEdges：禁用边（统一为 A|B）。
-   * 输出：
-   * - ok=true: path 为可执行节点序列；
-   * - ok=false: reason 说明失败原因。
    */
   static plan(startId: string, goalId: string, blocked: Array<string>, blockedEdges: Array<string> = []): AStarPlanResult {
     if (!GridIdCodec.isValidId(startId)) {
@@ -232,6 +225,7 @@ export class PathPlannerAStar {
     open.push(new AStarNode(startId, 0, h0, ''))
     bestG.set(startId, 0)
 
+    // 主循环：每轮扩展一个“当前最优节点”
     while (open.length > 0) {
       const current: AStarNode = PathPlannerAStar.popMinF(open)
       if (closed.get(current.id) === true) continue
@@ -244,6 +238,7 @@ export class PathPlannerAStar {
 
       closed.set(current.id, true)
 
+      // 邻接扩展：把 current 的相邻节点逐个评估
       const nbrs: Array<string> = PathPlannerAStar.neighbors(current.id)
       for (let i: number = 0; i < nbrs.length; i++) {
         const nb: string = nbrs[i]
@@ -328,4 +323,3 @@ export class PathPlannerAStar {
     return out
   }
 }
-

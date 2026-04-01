@@ -26,9 +26,13 @@ import { OpenClawGatewayClient, OpenClawChatMessage } from '../../services/assis
 import { installPage4TencentVoiceInputAdapter } from '../../services/assistant/Page4TencentVoiceInputAdapter'
 import { page4TencentLocalTtsService } from '../../services/assistant/Page4TencentLocalTtsService'
 import hilog from '@ohos.hilog'
+import fs from '@ohos.file.fs'
+import util from '@ohos.util'
 
 const PAGE4_LOG_DOMAIN = 0xFF04
 const PAGE4_LOG_TAG = 'page4log'
+const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
+const PAGE4_POI_EXPORT_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_poi_mappings_export.json'
 
 interface AssistantMessage {
   id: string
@@ -43,14 +47,64 @@ interface HistorySession {
   tsMs: number
 }
 
+type Page4PlannedTaskKind =
+  'route' |
+  'action' |
+  'auto_follow' |
+  'send_mode' |
+  'capture_frame' |
+  'undo' |
+  'method' |
+  'query_status' |
+  'query_vision' |
+  'query_comm' |
+  'query_video'
+
+interface Page4PlannedTask {
+  kind: Page4PlannedTaskKind
+  destNodeId?: string
+  action?: Page1Action
+  enabled?: boolean
+  mode?: 'REAL_SEND' | 'DRY_RUN'
+  methodName?: string
+  methodArgs?: Record<string, Object | string | number | boolean | undefined>
+}
+
+interface Page4AliasItem {
+  name: string
+  destNodeId: string
+  tsMs: number
+}
+
+interface Page4ExecutionReceipt {
+  taskText: string
+  sent: boolean
+  ack: string
+  done: string
+}
+
 interface Page4VoiceInputAdapter {
   startListening: () => void | Promise<void>
   stopListening: () => string | Promise<string>
 }
 
+type Page4PlaceRole = 'home' | 'company'
+
+interface Page4PlaceBindingPayload {
+  homeNodeId?: string
+  companyNodeId?: string
+}
+
+interface Page4PlaceBindingPlan {
+  role: Page4PlaceRole
+  placeText: string
+}
+
 @Component
 export struct Page4View {
   private readonly logTag: string = 'Page4View'
+  private readonly maxMessages: number = 120
+  private readonly maxHistorySessions: number = 24
   @State private store: Page1UiStore = page1Store
   @State private inputText: string = ''
   @State private messages: Array<AssistantMessage> = []
@@ -71,19 +125,46 @@ export struct Page4View {
   private toastTimerId: number = -1
 
   private longPressTimerId: number = -1
+  private readonly managedTimerIds: Set<number> = new Set<number>()
   private readonly longPressThresholdMs: number = 320
   private lastGoodOpenClawHost: string = ''
   private openClawHostCooldownUntilMs: Record<string, number> = {}
   private readonly openClawHostCooldownMs: number = 25000
   private readonly openClawRetryConnectTimeoutMs: number = 5000
   private readonly openClawRetryReadTimeoutMs: number = 45000
+  private adaptiveOpenClawConnectTimeoutMs: number = 5000
+  private adaptiveOpenClawReadTimeoutMs: number = 45000
   private readonly openClawSystemPrompt: string =
     '你是智能小车的车控助手。优先使用简洁中文回复；涉及行驶或安全动作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
+  private promptQueueTail: Promise<void> = Promise.resolve()
+  private queuedPromptCount: number = 0
+  private queuedPromptCap: number = 24
+  private weakNetQueuedPromptCap: number = 10
+  private normalQueuedPromptCap: number = 24
+  private lastDestNodeId: string = ''
+  private lastAction?: Page1Action = undefined
+  private lastRouteFailureReason: string = ''
+  private lastReplanSummary: string = ''
+  private lastSafeNodeId: string = ''
+  private prevSafeNodeId: string = ''
+  private aliasDict: Array<Page4AliasItem> = []
+  private placeBindingsLoaded: boolean = false
+  private homeNodeId: string = ''
+  private companyNodeId: string = ''
+  private pendingPlaceRole: '' | Page4PlaceRole = ''
+  private pendingPlaceNodeId: string = ''
+  private pendingPlaceRawText: string = ''
+  private pendingPlaceAtMs: number = 0
+  private readonly pendingPlaceTimeoutMs: number = 120000
+  private readonly routeArrivalTimeoutMs: number = 180000
+  private readonly routeArrivalPollMs: number = 300
 
   aboutToAppear(): void {
+    this.ensurePlaceBindingsLoaded()
     installPage4TencentVoiceInputAdapter()
     page1Coordinator.bind(this.store)
     void page1Coordinator.start()
+    this.applyAdaptiveStrategy()
     this.chatScroller = new Scroller()
     if (this.messages.length <= 0) {
       this.pushAssistant('您好，我是您的智能助理，有什么我可以帮您？')
@@ -94,6 +175,7 @@ export struct Page4View {
   aboutToDisappear(): void {
     this.clearLongPressTimer()
     this.clearToastTimer()
+    this.clearAllManagedTimers()
     page4TencentLocalTtsService.stop()
   }
 
@@ -435,10 +517,10 @@ export struct Page4View {
             this.inputText = v
           })
           .onSubmit(() => {
-            if (this.assistantBusy || !this.inputText) {
+            if (!this.inputText) {
               return
             }
-            void this.submitPrompt(this.inputText)
+            void this.enqueuePrompt(this.inputText, 'text')
           })
 
         if (this.inputText.length > 0) {
@@ -455,10 +537,10 @@ export struct Page4View {
           .shadow({ radius: 12, color: '#2F6BFF66', offsetX: 0, offsetY: 4 })
           .transition({ type: TransitionType.Insert, scale: { x: 0.1, y: 0.1 } })
           .onClick((): void => {
-            if (this.assistantBusy || !this.inputText) {
+            if (!this.inputText) {
               return
             }
-            void this.submitPrompt(this.inputText)
+            void this.enqueuePrompt(this.inputText, 'text')
           })
         }
       } else {
@@ -512,10 +594,7 @@ export struct Page4View {
       .fontSize(14)
       .fontWeight(FontWeight.Medium)
       .onClick((): void => {
-        if (this.assistantBusy) {
-          return
-        }
-        void this.submitPrompt(prompt)
+        void this.enqueuePrompt(prompt, 'quick')
       })
   }
 
@@ -539,10 +618,10 @@ export struct Page4View {
   private onVoicePressDown(): void {
     this.voicePressing = true
     this.clearLongPressTimer()
-    this.longPressTimerId = setTimeout((): void => {
+    this.longPressTimerId = this.setManagedTimeout((): void => {
       this.longPressTimerId = -1
       void this.startVoiceListening()
-    }, this.longPressThresholdMs) as unknown as number
+    }, this.longPressThresholdMs)
   }
 
   private async onVoicePressUp(): Promise<void> {
@@ -567,7 +646,15 @@ export struct Page4View {
       this.pushAssistant('未识别到语音内容，请重试。')
       return
     }
-    await this.submitPrompt(asrText)
+    const clauses: Array<string> = this.splitPromptToClauses(asrText)
+    if (clauses.length <= 1) {
+      await this.enqueuePrompt(asrText, 'voice')
+      return
+    }
+    this.pushAssistant(`已识别多句指令，共${clauses.length}条，开始顺序执行。`)
+    for (let i: number = 0; i < clauses.length; i++) {
+      await this.enqueuePrompt(clauses[i], 'voice')
+    }
   }
 
   private async startVoiceListening(): Promise<void> {
@@ -611,31 +698,25 @@ export struct Page4View {
   }
 
   private clearLongPressTimer(): void {
-    if (this.longPressTimerId >= 0) {
-      clearTimeout(this.longPressTimerId)
-      this.longPressTimerId = -1
-    }
+    this.longPressTimerId = this.clearManagedTimer(this.longPressTimerId)
   }
 
   private clearToastTimer(): void {
-    if (this.toastTimerId >= 0) {
-      clearTimeout(this.toastTimerId)
-      this.toastTimerId = -1
-    }
+    this.toastTimerId = this.clearManagedTimer(this.toastTimerId)
   }
 
   private showToast(text: string): void {
     this.toastText = text
     this.toastVisible = true
     this.clearToastTimer()
-    this.toastTimerId = setTimeout((): void => {
+    this.toastTimerId = this.setManagedTimeout((): void => {
       this.toastTimerId = -1
       this.toastVisible = false
-    }, 2000) as unknown as number
+    }, 2000)
   }
 
   private scrollChatToTopSoon(): void {
-    setTimeout((): void => {
+    this.setManagedTimeout((): void => {
       this.chatScroller.scrollTo({
         xOffset: 0,
         yOffset: 0,
@@ -645,7 +726,7 @@ export struct Page4View {
   }
 
   private scrollChatToBottomSoon(): void {
-    setTimeout((): void => {
+    this.setManagedTimeout((): void => {
       this.chatScroller.scrollTo({
         xOffset: 0,
         yOffset: 1000000,
@@ -656,14 +737,14 @@ export struct Page4View {
 
   private stabilizeChatTopOnEnter(): void {
     this.scrollChatToTopSoon()
-    setTimeout((): void => {
+    this.setManagedTimeout((): void => {
       this.chatScroller.scrollTo({
         xOffset: 0,
         yOffset: 0,
         animation: { duration: 0, curve: Curve.Linear }
       })
     }, 80)
-    setTimeout((): void => {
+    this.setManagedTimeout((): void => {
       this.chatScroller.scrollTo({
         xOffset: 0,
         yOffset: 0,
@@ -684,6 +765,7 @@ export struct Page4View {
       text: text,
       tsMs: Date.now()
     })
+    this.trimMessages()
     this.maybeRefreshCurrentChatTitleByFirstUserSentence()
     this.scrollChatToBottomSoon()
   }
@@ -695,8 +777,15 @@ export struct Page4View {
       text: text,
       tsMs: Date.now()
     })
+    this.trimMessages()
     this.scrollChatToBottomSoon()
     void this.maybeAutoSpeakAssistantText(text)
+  }
+
+  private trimMessages(): void {
+    if (this.messages.length <= this.maxMessages) return
+    const keepFrom: number = this.messages.length - this.maxMessages
+    this.messages = this.messages.slice(keepFrom)
   }
 
   private async maybeAutoSpeakAssistantText(text: string): Promise<void> {
@@ -780,6 +869,11 @@ export struct Page4View {
       nextSessions.push(this.historySessions[i])
       nextTitles.push(this.historySessions[i].title)
     }
+    if (nextSessions.length > this.maxHistorySessions) {
+      this.historySessions = nextSessions.slice(0, this.maxHistorySessions)
+      this.historyTitles = nextTitles.slice(0, this.maxHistorySessions)
+      return
+    }
     this.historySessions = nextSessions
     this.historyTitles = nextTitles
   }
@@ -833,7 +927,946 @@ export struct Page4View {
     return false
   }
 
+  private async enqueuePrompt(raw: string, source: string = 'text'): Promise<void> {
+    const text: string = raw.trim()
+    if (text.length <= 0) return
+    if (this.queuedPromptCount >= this.queuedPromptCap) {
+      this.pushAssistant(`任务队列已满(${this.queuedPromptCap})，请稍后再试。`)
+      return
+    }
+    this.queuedPromptCount += 1
+
+    const runOne = async (): Promise<void> => {
+      this.assistantBusy = true
+      try {
+        await this.submitPrompt(text, true, source)
+      } finally {
+        this.queuedPromptCount = Math.max(0, this.queuedPromptCount - 1)
+        if (this.queuedPromptCount <= 0) this.assistantBusy = false
+      }
+    }
+    this.promptQueueTail = this.promptQueueTail.then(runOne, runOne)
+    await this.promptQueueTail
+  }
+
+  private learnAliasFromText(text: string): string {
+    const src: string = text.trim()
+    if (src.length <= 0) return ''
+    const patterns: Array<RegExp> = [
+      /(?:把|将)\s*([^，。；;,\s]{1,16})\s*(?:记为|设为|设置为|定义为)\s*([A-Ga-g]\d{1,2})/,
+      /^([^，。；;,\s]{1,16})\s*(?:是|等于)\s*([A-Ga-g]\d{1,2})$/
+    ]
+    for (let i: number = 0; i < patterns.length; i++) {
+      const m: RegExpMatchArray | null = src.match(patterns[i])
+      if (!m || m.length < 3) continue
+      const name: string = m[1].trim()
+      const destNodeId: string = m[2].trim().toUpperCase()
+      if (!GridIdCodec.isValidId(destNodeId)) return `"${destNodeId}" 不是合法点位，别名学习失败。`
+      if (name.length <= 0) return '别名为空，学习失败。'
+      let replaced: boolean = false
+      const next: Array<Page4AliasItem> = []
+      for (let k: number = 0; k < this.aliasDict.length; k++) {
+        const cur: Page4AliasItem = this.aliasDict[k]
+        if (cur.name === name) {
+          replaced = true
+          next.push({ name, destNodeId, tsMs: Date.now() })
+        } else {
+          next.push(cur)
+        }
+      }
+      if (!replaced) next.push({ name, destNodeId, tsMs: Date.now() })
+      this.aliasDict = next
+      return replaced ? `已更新别名：${name} -> ${destNodeId}` : `已学习别名：${name} -> ${destNodeId}`
+    }
+    return ''
+  }
+
+  private resolveAliasNode(text: string): string {
+    const src: string = text.trim()
+    if (src.length <= 0) return ''
+    for (let i: number = 0; i < this.aliasDict.length; i++) {
+      const item: Page4AliasItem = this.aliasDict[i]
+      if (item.name.length <= 0) continue
+      if (src.indexOf(item.name) >= 0) return item.destNodeId
+      if (this.normalizePlaceInput(src).indexOf(this.normalizePlaceInput(item.name)) >= 0) return item.destNodeId
+    }
+    return ''
+  }
+
+  private resolveContextDestNode(input: string): string {
+    const x: string = input.trim()
+    if (x.length <= 0) return ''
+    if (!GridIdCodec.isValidId(this.lastDestNodeId)) return ''
+    if (this.containsAny(x, ['那里', '那儿', '刚才那个点', '上一目的地', '上一个目的地', '原目的地'])) {
+      return this.lastDestNodeId
+    }
+    return ''
+  }
+
+  private rememberSafePointFromStore(): void {
+    const cur: string = this.store.currentSnapNodeId.trim().toUpperCase()
+    if (!GridIdCodec.isValidId(cur)) return
+    if (cur === this.lastSafeNodeId) return
+    this.prevSafeNodeId = this.lastSafeNodeId
+    this.lastSafeNodeId = cur
+  }
+
+  private async undoLastActionToSafePoint(): Promise<void> {
+    const target: string = GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId
+    const receipts: Array<Page4ExecutionReceipt> = []
+    try {
+      await page1Coordinator.onAction(Page1Action.STOP)
+      this.lastAction = Page1Action.STOP
+      receipts.push(this.buildReceipt('停止', true, true))
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : 'stop failed'
+      receipts.push(this.buildReceipt(`停止失败(${msg})`, false, false))
+    }
+    if (GridIdCodec.isValidId(target)) {
+      const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
+      for (let i: number = 0; i < backReceipts.length; i++) receipts.push(backReceipts[i])
+    } else {
+      receipts.push(this.buildReceipt('回退安全点(未记录安全点)', false, false))
+    }
+    this.pushAssistant(`撤销结果：${this.renderReceiptsSummary(receipts)}`)
+  }
+
+  private isNightOrWeakNetwork(): boolean {
+    const hour: number = new Date().getHours()
+    const isNight: boolean = hour >= 20 || hour <= 6
+    const weakConn: boolean =
+      !commStore.commConnected ||
+      commStore.commReconnectCount >= 3 ||
+      this.containsAny(commStore.commStateText, ['RECONNECT', 'FAIL', 'ERROR'])
+    return isNight || weakConn
+  }
+
+  private applyAdaptiveStrategy(forceNotify: boolean = false): void {
+    const weak: boolean = this.isNightOrWeakNetwork()
+    if (weak) {
+      videoStore.setRecognizeIntervalMs(450)
+      videoStore.switchCooldownMs = 4000
+      this.adaptiveOpenClawConnectTimeoutMs = 7000
+      this.adaptiveOpenClawReadTimeoutMs = 52000
+      this.queuedPromptCap = this.weakNetQueuedPromptCap
+      if (forceNotify) {
+        this.pushAssistant('已启用夜间/弱网策略：低频识别、延长超时、队列上限收紧。')
+      }
+      return
+    }
+    videoStore.setRecognizeIntervalMs(220)
+    videoStore.switchCooldownMs = 2500
+    this.adaptiveOpenClawConnectTimeoutMs = this.openClawRetryConnectTimeoutMs
+    this.adaptiveOpenClawReadTimeoutMs = this.openClawRetryReadTimeoutMs
+    this.queuedPromptCap = this.normalQueuedPromptCap
+    if (forceNotify) {
+      this.pushAssistant('已恢复常规策略。')
+    }
+  }
+
+  private buildRouteFallbackCandidates(dest: string): Array<string> {
+    const out: Array<string> = []
+    const pushUnique = (id: string): void => {
+      const x: string = id.trim().toUpperCase()
+      if (!GridIdCodec.isValidId(x)) return
+      for (let i: number = 0; i < out.length; i++) {
+        if (out[i] === x) return
+      }
+      out.push(x)
+    }
+    pushUnique(dest)
+    const parsed = GridIdCodec.parse(dest)
+    if (!parsed) return out
+    const col: number = parsed.col
+    const row: number = parsed.row
+    const cols: Array<number> = [col - 1, col + 1]
+    const rows: Array<number> = [row - 1, row + 1]
+    for (let i: number = 0; i < cols.length; i++) {
+      const c: number = cols[i]
+      if (c < 0 || c > 6) continue
+      const id: string = String.fromCharCode(65 + c) + String(row)
+      pushUnique(id)
+    }
+    for (let i: number = 0; i < rows.length; i++) {
+      const r: number = rows[i]
+      if (r < 1 || r > 7) continue
+      const id: string = String.fromCharCode(65 + col) + String(r)
+      pushUnique(id)
+    }
+    return out
+  }
+
+  private buildReceipt(taskText: string, sent: boolean, done: boolean): Page4ExecutionReceipt {
+    const ackText: string = this.latestAckText()
+    return {
+      taskText: taskText,
+      sent: sent,
+      ack: ackText,
+      done: done ? '完成/已生效' : '未完成'
+    }
+  }
+
+  private latestAckText(): string {
+    const arr = commStore.diagKeyRxFrames
+    if (!arr || arr.length <= 0) return 'ACK未观测'
+    const last = arr[arr.length - 1]
+    if (!last) return 'ACK未观测'
+    return `${last.cmdHex} ${last.summary}`
+  }
+
+  private renderReceiptsSummary(receipts: Array<Page4ExecutionReceipt>): string {
+    if (receipts.length <= 0) return '无执行项'
+    const parts: Array<string> = []
+    for (let i: number = 0; i < receipts.length; i++) {
+      const r: Page4ExecutionReceipt = receipts[i]
+      parts.push(`${i + 1}.${r.taskText}[sent=${r.sent ? 'Y' : 'N'},ack=${r.ack},done=${r.done}]`)
+    }
+    return parts.join('；')
+  }
+
+  private async routeWithReplan(dest: string): Promise<{ ok: boolean, receipt: Page4ExecutionReceipt, appliedDest: string }> {
+    const candidates: Array<string> = this.buildRouteFallbackCandidates(dest)
+    let firstErr: string = ''
+    for (let i: number = 0; i < candidates.length; i++) {
+      const goal: string = candidates[i]
+      try {
+        this.rememberSafePointFromStore()
+        await page1Coordinator.startManualRoute(goal)
+        this.lastDestNodeId = goal
+        const taskText: string = i <= 0 ? `导航 ${goal}` : `重规划导航 ${goal}`
+        if (i > 0) {
+          this.lastReplanSummary = `原目标${dest}失败，改为${goal}`
+        }
+        return { ok: true, receipt: this.buildReceipt(taskText, true, true), appliedDest: goal }
+      } catch (e) {
+        const msg: string = e instanceof Error ? e.message : 'route failed'
+        if (firstErr.length <= 0) firstErr = msg
+        this.lastRouteFailureReason = msg
+      }
+    }
+    const detail: string = firstErr.length > 0 ? firstErr : '规划失败'
+    this.lastRouteFailureReason = detail
+    this.lastReplanSummary = `原目标${dest}失败，未找到可替代方案`
+    return { ok: false, receipt: this.buildReceipt(`导航失败(${dest}:${detail})`, false, false), appliedDest: '' }
+  }
+
+  private async sleepMs(delayMs: number): Promise<void> {
+    return await new Promise<void>((resolve: () => void): void => {
+      this.setManagedTimeout((): void => resolve(), Math.max(0, Math.trunc(delayMs)))
+    })
+  }
+
+  private async waitUntilArriveNode(destNodeId: string): Promise<{ arrived: boolean, finalNode: string, reason: string }> {
+    const goal: string = destNodeId.trim().toUpperCase()
+    if (!GridIdCodec.isValidId(goal)) return { arrived: false, finalNode: '', reason: 'bad_goal' }
+    const deadlineMs: number = Date.now() + this.routeArrivalTimeoutMs
+    while (Date.now() <= deadlineMs) {
+      const cur: string = this.store.currentSnapNodeId.trim().toUpperCase()
+      if (cur === goal) return { arrived: true, finalNode: cur, reason: 'arrived' }
+      await this.sleepMs(this.routeArrivalPollMs)
+    }
+    const finalNode: string = this.store.currentSnapNodeId.trim().toUpperCase()
+    return { arrived: false, finalNode: finalNode, reason: 'timeout' }
+  }
+
+  private async routeWithReplanAndWaitArrival(dest: string): Promise<Array<Page4ExecutionReceipt>> {
+    const receipts: Array<Page4ExecutionReceipt> = []
+    const routed = await this.routeWithReplan(dest)
+    receipts.push(routed.receipt)
+    if (!routed.ok || !GridIdCodec.isValidId(routed.appliedDest)) return receipts
+    const wait = await this.waitUntilArriveNode(routed.appliedDest)
+    if (wait.arrived) {
+      receipts.push(this.buildReceipt(`到达 ${routed.appliedDest}`, true, true))
+    } else {
+      const curText: string = wait.finalNode.length > 0 ? wait.finalNode : '未知'
+      receipts.push(this.buildReceipt(`等待到达超时(${routed.appliedDest}, 当前=${curText})`, true, false))
+    }
+    return receipts
+  }
+
+  private parseMethodBooleanArg(
+    args: Record<string, Object | string | number | boolean | undefined>,
+    key: string
+  ): boolean | undefined {
+    const v: Object | string | number | boolean | undefined = args[key]
+    if (typeof v === 'boolean') return v
+    const s: string = String(v ?? '').trim().toLowerCase()
+    if (s === 'true' || s === '1' || s === 'on' || s === 'yes') return true
+    if (s === 'false' || s === '0' || s === 'off' || s === 'no') return false
+    return undefined
+  }
+
+  private async executeRegistryMethod(task: Page4PlannedTask): Promise<Array<Page4ExecutionReceipt>> {
+    const name: string = this.normalizeMethodName(String(task.methodName ?? ''))
+    const args: Record<string, Object | string | number | boolean | undefined> = task.methodArgs ?? {}
+    const out: Array<Page4ExecutionReceipt> = []
+    if (!this.isAllowedMethodName(name)) {
+      out.push(this.buildReceipt(`未注册方法:${name}`, false, false))
+      return out
+    }
+
+    if (name === 'start_manual_route') {
+      const destRaw: string = String(args['dest'] ?? args['destNodeId'] ?? '').trim().toUpperCase()
+      const dest: string = destRaw.length > 0 ? destRaw : this.extractDestNode(String(args['text'] ?? ''))
+      if (!GridIdCodec.isValidId(dest)) {
+        out.push(this.buildReceipt(`start_manual_route 参数错误 dest=${destRaw}`, false, false))
+        return out
+      }
+      const routedReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
+      for (let i: number = 0; i < routedReceipts.length; i++) out.push(routedReceipts[i])
+      return out
+    }
+
+    if (name === 'send_action') {
+      const actionToken: string = String(args['action'] ?? '').trim()
+      const action: Page1Action | undefined = this.mapActionToken(actionToken)
+      if (typeof action === 'undefined') {
+        out.push(this.buildReceipt(`send_action 参数错误 action=${actionToken}`, false, false))
+        return out
+      }
+      this.rememberSafePointFromStore()
+      await page1Coordinator.onAction(action)
+      this.lastAction = action
+      out.push(this.buildReceipt(this.actionName(action), true, true))
+      return out
+    }
+
+    if (name === 'set_auto_follow') {
+      const enabled: boolean | undefined = this.parseMethodBooleanArg(args, 'enabled')
+      if (typeof enabled === 'undefined') {
+        out.push(this.buildReceipt('set_auto_follow 参数错误 enabled', false, false))
+        return out
+      }
+      this.store.autoFollowEnabled = enabled
+      this.store.pushLog(`info assistant.autoFollow set=${enabled ? 'ON' : 'OFF'}`)
+      out.push(this.buildReceipt(enabled ? '自动跟随开启' : '自动跟随关闭', true, true))
+      return out
+    }
+
+    if (name === 'set_send_mode') {
+      const mode: string = String(args['mode'] ?? '').trim().toUpperCase()
+      if (mode !== 'REAL_SEND' && mode !== 'DRY_RUN') {
+        out.push(this.buildReceipt(`set_send_mode 参数错误 mode=${mode}`, false, false))
+        return out
+      }
+      this.store.setRealSendEnabled(mode === 'REAL_SEND')
+      out.push(this.buildReceipt(mode === 'REAL_SEND' ? '真车模式' : '仿真模式', true, true))
+      return out
+    }
+
+    if (name === 'speak_text') {
+      const text: string = String(args['text'] ?? '').trim()
+      if (text.length <= 0) {
+        out.push(this.buildReceipt('speak_text 参数错误 text为空', false, false))
+        return out
+      }
+      const content: string = text.length > 80 ? text.substring(0, 80) : text
+      const ok: boolean = await page1Coordinator.speakText(content)
+      out.push(this.buildReceipt(`语音播报:${content}`, ok, ok))
+      return out
+    }
+
+    if (name === 'undo_to_safe_point') {
+      let stopOk: boolean = false
+      try {
+        await page1Coordinator.onAction(Page1Action.STOP)
+        this.lastAction = Page1Action.STOP
+        out.push(this.buildReceipt('撤销-停止', true, true))
+        stopOk = true
+      } catch (e) {
+        const msg: string = e instanceof Error ? e.message : 'stop failed'
+        out.push(this.buildReceipt(`撤销-停止失败(${msg})`, false, false))
+      }
+      const target: string = GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId
+      if (stopOk && GridIdCodec.isValidId(target)) {
+        const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
+        for (let i: number = 0; i < backReceipts.length; i++) out.push(backReceipts[i])
+      } else if (stopOk) {
+        out.push(this.buildReceipt('撤销-回安全点(未记录安全点)', false, false))
+      }
+      return out
+    }
+
+    if (name === 'get_camera_frame') {
+      out.push(this.buildReceipt(this.buildCameraFrameSummaryText(), true, true))
+      return out
+    }
+
+    if (name === 'query_status') {
+      out.push(this.buildReceipt(this.buildStatusSummaryText(), true, true))
+      return out
+    }
+    if (name === 'query_vision') {
+      out.push(this.buildReceipt(this.buildVisionSummaryText(), true, true))
+      return out
+    }
+    if (name === 'query_comm') {
+      out.push(this.buildReceipt(
+        `通信=${commStore.commStateText} connected=${commStore.commConnected} reconnect=${commStore.commReconnectCount}`,
+        true,
+        true
+      ))
+      return out
+    }
+    if (name === 'query_video') {
+      out.push(this.buildReceipt(`视频=${videoStore.rtspStateText} fps=${videoStore.diagVideoFps}`, true, true))
+      return out
+    }
+
+    out.push(this.buildReceipt(`未实现方法:${name}`, false, false))
+    return out
+  }
+
+  private splitPromptToClauses(text: string): Array<string> {
+    const src: string = text
+      .replace(/然后|接着|随后|并且|并且再|同时|接下来|再去|再到/g, '|')
+      .replace(/[，,；;。.!！?？\n]/g, '|')
+    const raw: Array<string> = src.split('|')
+    const out: Array<string> = []
+    for (let i: number = 0; i < raw.length; i++) {
+      const one: string = raw[i].trim()
+      if (one.length > 0) out.push(one)
+    }
+    return out
+  }
+
+  private parseTaskFromClause(clause: string): Page4PlannedTask | undefined {
+    const lower: string = clause.toLowerCase()
+    const dest: string = this.extractDestNode(clause)
+    if (dest.length > 0 && GridIdCodec.isValidId(dest)) {
+      return { kind: 'route', destNodeId: dest }
+    }
+
+    const action: Page1Action | undefined = this.resolveActionByText(lower)
+    if (action !== undefined) {
+      return { kind: 'action', action: action }
+    }
+
+    if (this.containsAny(lower, ['开启自动跟随', '打开自动跟随', '自动跟随开启', '自动驾驶开启'])) {
+      return { kind: 'auto_follow', enabled: true }
+    }
+    if (this.containsAny(lower, ['关闭自动跟随', '停止自动跟随', '自动跟随关闭', '自动驾驶关闭'])) {
+      return { kind: 'auto_follow', enabled: false }
+    }
+    if (this.containsAny(lower, ['开启真车模式', '真车模式', 'real_send'])) {
+      return { kind: 'send_mode', mode: 'REAL_SEND' }
+    }
+    if (this.containsAny(lower, ['开启仿真模式', '仿真模式', 'dry_run', '关闭真车模式'])) {
+      return { kind: 'send_mode', mode: 'DRY_RUN' }
+    }
+    if (this.looksLikeCaptureFrameIntent(lower)) {
+      return { kind: 'capture_frame' }
+    }
+    if (this.containsAny(lower, ['查询状态', '状态', 'status'])) {
+      return { kind: 'query_status' }
+    }
+    if (this.containsAny(lower, ['识别状态', '视觉状态', '识别结果', 'vision'])) {
+      return { kind: 'query_vision' }
+    }
+    if (this.containsAny(lower, ['网络', '通信'])) {
+      return { kind: 'query_comm' }
+    }
+    if (this.containsAny(lower, ['视频', '相机'])) {
+      return { kind: 'query_video' }
+    }
+
+    return undefined
+  }
+
+  private parseLocalPlannedTasks(text: string): Array<Page4PlannedTask> {
+    const clauses: Array<string> = this.splitPromptToClauses(text)
+    const out: Array<Page4PlannedTask> = []
+    for (let i: number = 0; i < clauses.length; i++) {
+      const task: Page4PlannedTask | undefined = this.parseTaskFromClause(clauses[i])
+      if (!task) continue
+      out.push(task)
+    }
+    return out
+  }
+
+  private looksLikeMultiTask(text: string): boolean {
+    const x: string = text.trim()
+    if (x.length <= 0) return false
+    if (this.splitPromptToClauses(x).length >= 2) return true
+    return this.containsAny(x, ['然后', '接着', '并且', '同时', '再', '随后', ';', '；', ',', '，'])
+  }
+
+  private looksLikeControlIntent(text: string, lower: string): boolean {
+    if (text.trim().length <= 0) return false
+    if (this.looksLikeMultiTask(text)) return true
+    if (this.extractDestNode(text).length > 0) return true
+    const keywords: Array<string> = [
+      '导航', '前往', '去', '到',
+      '前进', '后退', '左转', '右转', '掉头', '停止', '急停', '刹车',
+      '自动跟随', '自动驾驶', '真车模式', '仿真模式', 'real_send', 'dry_run',
+      '撤销', '回到安全点',
+      '抓拍', '截图', '拍照', '相机', '视频',
+      '查询状态', '状态', '识别', '视觉', '通信', '网络'
+    ]
+    return this.containsAny(lower, keywords)
+  }
+
+  private mapActionToken(actionText: string): Page1Action | undefined {
+    const t: string = actionText.trim().toUpperCase()
+    if (t === 'GO' || t === 'FORWARD') return Page1Action.GO
+    if (t === 'BACK' || t === 'BACKWARD') return Page1Action.BACK
+    if (t === 'LEFT' || t === 'TURN_LEFT') return Page1Action.LEFT
+    if (t === 'RIGHT' || t === 'TURN_RIGHT') return Page1Action.RIGHT
+    if (t === 'UTURN' || t === 'U_TURN') return Page1Action.UTURN
+    if (t === 'STOP') return Page1Action.STOP
+    if (t === 'SCRAM' || t === 'ESTOP') return Page1Action.SCRAM
+    return undefined
+  }
+
+  private normalizeMethodName(raw: string): string {
+    const name: string = raw.trim().toLowerCase()
+    if (name === 'undo_last_action') return 'undo_to_safe_point'
+    if (name === 'capture_current_frame') return 'get_camera_frame'
+    return name
+  }
+
+  private isAllowedMethodName(raw: string): boolean {
+    const name: string = this.normalizeMethodName(raw)
+    const allowed: Array<string> = [
+      'start_manual_route',
+      'send_action',
+      'set_auto_follow',
+      'set_send_mode',
+      'speak_text',
+      'undo_to_safe_point',
+      'get_camera_frame',
+      'query_status',
+      'query_vision',
+      'query_comm',
+      'query_video'
+    ]
+    for (let i: number = 0; i < allowed.length; i++) {
+      if (allowed[i] === name) return true
+    }
+    return false
+  }
+
+  private extractJsonObject(text: string): string {
+    const src: string = text.trim()
+    if (src.length <= 0) return ''
+    const codeBlock: RegExpMatchArray | null = src.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    const body: string = codeBlock && codeBlock.length > 1 ? codeBlock[1].trim() : src
+    const start: number = body.indexOf('{')
+    const end: number = body.lastIndexOf('}')
+    if (start < 0 || end <= start) return ''
+    return body.substring(start, end + 1)
+  }
+
+  private mapOpenClawPlan(text: string): Array<Page4PlannedTask> {
+    const jsonText: string = this.extractJsonObject(text)
+    if (jsonText.length <= 0) return []
+    try {
+      const root: Record<string, Object | string | number | boolean | Array<Object>> =
+        JSON.parse(jsonText) as Record<string, Object | string | number | boolean | Array<Object>>
+      const arr: Array<Record<string, Object | string | number | boolean>> = Array.isArray(root['tasks'])
+        ? (root['tasks'] as Array<Record<string, Object | string | number | boolean>>)
+        : []
+      const out: Array<Page4PlannedTask> = []
+      for (let i: number = 0; i < arr.length; i++) {
+        const t: Record<string, Object | string | number | boolean> = arr[i]
+        const typeText: string = String(t['type'] ?? '').trim().toLowerCase()
+        if (typeText === 'route') {
+          const dest: string = String(t['dest'] ?? '').trim().toUpperCase()
+          if (dest.length > 0) out.push({ kind: 'route', destNodeId: dest })
+          continue
+        }
+        if (typeText === 'action') {
+          const action: Page1Action | undefined = this.mapActionToken(String(t['action'] ?? ''))
+          if (action !== undefined) out.push({ kind: 'action', action: action })
+          continue
+        }
+        if (typeText === 'auto_follow') {
+          const v: string = String(t['enabled'] ?? '').trim().toLowerCase()
+          if (v === 'true' || v === '1' || v === 'on') out.push({ kind: 'auto_follow', enabled: true })
+          else if (v === 'false' || v === '0' || v === 'off') out.push({ kind: 'auto_follow', enabled: false })
+          continue
+        }
+        if (typeText === 'send_mode') {
+          const v: string = String(t['mode'] ?? '').trim().toUpperCase()
+          if (v === 'REAL_SEND' || v === 'DRY_RUN') out.push({ kind: 'send_mode', mode: v as 'REAL_SEND' | 'DRY_RUN' })
+          continue
+        }
+        if (typeText === 'capture_frame') {
+          out.push({ kind: 'capture_frame' })
+          continue
+        }
+        if (typeText === 'undo') {
+          out.push({ kind: 'undo' })
+          continue
+        }
+        if (typeText === 'query_status') {
+          out.push({ kind: 'query_status' })
+          continue
+        }
+        if (typeText === 'query_vision') {
+          out.push({ kind: 'query_vision' })
+          continue
+        }
+        if (typeText === 'query_comm') {
+          out.push({ kind: 'query_comm' })
+          continue
+        }
+        if (typeText === 'query_video') {
+          out.push({ kind: 'query_video' })
+          continue
+        }
+        if (typeText === 'method') {
+          const name: string = this.normalizeMethodName(String(t['name'] ?? ''))
+          const argsRaw: Object | string | number | boolean | undefined = t['args']
+          const args: Record<string, Object | string | number | boolean | undefined> =
+            typeof argsRaw === 'object' && argsRaw !== null
+              ? (argsRaw as Record<string, Object | string | number | boolean | undefined>)
+              : {}
+          if (!this.isAllowedMethodName(name)) continue
+          out.push({ kind: 'method', methodName: name, methodArgs: args })
+          continue
+        }
+        if (typeText === 'call') {
+          const name: string = this.normalizeMethodName(String(t['method'] ?? ''))
+          const argsRaw: Object | string | number | boolean | undefined = t['params']
+          const args: Record<string, Object | string | number | boolean | undefined> =
+            typeof argsRaw === 'object' && argsRaw !== null
+              ? (argsRaw as Record<string, Object | string | number | boolean | undefined>)
+              : {}
+          if (!this.isAllowedMethodName(name)) continue
+          out.push({ kind: 'method', methodName: name, methodArgs: args })
+          continue
+        }
+      }
+      return out
+    } catch (_) {
+      return []
+    }
+  }
+
+  private async planTasksByOpenClaw(input: string): Promise<Array<Page4PlannedTask>> {
+    const token: string = OPENCLAW_GATEWAY_TOKEN.trim()
+    if (token.length <= 0) return []
+    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
+    const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
+    if (hosts.length <= 0) return []
+
+    const messages: Array<OpenClawChatMessage> = [
+      {
+        role: 'system',
+        content:
+          '你是车控任务解析器。把用户一句话解析为任务数组，输出严格 JSON：' +
+          '{"tasks":[{"type":"route","dest":"B2"},{"type":"method","name":"set_auto_follow","args":{"enabled":true}}]}。' +
+          'type 允许 route/action/auto_follow/send_mode/capture_frame/undo/query_status/query_vision/query_comm/query_video/method。' +
+          'route.dest 必须是 A1-G7 这样的点位；action 仅 GO/BACK/LEFT/RIGHT/UTURN/STOP/SCRAM；' +
+          'auto_follow 使用 enabled=true/false；send_mode 使用 mode=REAL_SEND/DRY_RUN。' +
+          'method.name 仅允许 start_manual_route/send_action/set_auto_follow/set_send_mode/speak_text/undo_to_safe_point/get_camera_frame/query_status/query_vision/query_comm/query_video。' +
+          'method.args: start_manual_route 传 dest; send_action 传 action; set_auto_follow 传 enabled; set_send_mode 传 mode; speak_text 传 text。' +
+          '不要输出任何解释文本。'
+      },
+      {
+        role: 'system',
+        content: this.buildOpenClawRuntimeContextPrompt()
+      },
+      {
+        role: 'user',
+        content: input
+      }
+    ]
+
+    for (let i: number = 0; i < hosts.length; i++) {
+      const host: string = hosts[i]
+      const client: OpenClawGatewayClient = new OpenClawGatewayClient({
+        endpoint: buildOpenClawChatCompletionsUrl(host),
+        bearerToken: token,
+        model: OPENCLAW_CHAT_MODEL,
+        connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
+        readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
+      })
+      const result = await client.complete(messages)
+      if (!result.ok) continue
+      const planned: Array<Page4PlannedTask> = this.mapOpenClawPlan(result.text)
+      if (planned.length > 0) {
+        this.markOpenClawHostSuccess(host)
+        return planned
+      }
+      this.markOpenClawHostFail(host)
+    }
+    return []
+  }
+
+  private async executePlannedTasks(tasks: Array<Page4PlannedTask>): Promise<void> {
+    if (tasks.length <= 0) return
+    const receipts: Array<Page4ExecutionReceipt> = []
+    for (let i: number = 0; i < tasks.length; i++) {
+      const t: Page4PlannedTask = tasks[i]
+      try {
+        if (t.kind === 'route') {
+          const dest: string = String(t.destNodeId ?? '').trim().toUpperCase()
+          if (!GridIdCodec.isValidId(dest)) {
+            receipts.push(this.buildReceipt(`跳过无效点位:${dest}`, false, false))
+            continue
+          }
+          const routeReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
+          for (let j: number = 0; j < routeReceipts.length; j++) receipts.push(routeReceipts[j])
+          continue
+        }
+        if (t.kind === 'action') {
+          if (typeof t.action === 'undefined') continue
+          this.rememberSafePointFromStore()
+          await page1Coordinator.onAction(t.action)
+          this.lastAction = t.action
+          receipts.push(this.buildReceipt(this.actionName(t.action), true, true))
+          continue
+        }
+        if (t.kind === 'auto_follow') {
+          const enabled: boolean = !!t.enabled
+          this.store.autoFollowEnabled = enabled
+          this.store.pushLog(`info assistant.autoFollow set=${enabled ? 'ON' : 'OFF'}`)
+          receipts.push(this.buildReceipt(enabled ? '自动跟随开启' : '自动跟随关闭', true, true))
+          continue
+        }
+        if (t.kind === 'send_mode') {
+          const mode: string = String(t.mode ?? '')
+          if (mode === 'REAL_SEND') {
+            this.store.setRealSendEnabled(true)
+            receipts.push(this.buildReceipt('真车模式', true, true))
+          } else if (mode === 'DRY_RUN') {
+            this.store.setRealSendEnabled(false)
+            receipts.push(this.buildReceipt('仿真模式', true, true))
+          }
+          continue
+        }
+        if (t.kind === 'method') {
+          const one: Array<Page4ExecutionReceipt> = await this.executeRegistryMethod(t)
+          for (let j: number = 0; j < one.length; j++) receipts.push(one[j])
+          continue
+        }
+        if (t.kind === 'capture_frame') {
+          receipts.push(this.buildReceipt(this.buildCameraFrameSummaryText(), true, true))
+          continue
+        }
+        if (t.kind === 'undo') {
+          let stopOk: boolean = false
+          try {
+            await page1Coordinator.onAction(Page1Action.STOP)
+            this.lastAction = Page1Action.STOP
+            receipts.push(this.buildReceipt('撤销-停止', true, true))
+            stopOk = true
+          } catch (e) {
+            const msg: string = e instanceof Error ? e.message : 'stop failed'
+            receipts.push(this.buildReceipt(`撤销-停止失败(${msg})`, false, false))
+          }
+          const target: string = GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId
+          if (stopOk && GridIdCodec.isValidId(target)) {
+            const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
+            for (let j: number = 0; j < backReceipts.length; j++) receipts.push(backReceipts[j])
+          } else if (stopOk) {
+            receipts.push(this.buildReceipt('撤销-回安全点(未记录安全点)', false, false))
+          }
+          continue
+        }
+        if (t.kind === 'query_status') {
+          receipts.push(this.buildReceipt(this.buildStatusSummaryText(), true, true))
+          continue
+        }
+        if (t.kind === 'query_vision') {
+          receipts.push(this.buildReceipt(this.buildVisionSummaryText(), true, true))
+          continue
+        }
+        if (t.kind === 'query_comm') {
+          receipts.push(this.buildReceipt(
+            `通信=${commStore.commStateText} connected=${commStore.commConnected} reconnect=${commStore.commReconnectCount}`,
+            true,
+            true
+          ))
+          continue
+        }
+        if (t.kind === 'query_video') {
+          receipts.push(this.buildReceipt(`视频=${videoStore.rtspStateText} fps=${videoStore.diagVideoFps}`, true, true))
+          continue
+        }
+      } catch (e) {
+        const msg: string = e instanceof Error ? e.message : '任务失败'
+        receipts.push(this.buildReceipt(`失败:${msg}`, false, false))
+      }
+    }
+    if (receipts.length > 0) {
+      this.pushAssistant(`执行回执：${this.renderReceiptsSummary(receipts)}`)
+    }
+  }
+
+  private setManagedTimeout(cb: () => void, delayMs: number): number {
+    let timerId: number = -1
+    timerId = setTimeout((): void => {
+      this.managedTimerIds.delete(timerId)
+      cb()
+    }, Math.max(0, Math.trunc(delayMs))) as unknown as number
+    this.managedTimerIds.add(timerId)
+    return timerId
+  }
+
+  private clearManagedTimer(timerId: number): number {
+    if (timerId < 0) return -1
+    try { clearTimeout(timerId) } catch (_) {}
+    this.managedTimerIds.delete(timerId)
+    return -1
+  }
+
+  private clearAllManagedTimers(): void {
+    if (this.managedTimerIds.size <= 0) return
+    const ids: Array<number> = []
+    this.managedTimerIds.forEach((id: number): void => {
+      ids.push(id)
+    })
+    for (let i: number = 0; i < ids.length; i++) {
+      try { clearTimeout(ids[i]) } catch (_) {}
+      this.managedTimerIds.delete(ids[i])
+    }
+  }
+
+  private mapPoiNameToNode(input: string): string {
+    // 比赛讲解点（点位绑定第一步）：
+    // 这里维护“自然语言地名 -> 路网节点ID”的基础映射表。
+    const s: string = input.trim()
+    if (s.length <= 0) return ''
+    const normalized: string = this.normalizePlaceInput(s)
+    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
+    for (let i: number = 0; i < mappings.length; i++) {
+      const item = mappings[i]
+      for (let j: number = 0; j < item.aliases.length; j++) {
+        const alias: string = item.aliases[j]
+        if (s.indexOf(alias) >= 0) return item.node
+        if (normalized.indexOf(this.normalizePlaceInput(alias)) >= 0) return item.node
+      }
+    }
+    return ''
+  }
+
+  private getPoiMappings(): Array<{ node: string, aliases: Array<string> }> {
+    return [
+      { node: 'B1', aliases: ['海昏侯', '海昏侯国遗址', '海昏侯国遗址公园'] },
+      { node: 'D1', aliases: ['江西省博物馆', '省博物馆'] },
+      { node: 'F1', aliases: ['青山湖风景区', '青山湖'] },
+      { node: 'A2', aliases: ['梅岭风景区', '梅岭'] },
+      { node: 'B2', aliases: ['滕王阁'] },
+      { node: 'F2', aliases: ['八一广场'] },
+      { node: 'G2', aliases: ['高新区住宅群', '艾溪湖东岸小区', '艾溪湖东岸', '艾溪湖'] },
+      { node: 'A4', aliases: ['南昌之星摩天轮', '南昌之星', '摩天轮'] },
+      { node: 'B4', aliases: ['万寿宫历史文化街区', '万寿宫'] },
+      { node: 'F4', aliases: ['八一起义纪念馆'] },
+      { node: 'G4', aliases: ['南昌火车站', '铁路社区', '火车站'] },
+      { node: 'A6', aliases: ['赣江风光带', '风光带'] },
+      { node: 'B6', aliases: ['绳金塔'] },
+      { node: 'F6', aliases: ['青云谱小区群', '三店西路社区', '青云谱'] },
+      { node: 'G6', aliases: ['象湖湿地公园', '象湖新城小区', '象湖新城', '象湖'] },
+      { node: 'B7', aliases: ['秋水广场', '昌南体育中心'] },
+      { node: 'D7', aliases: ['八大山人纪念馆', '八大山人'] },
+      { node: 'F7', aliases: ['小蓝工业园', '莲塘住宅区', '莲塘'] },
+      // crash_hilog.txt 中的黑线/道路参考，映射到代表点位
+      { node: 'D1', aliases: ['英雄大道'] },
+      { node: 'F1', aliases: ['扬子洲大桥'] },
+      { node: 'B2', aliases: ['阳明路', '八一大桥', '中山路'] },
+      { node: 'B4', aliases: ['南昌大桥', '站前路'] },
+      { node: 'F4', aliases: ['抚河路', '象山路'] },
+      { node: 'B6', aliases: ['昌南大道'] },
+      { node: 'A4', aliases: ['枫生快速路'] },
+      { node: 'B2', aliases: ['赣江', '八一桥', '南昌桥'] },
+      { node: 'G4', aliases: ['洪都大道'] }
+    ]
+  }
+
+  private buildPoiMappingSummaryText(): string {
+    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
+    const merged: Record<string, Array<string>> = {}
+    for (let i: number = 0; i < mappings.length; i++) {
+      const one = mappings[i]
+      const node: string = one.node.trim().toUpperCase()
+      if (!GridIdCodec.isValidId(node)) continue
+      if (!merged[node]) merged[node] = []
+      for (let j: number = 0; j < one.aliases.length; j++) {
+        const alias: string = one.aliases[j].trim()
+        if (alias.length <= 0) continue
+        let exists: boolean = false
+        for (let k: number = 0; k < merged[node].length; k++) {
+          if (merged[node][k] === alias) {
+            exists = true
+            break
+          }
+        }
+        if (!exists) merged[node].push(alias)
+      }
+    }
+
+    const nodes: Array<string> = Object.keys(merged).sort()
+    const lines: Array<string> = []
+    for (let i: number = 0; i < nodes.length; i++) {
+      const node: string = nodes[i]
+      lines.push(`${node}: ${merged[node].join(' / ')}`)
+    }
+
+    const dynamicAliases: Array<string> = []
+    for (let i: number = 0; i < this.aliasDict.length; i++) {
+      const one: Page4AliasItem = this.aliasDict[i]
+      if (one.name === '家' || one.name === '公司') continue
+      if (!GridIdCodec.isValidId(one.destNodeId)) continue
+      dynamicAliases.push(`${one.name}->${one.destNodeId}`)
+    }
+    const extraText: string = dynamicAliases.length > 0 ? `；自定义别名=${dynamicAliases.join('，')}` : ''
+    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n家/公司：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
+  }
+
+  private exportPoiMappingsToFile(): { ok: boolean, path: string, error: string } {
+    this.ensurePlaceBindingsLoaded()
+    let f: fs.File | undefined = undefined
+    try {
+      const payload: Record<string, Object | string | number | boolean | Array<Object | string | number | boolean>> = {
+        generatedAtMs: Date.now(),
+        homeNodeId: this.homeNodeId,
+        companyNodeId: this.companyNodeId,
+        mappings: this.getPoiMappings() as unknown as Array<Object>,
+        aliases: this.aliasDict as unknown as Array<Object>
+      }
+      const txt: string = JSON.stringify(payload, null, 2)
+      try { fs.unlinkSync(PAGE4_POI_EXPORT_PATH) } catch (_) {}
+      f = fs.openSync(PAGE4_POI_EXPORT_PATH, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+      fs.writeSync(f.fd, txt)
+      return { ok: true, path: PAGE4_POI_EXPORT_PATH, error: '' }
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : 'write failed'
+      return { ok: false, path: PAGE4_POI_EXPORT_PATH, error: msg }
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+  }
+
+  private buildOpenClawRuntimeContextPrompt(): string {
+    const mappingText: string = this.buildPoiMappingSummaryText()
+    const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
+    return `系统上下文：当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}。\n${mappingText}`
+  }
+
+  private normalizePlaceInput(text: string): string {
+    // 比赛讲解点（点位绑定第二步）：
+    // 先做归一化，减少 ASR 文本中的空格/标点/大小写干扰，提升匹配命中率。
+    return text
+      .trim()
+      .toUpperCase()
+      .replace(/[，。！？、；：,.!?\-_/\\()\[\]\s]/g, '')
+  }
+
   private extractDestNode(input: string): string {
+    // 比赛讲解点（点位绑定第三步）：
+    // 解析顺序：别名 -> 上下文 -> 显式节点ID -> 地名映射兜底。
+    // 这样可以兼顾“导航到D4”与“我要去滕王阁”两类输入。
+    const aliasNode: string = this.resolveAliasNode(input)
+    if (aliasNode.length > 0) return aliasNode
+
+    const fromContext: string = this.resolveContextDestNode(input)
+    if (fromContext.length > 0) return fromContext
+
     const upper: string = input.trim().toUpperCase()
     // 优先匹配明确的导航关键词（最高优先级，不受反向词干扰）
     const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到达|前进到)\s*([A-Z]\d{1,2})/)
@@ -844,6 +1877,9 @@ export struct Page4View {
     // 兜底：仅剩一个独立节点 ID 且无反向语境时才识别为目的地
     const m2: RegExpMatchArray | null = upper.match(/\b([A-Z]\d{1,2})\b/)
     if (m2 && m2.length > 1) return m2[1]
+    // 地名映射兜底：当没有明确节点ID时，仍可由地名命中节点
+    const mapped: string = this.mapPoiNameToNode(input)
+    if (mapped.length > 0) return mapped
     return ''
   }
 
@@ -861,6 +1897,9 @@ export struct Page4View {
   }
 
   private resolveActionByText(textLower: string): Page1Action | undefined {
+    if (this.containsAny(textLower, ['再来一次', '重复上一动作', '继续刚才动作', 'repeat'])) {
+      return this.lastAction
+    }
     if (this.containsAny(textLower, ['紧急停止', '急停', 'scram'])) return Page1Action.SCRAM
     if (this.containsAny(textLower, ['停止', '停车', 'stop'])) return Page1Action.STOP
     if (this.containsAny(textLower, ['前进', '向前', 'go'])) return Page1Action.GO
@@ -893,8 +1932,39 @@ export struct Page4View {
     return `识别引擎=${r.engine} | boxes=${r.boxes.length} | ${labels}`
   }
 
+  private looksLikeCaptureFrameIntent(textLower: string): boolean {
+    return this.containsAny(textLower, [
+      '获取当前摄像头画面',
+      '获取当前画面',
+      '抓取当前画面',
+      '读取当前画面',
+      '保存当前画面',
+      '给我当前画面',
+      '看一下当前画面',
+      'camera frame',
+      'current frame',
+      'capture frame'
+    ])
+  }
+
+  private displayModeText(v: number): string {
+    if (v === 0) return 'RTSP'
+    if (v === 1) return 'HTTP'
+    if (v === 2) return 'LOCAL'
+    return String(v)
+  }
+
+  private buildCameraFrameSummaryText(): string {
+    const hasFrame: boolean = typeof videoStore.livePixelMap !== 'undefined'
+    const nowMs: number = Date.now()
+    const lastOkMs: number = Math.max(0, Math.trunc(videoStore.lastOkFrameTimeMs))
+    const ageText: string = lastOkMs > 0 ? `${Math.max(0, nowMs - lastOkMs)}ms` : '未知'
+    const frameText: string = hasFrame ? '已获取当前摄像头画面' : '当前暂无可用摄像头画面'
+    return `${frameText} | 模式=${this.displayModeText(videoStore.displayMode)} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | 最近画面年龄=${ageText}`
+  }
+
   private buildExampleText(): string {
-    return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态'
+    return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态\n7. 获取当前摄像头画面\n8. 查看所有点位映射名称\n9. 导出点位映射为JSON'
   }
 
   private buildOpenClawMessages(maxHistory: number = 14): Array<OpenClawChatMessage> {
@@ -902,6 +1972,10 @@ export struct Page4View {
     out.push({
       role: 'system',
       content: this.openClawSystemPrompt
+    })
+    out.push({
+      role: 'system',
+      content: this.buildOpenClawRuntimeContextPrompt()
     })
 
     const begin: number = this.messages.length > maxHistory ? this.messages.length - maxHistory : 0
@@ -940,9 +2014,9 @@ export struct Page4View {
         const host: string = hosts[i]
         const endpoint: string = buildOpenClawChatCompletionsUrl(host)
         const connectTimeoutMs: number =
-          i <= 0 ? OPENCLAW_CONNECT_TIMEOUT_MS : Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.openClawRetryConnectTimeoutMs)
+          i <= 0 ? OPENCLAW_CONNECT_TIMEOUT_MS : Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs)
         const readTimeoutMs: number =
-          i <= 0 ? OPENCLAW_READ_TIMEOUT_MS : Math.min(OPENCLAW_READ_TIMEOUT_MS, this.openClawRetryReadTimeoutMs)
+          i <= 0 ? OPENCLAW_READ_TIMEOUT_MS : Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
         const client: OpenClawGatewayClient = new OpenClawGatewayClient({
           endpoint,
           bearerToken: token,
@@ -1038,22 +2112,80 @@ export struct Page4View {
     this.openClawHostCooldownUntilMs[host] = Date.now() + this.openClawHostCooldownMs
   }
 
-  private async submitPrompt(raw: string): Promise<void> {
+  private async submitPrompt(raw: string, fromQueue: boolean = false, _source: string = 'text'): Promise<void> {
     const text: string = raw.trim()
     if (text.length <= 0) return
 
-    if (this.assistantBusy) {
+    if (!fromQueue && this.assistantBusy) {
       this.pushAssistant('上一条消息仍在处理中，请稍候。')
       return
     }
 
+    this.applyAdaptiveStrategy()
     this.pushUser(text)
     this.inputText = ''
 
     const lower: string = text.toLowerCase()
+    if (await this.handlePlaceBindingPrompt(text, lower)) {
+      return
+    }
+
+    const aliasLearn: string = this.learnAliasFromText(text)
+    if (aliasLearn.length > 0) {
+      this.pushAssistant(aliasLearn)
+      return
+    }
+
+    if (this.containsAny(lower, ['撤销', 'undo', '回到上一个安全点', '回到安全点'])) {
+      await this.undoLastActionToSafePoint()
+      return
+    }
+
+    if (this.containsAny(lower, ['夜间策略', '弱网策略', '稳态策略', '稳定策略'])) {
+      this.applyAdaptiveStrategy(true)
+      return
+    }
+
+    if (this.containsAny(lower, ['导航失败原因', '失败原因', '重规划方案', '为什么失败'])) {
+      const reason: string = this.lastRouteFailureReason.length > 0 ? this.lastRouteFailureReason : '暂无失败记录'
+      const replan: string = this.lastReplanSummary.length > 0 ? this.lastReplanSummary : '暂无重规划记录'
+      this.pushAssistant(`导航语义查询：失败原因=${reason}；新方案=${replan}`)
+      return
+    }
+
+    if (this.containsAny(lower, ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位'])) {
+      this.pushAssistant(this.buildPoiMappingSummaryText())
+      return
+    }
+
+    if (this.containsAny(lower, ['导出点位映射', '导出映射', '导出点位', '导出json', '导出为json'])) {
+      const exp = this.exportPoiMappingsToFile()
+      if (exp.ok) this.pushAssistant(`已导出点位映射：${exp.path}`)
+      else this.pushAssistant(`导出点位映射失败：${exp.error}`)
+      return
+    }
+
+    const localTasks: Array<Page4PlannedTask> = this.parseLocalPlannedTasks(text)
+    if (localTasks.length >= 2) {
+      await this.executePlannedTasks(localTasks)
+      return
+    }
+
+    if (this.looksLikeControlIntent(text, lower)) {
+      const openClawTasks: Array<Page4PlannedTask> = await this.planTasksByOpenClaw(text)
+      if (openClawTasks.length > 0) {
+        await this.executePlannedTasks(openClawTasks)
+        return
+      }
+    }
 
     if (this.containsAny(lower, ['示例', '例子', 'help', '帮助', '怎么用'])) {
       this.pushAssistant(this.buildExampleText())
+      return
+    }
+
+    if (this.looksLikeCaptureFrameIntent(lower)) {
+      this.pushAssistant(this.buildCameraFrameSummaryText())
       return
     }
 
@@ -1099,30 +2231,28 @@ export struct Page4View {
         this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
         return
       }
-      try {
-        this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
-        await page1Coordinator.startManualRoute(dest)
-        this.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
-        this.pushAssistant(`已设置目的地 ${dest} 并触发路径规划。`)
-      } catch (e) {
-        const msg: string = e instanceof Error ? e.message : 'route failed'
-        this.logError('sendRoutePlanFail', `dest=${dest}, reason=${msg}`)
-        this.pushAssistant(`目的地指令失败: ${msg}`)
-      }
+      this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
+      const routeReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
+      const routedOk: boolean = routeReceipts.length > 0 && routeReceipts[0].sent
+      if (routedOk) this.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
+      else this.logError('sendRoutePlanFail', `dest=${dest}, reason=${this.lastRouteFailureReason}`)
+      this.pushAssistant(`执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
       return
     }
 
     const action: Page1Action | undefined = this.resolveActionByText(lower)
     if (action !== undefined) {
       try {
+        this.rememberSafePointFromStore()
         this.logInfo('sendVehicleActionRequest', `action=${this.actionName(action)}`)
         await page1Coordinator.onAction(action)
         this.logInfo('sendVehicleActionSuccess', `action=${this.actionName(action)}`)
-        this.pushAssistant(`已执行动作：${this.actionName(action)}。`)
+        this.lastAction = action
+        this.pushAssistant(`执行回执：${this.renderReceiptsSummary([this.buildReceipt(this.actionName(action), true, true)])}`)
       } catch (e) {
         const msg: string = e instanceof Error ? e.message : 'action failed'
         this.logError('sendVehicleActionFail', `action=${this.actionName(action)}, reason=${msg}`)
-        this.pushAssistant(`动作执行失败: ${msg}`)
+        this.pushAssistant(`执行回执：${this.renderReceiptsSummary([this.buildReceipt(`动作失败:${msg}`, false, false)])}`)
       }
       return
     }
@@ -1137,6 +2267,12 @@ export struct Page4View {
       return
     }
 
+    const openClawSingleTasks: Array<Page4PlannedTask> = await this.planTasksByOpenClaw(text)
+    if (openClawSingleTasks.length > 0) {
+      await this.executePlannedTasks(openClawSingleTasks)
+      return
+    }
+
     await this.answerByOpenClaw()
   }
 
@@ -1148,5 +2284,322 @@ export struct Page4View {
   private logError(name: string, message: string): void {
     const text: string = `[error][${this.logTag}][${name}] ${message}`
     hilog.error(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '%{public}s', text)
+  }
+
+  private ensurePlaceBindingsLoaded(): void {
+    if (this.placeBindingsLoaded) return
+    this.placeBindingsLoaded = true
+
+    let f: fs.File | undefined = undefined
+    try {
+      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
+      const size: number = Number(st.size)
+      if (!Number.isFinite(size) || size <= 0 || size > 4096) {
+        this.syncPlaceAliases()
+        return
+      }
+      const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
+      const readLen: number = fs.readSync(f.fd, buf)
+      if (readLen <= 0) {
+        this.syncPlaceAliases()
+        return
+      }
+      const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
+      const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
+      const parsed: Page4PlaceBindingPayload = JSON.parse(txt) as Page4PlaceBindingPayload
+      const home: string = String(parsed.homeNodeId ?? '').trim().toUpperCase()
+      const company: string = String(parsed.companyNodeId ?? '').trim().toUpperCase()
+      this.homeNodeId = GridIdCodec.isValidId(home) ? home : ''
+      this.companyNodeId = GridIdCodec.isValidId(company) ? company : ''
+    } catch (_) {
+      this.homeNodeId = ''
+      this.companyNodeId = ''
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+    this.syncPlaceAliases()
+  }
+
+  private persistPlaceBindings(): boolean {
+    let f: fs.File | undefined = undefined
+    try {
+      const payload: Page4PlaceBindingPayload = {
+        homeNodeId: this.homeNodeId,
+        companyNodeId: this.companyNodeId
+      }
+      const txt: string = JSON.stringify(payload)
+      try { fs.unlinkSync(PAGE4_PLACE_BINDING_PATH) } catch (_) {}
+      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+      fs.writeSync(f.fd, txt)
+      return true
+    } catch (_) {
+      return false
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+  }
+
+  private syncPlaceAliases(): void {
+    this.upsertSpecialAlias('家', this.homeNodeId)
+    this.upsertSpecialAlias('公司', this.companyNodeId)
+  }
+
+  private upsertSpecialAlias(name: string, destNodeId: string): void {
+    const out: Array<Page4AliasItem> = []
+    for (let i: number = 0; i < this.aliasDict.length; i++) {
+      const one: Page4AliasItem = this.aliasDict[i]
+      if (one.name !== name) out.push(one)
+    }
+    if (GridIdCodec.isValidId(destNodeId)) {
+      out.push({
+        name: name,
+        destNodeId: destNodeId,
+        tsMs: Date.now()
+      })
+    }
+    this.aliasDict = out
+  }
+
+  private expirePendingPlaceBinding(): void {
+    if (this.pendingPlaceRole.length <= 0) return
+    const nowMs: number = Date.now()
+    if (nowMs - this.pendingPlaceAtMs <= this.pendingPlaceTimeoutMs) return
+    this.pendingPlaceRole = ''
+    this.pendingPlaceNodeId = ''
+    this.pendingPlaceRawText = ''
+    this.pendingPlaceAtMs = 0
+  }
+
+  private clearPendingPlaceBinding(): void {
+    this.pendingPlaceRole = ''
+    this.pendingPlaceNodeId = ''
+    this.pendingPlaceRawText = ''
+    this.pendingPlaceAtMs = 0
+  }
+
+  private parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
+    const src: string = text.trim()
+    if (src.length <= 0) return undefined
+
+    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(家|公司)/)
+    if (p1 && p1.length >= 3) {
+      const placeText: string = p1[1].trim()
+      const role: Page4PlaceRole = p1[2].trim() === '公司' ? 'company' : 'home'
+      if (placeText.length > 0) return { role, placeText }
+    }
+
+    const p2: RegExpMatchArray | null = src.match(/^(家|公司)\s*(?:设置为|设为|是)\s*(.+)$/)
+    if (p2 && p2.length >= 3) {
+      const role: Page4PlaceRole = p2[1].trim() === '公司' ? 'company' : 'home'
+      const placeText: string = p2[2].trim()
+      if (placeText.length > 0) return { role, placeText }
+    }
+
+    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(家|公司)\s*(?:为|到)?\s*(.+)$/)
+    if (p3 && p3.length >= 3) {
+      const role: Page4PlaceRole = p3[1].trim() === '公司' ? 'company' : 'home'
+      const placeText: string = p3[2].trim()
+      if (placeText.length > 0) return { role, placeText }
+    }
+
+    return undefined
+  }
+
+  private wantsPlaceBindingQuery(rawLower: string): { askHome: boolean, askCompany: boolean } | undefined {
+    const askHome: boolean = rawLower.indexOf('家') >= 0
+    const askCompany: boolean = rawLower.indexOf('公司') >= 0
+    if (!askHome && !askCompany) return undefined
+    const hasQueryWord: boolean = this.containsAny(rawLower, ['映射', '点位', '查询', '查看', '有没有', '是否', '在哪', '哪里'])
+    if (!hasQueryWord) return undefined
+    return { askHome, askCompany }
+  }
+
+  private formatPlaceBinding(role: Page4PlaceRole): string {
+    const roleText: string = role === 'home' ? '家' : '公司'
+    const node: string = role === 'home' ? this.homeNodeId : this.companyNodeId
+    if (GridIdCodec.isValidId(node)) return `${roleText}=${node}`
+    return `${roleText}=未设置`
+  }
+
+  private async applyPendingPlaceBinding(): Promise<void> {
+    const role: '' | Page4PlaceRole = this.pendingPlaceRole
+    const node: string = this.pendingPlaceNodeId
+    const rawText: string = this.pendingPlaceRawText
+    if (role.length <= 0 || !GridIdCodec.isValidId(node)) {
+      this.clearPendingPlaceBinding()
+      this.pushAssistant('没有待确认的家/公司设置。')
+      return
+    }
+
+    if (role === 'home') this.homeNodeId = node
+    else this.companyNodeId = node
+    this.syncPlaceAliases()
+    const ok: boolean = this.persistPlaceBindings()
+    const roleText: string = role === 'home' ? '家' : '公司'
+    this.clearPendingPlaceBinding()
+
+    if (ok) {
+      this.pushAssistant(`已确认：${roleText}设置为 ${node}（来源“${rawText}”），已永久保存。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
+    } else {
+      this.pushAssistant(`已确认：${roleText}设置为 ${node}，但写入失败（本次运行仍生效）。`)
+    }
+  }
+
+  private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
+    this.ensurePlaceBindingsLoaded()
+    this.expirePendingPlaceBinding()
+
+    const query = this.wantsPlaceBindingQuery(lower)
+    if (query) {
+      const parts: Array<string> = []
+      if (query.askHome) parts.push(this.formatPlaceBinding('home'))
+      if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
+      this.pushAssistant(parts.length > 0 ? parts.join('，') : `${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
+      return true
+    }
+
+    if (this.pendingPlaceRole.length > 0) {
+      if (this.containsAny(lower, ['取消', '算了', '不设置', '不用了'])) {
+        const roleText: string = this.pendingPlaceRole === 'home' ? '家' : '公司'
+        this.clearPendingPlaceBinding()
+        this.pushAssistant(`已取消${roleText}设置。`)
+        return true
+      }
+
+      if (this.containsAny(lower, ['确认', '确定'])) {
+        const mentionHome: boolean = lower.indexOf('家') >= 0
+        const mentionCompany: boolean = lower.indexOf('公司') >= 0
+        if (mentionHome && this.pendingPlaceRole !== 'home') {
+          this.pushAssistant('当前待确认的是“公司”设置，请回复“确认公司”或“取消”。')
+          return true
+        }
+        if (mentionCompany && this.pendingPlaceRole !== 'company') {
+          this.pushAssistant('当前待确认的是“家”设置，请回复“确认家”或“取消”。')
+          return true
+        }
+        await this.applyPendingPlaceBinding()
+        return true
+      }
+    }
+
+    let req: { role: Page4PlaceRole, placeText: string } | undefined = this.parsePlaceBindingRequest(text)
+    if (!req && this.looksLikePlaceBindingIntent(lower)) {
+      req = await this.parsePlaceBindingByOpenClaw(text)
+    }
+    if (!req) return false
+
+    const nodeFromPlace: string = this.extractDestNode(req.placeText)
+    const nodeFromAll: string = this.extractDestNode(text)
+    const node: string = GridIdCodec.isValidId(nodeFromPlace) ? nodeFromPlace : nodeFromAll
+    if (!GridIdCodec.isValidId(node)) {
+      const roleText: string = req.role === 'home' ? '家' : '公司'
+      this.pushAssistant(`未识别到可用点位，无法设置${roleText}。请直接说节点（如“将D4设置为${roleText}”）或说可映射地名。`)
+      return true
+    }
+
+    this.pendingPlaceRole = req.role
+    this.pendingPlaceNodeId = node
+    this.pendingPlaceRawText = req.placeText
+    this.pendingPlaceAtMs = Date.now()
+    const roleText: string = req.role === 'home' ? '家' : '公司'
+    this.pushAssistant(`请二次确认：将${roleText}设置为 ${node}（来源“${req.placeText}”）。回复“确认${roleText}”完成，或回复“取消”放弃。`)
+    return true
+  }
+
+  private looksLikePlaceBindingIntent(lower: string): boolean {
+    const hasRole: boolean = lower.indexOf('家') >= 0 || lower.indexOf('公司') >= 0
+    if (!hasRole) return false
+    if (this.containsAny(lower, ['映射', '点位', '查询', '查看', '有没有', '是否'])) return false
+    return this.containsAny(lower, ['设置', '设为', '记为', '定义为', '改为', '改成', '当成', '作为'])
+  }
+
+  private parsePlaceBindingPlanText(text: string): Page4PlaceBindingPlan | undefined {
+    const body: string = text.trim()
+    if (body.length <= 0) return undefined
+    const normalized: string = this.stripJsonCodeFence(body)
+    let obj: Record<string, Object | string | number | boolean | undefined> | undefined = undefined
+    try {
+      obj = JSON.parse(normalized) as Record<string, Object | string | number | boolean | undefined>
+    } catch (_) {
+      return undefined
+    }
+    if (!obj) return undefined
+
+    const roleRaw: string = String(obj['role'] ?? '').trim().toLowerCase()
+    let role: Page4PlaceRole | '' = ''
+    if (roleRaw === 'home' || roleRaw === '家') role = 'home'
+    if (roleRaw === 'company' || roleRaw === '公司') role = 'company'
+    if (role.length <= 0) return undefined
+
+    const placeText: string = String(obj['place'] ?? obj['target'] ?? obj['location'] ?? '').trim()
+    if (placeText.length <= 0) return undefined
+    if (role === 'home') return { role: 'home', placeText }
+    if (role === 'company') return { role: 'company', placeText }
+    return undefined
+  }
+
+  private stripJsonCodeFence(text: string): string {
+    let s: string = text.trim()
+    if (!s.startsWith('```')) return s
+    const firstLf: number = s.indexOf('\n')
+    if (firstLf < 0) return s
+    s = s.substring(firstLf + 1)
+    const endFence: number = s.lastIndexOf('```')
+    if (endFence >= 0) s = s.substring(0, endFence)
+    return s.trim()
+  }
+
+  private async parsePlaceBindingByOpenClaw(input: string): Promise<Page4PlaceBindingPlan | undefined> {
+    const token: string = OPENCLAW_GATEWAY_TOKEN.trim()
+    if (token.length <= 0) return undefined
+    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
+    const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
+    if (hosts.length <= 0) return undefined
+
+    const messages: Array<OpenClawChatMessage> = [
+      {
+        role: 'system',
+        content:
+          '你是位置映射解析器。把用户话语解析为严格JSON，不要解释。' +
+          '输出格式：{"role":"home|company","place":"地点原文"}。' +
+          '如果无法确定，输出：{"role":"","place":""}。'
+      },
+      {
+        role: 'system',
+        content: this.buildOpenClawRuntimeContextPrompt()
+      },
+      {
+        role: 'user',
+        content: input
+      }
+    ]
+
+    for (let i: number = 0; i < hosts.length; i++) {
+      const host: string = hosts[i]
+      const client: OpenClawGatewayClient = new OpenClawGatewayClient({
+        endpoint: buildOpenClawChatCompletionsUrl(host),
+        bearerToken: token,
+        model: OPENCLAW_CHAT_MODEL,
+        connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
+        readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
+      })
+      const result = await client.complete(messages)
+      if (!result.ok) {
+        this.markOpenClawHostFail(host)
+        continue
+      }
+      const plan: Page4PlaceBindingPlan | undefined = this.parsePlaceBindingPlanText(result.text)
+      if (plan) {
+        this.markOpenClawHostSuccess(host)
+        return plan
+      }
+      this.markOpenClawHostFail(host)
+    }
+    return undefined
   }
 }

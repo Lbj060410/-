@@ -26,6 +26,7 @@ import { RecogEngineType } from '../../services/recognition/RecognitionConfig'
 import { BBoxNorm, RecognitionResult } from '../../services/recognition/RecognitionResult'
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 import { page1Store } from '../page1/app/Page1UiStore'
+import { validateJpegBuffer } from '../../utils/BackgroundCompute'
 
 const PAGE2_LAST_ENDPOINT_PATH: string = '/data/storage/el2/base/haps/entry/files/page2_last_endpoint.json'
 
@@ -238,11 +239,23 @@ export class Page2Coordinator {
     const bytes: Uint8Array = new Uint8Array(jpeg)
     const n: number = bytes.length
     if (n <= 0) return 0
-    const step: number = Math.max(1, Math.trunc(n / 64))
+
+    // O(1) sampling: keep dedup signal while reducing per-frame JS CPU on UI thread.
+    const i0: number = 0
+    const i1: number = Math.trunc(n * 0.15)
+    const i2: number = Math.trunc(n * 0.33)
+    const i3: number = Math.trunc(n * 0.5)
+    const i4: number = Math.trunc(n * 0.67)
+    const i5: number = Math.trunc(n * 0.85)
+    const i6: number = n - 1
     let acc: number = n & 0x7fffffff
-    for (let i: number = 0; i < n; i += step) {
-      acc = ((acc << 5) - acc + (bytes[i] & 0xff)) & 0x7fffffff
-    }
+    acc = ((acc << 5) - acc + (bytes[i0] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i1] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i2] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i3] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i4] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i5] & 0xff)) & 0x7fffffff
+    acc = ((acc << 5) - acc + (bytes[i6] & 0xff)) & 0x7fffffff
     return acc
   }
 
@@ -632,18 +645,8 @@ export class Page2Coordinator {
 
   private async isValidJpegSnapshot(data: ArrayBuffer): Promise<boolean> {
     if (!data || data.byteLength <= 64) return false
-    let pm: image.PixelMap | undefined = undefined
-    try {
-      pm = await this.jpegToPixelMap(data)
-      const info: image.ImageInfo = await pm.getImageInfo()
-      return info.size.width > 0 && info.size.height > 0
-    } catch (_) {
-      return false
-    } finally {
-      if (pm) {
-        try { pm.release() } catch (_) {}
-      }
-    }
+    // Move endpoint probe validation off UI thread. Real decode still happens in frame pipeline.
+    return await validateJpegBuffer(data)
   }
 
   private async maybeEnqueueTrafficCascade(currentPm: image.PixelMap): Promise<void> {
