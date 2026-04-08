@@ -84,23 +84,51 @@ export class CarProtocolService {
   }
 
   // ===== 唯一发送出口（支持 DRY/REAL）=====
-  async sendRaw(frame: Uint8Array, tag: string): Promise<void> {
-    const sendTimes: number = 2
-    for (let i: number = 0; i < sendTimes; i++) {
-      const sendTag: string = `${tag}#${i + 1}/${sendTimes}`
+  private async sendRawBurst(frame: Uint8Array, tag: string, sendTimes: number, intervalMs: number): Promise<void> {
+    const safeTimes: number = Math.max(1, Math.trunc(sendTimes))
+    const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
+    for (let i: number = 0; i < safeTimes; i++) {
+      const sendTag: string = `${tag}#${i + 1}/${safeTimes}`
       // 统一在这里做 TX 统计 + 帧日志（即使 DRY_RUN 也记录“发送意图”）
       commStore.bumpTxPacket()
       FrameLogService.appendTx(frame, sendTag)
       this.logConnectFrame(frame)
 
-      if (this.mode === CarSendMode.DRY_RUN) continue
-      const t: CarTcpService | undefined = this.getTcpOrLog()
-      if (!t) return
-      await t.sendOrLog(frame, sendTag)
-      if (i + 1 < sendTimes) {
-        await this.sleepMs(10)
+      if (this.mode !== CarSendMode.DRY_RUN) {
+        const t: CarTcpService | undefined = this.getTcpOrLog()
+        if (!t) return
+        await t.sendOrLog(frame, sendTag)
+      }
+      if (i + 1 < safeTimes && safeIntervalMs > 0) {
+        await this.sleepMs(safeIntervalMs)
       }
     }
+  }
+
+  async sendRaw(frame: Uint8Array, tag: string): Promise<void> {
+    const sendTimes: number = 2
+    const intervalMs: number = 10
+    await this.sendRawBurst(frame, tag, sendTimes, intervalMs)
+  }
+
+  private async sendData12Burst(h: number, payload8: Uint8Array, sendTimes: number, intervalMs: number): Promise<void> {
+    const frame: Uint8Array = CarFrameCodec.build12(h & 0xff, payload8)
+    await this.sendRawBurst(frame, `12B h=0x${h.toString(16)}`, sendTimes, intervalMs)
+  }
+
+  private async sendControl0ABurst(code: number, text: string, sendTimes: number, intervalMs: number): Promise<void> {
+    const payload8: Uint8Array = new Uint8Array(8)
+    payload8[0] = code & 0xff
+    const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
+    commStore.appendDiagKeyTxFrame({
+      tsMs: Date.now(),
+      cmdHex: `0x${(code & 0xff).toString(16).toUpperCase().padStart(2, '0')}`,
+      actionText: `${text} x${Math.max(1, Math.trunc(sendTimes))}`,
+      modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
+      hex: this.frameToHex(previewFrame)
+    })
+    await this.sendData12Burst(0x0A, payload8, sendTimes, intervalMs)
+    hilog.info(DOMAIN, TAGRUN, '%{public}s', `${text} x${Math.max(1, Math.trunc(sendTimes))}`)
   }
 
   // ===== 8B =====
@@ -137,6 +165,12 @@ export class CarProtocolService {
     })
     await this.sendData12(0x0A, payload8)
     hilog.info(DOMAIN, TAGRUN, '%{public}s', text)
+  }
+
+  // 自定义 0x0A 子命令入口：供 UI 输入框直接发送任意 1 字节动作码
+  async sendCustomControl0A(code: number, text: string = '自定义0x0A'): Promise<void> {
+    const safeCode: number = Math.max(0, Math.min(0xFF, Math.trunc(code)))
+    await this.sendControl0A(safeCode, text)
   }
 
   // 基础运动控制：前进/后退/转向/半转/掉头/停止
@@ -217,7 +251,8 @@ export class CarProtocolService {
   }
   //调用dapart小车开闸门的同时会自己前进
   async depart(): Promise<void>{
-    await this.sendControl0A(0x15,"出库和入库")
+    // 道闸命令要求“快速3连发”，不插入人为延时，避免被小车识别成多次离散动作。
+    await this.sendControl0ABurst(0x15, "出库和入库", 3, 0)
   }
 
   async carport(plie: number): Promise<void> {
@@ -252,6 +287,14 @@ export class CarProtocolService {
 
   async SrttleAccounts(): Promise<void>{
     await this.sendControl0A(0x1B,"LED标志物结束计时")
+  }
+
+  async GetoffCarRun(): Promise<void>{
+    await this.sendControl0A(0x1C,"从车启动")
+  }
+
+  async lowcar(): Promise<void>{
+    await this.sendControl0A(0x1D,"车库调至一层不会获取当前层数")
   }
 
   // 注意：
@@ -408,4 +451,3 @@ export class CarProtocolService {
     })
   }
 }
-

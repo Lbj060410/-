@@ -125,7 +125,8 @@ export class Page1EmergencyCoordinator {
     if (!r || !r.ok || r.subtype !== RecognitionSubtype.YOLOV26BARRIER || r.boxes.length <= 0) return false
     for (let i: number = 0; i < r.boxes.length; i++) {
       const box: BBoxNorm = r.boxes[i]
-      if (box.score < 0.18) continue
+      // Emergency stop only trusts high-confidence obstacle detections.
+      if (box.score < 0.65) continue
       const key: string = normalizeYolov26BarrierLabelKey(box.label)
       if (isShigongYolov26BarrierLabelKey(key)) return true
     }

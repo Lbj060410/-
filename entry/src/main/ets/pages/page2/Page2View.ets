@@ -1317,7 +1317,13 @@ export struct Page2View {
   private async createPixelMapFromJpeg(jpeg: ArrayBuffer): Promise<image.PixelMap | undefined> {
     const src: image.ImageSource = image.createImageSource(jpeg)
     try {
-      return await src.createPixelMap()
+      try {
+        return await src.createPixelMap({
+          desiredPixelFormat: image.PixelMapFormat.RGBA_8888
+        } as Object)
+      } catch (_) {
+        return await src.createPixelMap()
+      }
     } catch (_) {
       return undefined
     } finally {

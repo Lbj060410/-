@@ -637,7 +637,14 @@ export class Page2Coordinator {
   private async jpegToPixelMap(jpeg: ArrayBuffer): Promise<image.PixelMap> {
     const src: image.ImageSource = image.createImageSource(jpeg)
     try {
-      return await src.createPixelMap()
+      // Keep decode format aligned with live preview pipeline to reduce color mismatch across components.
+      try {
+        return await src.createPixelMap({
+          desiredPixelFormat: image.PixelMapFormat.RGBA_8888
+        } as Object)
+      } catch (_) {
+        return await src.createPixelMap()
+      }
     } finally {
       try { src.release() } catch (_) {}
     }

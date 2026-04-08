@@ -8,7 +8,7 @@ import { VehicleActionSchedulerDeps } from './VehicleActionScheduler'
 function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
   const from: string = fromId.trim().toUpperCase()
   const to: string = toId.trim().toUpperCase()
-  return (from === 'B4' && to === 'B6') || (from === 'D6' && to === 'F6')
+  return from === 'B4' && to === 'B6'
 }
 
 function syncRecognitionBySegment(fromId: string, toId: string): void {

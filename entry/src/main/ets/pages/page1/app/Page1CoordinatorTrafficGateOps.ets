@@ -20,16 +20,13 @@ type TrafficSignal = 'RED' | 'GREEN' | 'YELLOW' | 'UNKNOWN'
 
 const TRAFFIC_GATE_LOG_COOLDOWN_MS: number = 1200
 const EDGE_B4_B6: string = 'B4->B6'
-const EDGE_D6_F6: string = 'D6->F6'
 
 function isActiveGateEdge(fromId: string, toId: string): boolean {
-  return (fromId === 'B4' && toId === 'B6') ||
-    (fromId === 'D6' && toId === 'F6')
+  return fromId === 'B4' && toId === 'B6'
 }
 
 function edgeKey(fromId: string, toId: string): string {
   if (fromId === 'B4' && toId === 'B6') return EDGE_B4_B6
-  if (fromId === 'D6' && toId === 'F6') return EDGE_D6_F6
   return ''
 }
 
@@ -49,8 +46,6 @@ function headingGateEdgeBySnap(ctx: any): string {
 
   // B4 -> B6 : southbound on B column
   if (snapId === 'B4' && headingCardinal === 90) return EDGE_B4_B6
-  // D6 -> F6 : eastbound on row 6
-  if (snapId === 'D6' && headingCardinal === 0) return EDGE_D6_F6
   return ''
 }
 
@@ -126,5 +121,4 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
   s.setAction(`traffic gate waiting (${key})`)
   return true
 }
-
 

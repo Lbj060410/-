@@ -20,7 +20,7 @@ import { replayArchiveService } from '../../../services/replay/ReplayArchiveServ
 function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
   const from: string = fromId.trim().toUpperCase()
   const to: string = toId.trim().toUpperCase()
-  return (from === 'B4' && to === 'B6') || (from === 'D6' && to === 'F6')
+  return from === 'B4' && to === 'B6'
 }
 
 function syncRecognitionBySegment(fromId: string, toId: string): void {
@@ -97,6 +97,7 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
 
   const fromId: string = ctx.motionPlayer.currentFromId()
   s.pushLog(`ARRIVE: ${toId} via MOTION | pathIndex=${s.pathIndex}`)
+  await ctx.maybeHandleF7GarageSpecialFlowOnArrival(toId)
 
   const handledGateDepart: boolean = await ctx.maybeHandleGateDepartOnArrival(toId)
   if (handledGateDepart) return
