@@ -38,7 +38,8 @@ interface FrameClipBufferItem {
 const PAGE2_REPLAY_DIR: string = '/data/storage/el2/base/haps/entry/files/page2_replay'
 const MAX_OBSTACLE_ITEMS: number = 20
 const MAX_GALLERY_ITEMS: number = 20
-const MAX_ITEMS_PER_REPLAY_TYPE: number = 3
+const MAX_OBSTACLE_ITEMS_PER_TYPE: number = 3
+const MAX_GALLERY_ITEMS_PER_TYPE: number = 3
 const MAX_FRAME_BUFFER: number = 20
 const FRAME_SAMPLE_INTERVAL_MS: number = 200
 const SHIGONG_COOLDOWN_MS: number = 1400
@@ -279,9 +280,10 @@ export class Page2ReplayService {
     const cap: number = this.obstacleCap()
     const next: Array<Page2ObstacleReplayItem> = [item]
     let sameTypeCount: number = 1
+    const bucket: string = this.obstacleBucket(item)
     for (let i: number = 0; i < this.obstacleItems.length; i++) {
       const oldItem: Page2ObstacleReplayItem = this.obstacleItems[i]
-      if (oldItem.triggerType === item.triggerType) {
+      if (this.obstacleBucket(oldItem) === bucket) {
         if (sameTypeCount >= cap) {
           this.recycleObstacleItem(oldItem)
           continue
@@ -324,11 +326,16 @@ export class Page2ReplayService {
   }
 
   private obstacleCap(): number {
-    return MAX_ITEMS_PER_REPLAY_TYPE
+    return MAX_OBSTACLE_ITEMS_PER_TYPE
   }
 
   private galleryCap(): number {
-    return MAX_ITEMS_PER_REPLAY_TYPE
+    return MAX_GALLERY_ITEMS_PER_TYPE
+  }
+
+  private obstacleBucket(item: Page2ObstacleReplayItem): string {
+    if (item.triggerType === 'ULTRASONIC_01') return 'ULTRASONIC_01'
+    return 'VISION_OBSTACLE'
   }
 
   private recycleObstacleItem(item: Page2ObstacleReplayItem): void {

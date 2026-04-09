@@ -610,9 +610,10 @@ export class Page2Coordinator {
     if (recogStore.recogEngineType !== RecogEngineType.OFFLINE_NCNN) {
       recogStore.setRecogEngineType(RecogEngineType.OFFLINE_NCNN)
     }
-    // 根据模型开关设置阈值：yolov26barrier 略低，traffic 略高以减少误检。
-    // Speed-first tuning: raise yolov26barrier confidence to cut proposals and postprocess cost.
-    const wantedConf: number = videoStore.page2Yolov26BarrierExperimentalEnabled ? 0.25 : 0.28
+    // Page2 阈值策略：
+    // - 障碍物模型（yolov26barrier）：75%
+    // - 红绿灯模型（traffic_light）：50%
+    const wantedConf: number = videoStore.page2TrafficEnabled ? 0.5 : 0.75
     if (Math.abs(recogStore.recogOfflineConfThresh - wantedConf) > 0.001) {
       recogStore.setRecogOfflineConfThresh(wantedConf)
     }
@@ -984,7 +985,7 @@ export class Page2Coordinator {
 
   private currentLiveSubtype(): RecognitionSubtype | undefined {
     if (videoStore.page2TrafficEnabled) {
-      return this.isTrafficGatePoseMatched() ? RecognitionSubtype.TRAFFIC_LIGHT : undefined
+      return RecognitionSubtype.TRAFFIC_LIGHT
     }
     if (videoStore.page2Yolov26BarrierExperimentalEnabled) return RecognitionSubtype.YOLOV26BARRIER
     return undefined
@@ -996,7 +997,6 @@ export class Page2Coordinator {
 
     const headingCardinal: number = this.normToCardinal(page1Store.pose.headingDeg)
     if (snapId === 'B4' && headingCardinal === 90) return true
-    if (snapId === 'D6' && headingCardinal === 0) return true
     return false
   }
 
@@ -1020,7 +1020,7 @@ export class Page2Coordinator {
   }
 
   private modeText(): string {
-    if (videoStore.page2TrafficEnabled) return 'traffic-gated(B4->B6|D6->F6)'
+    if (videoStore.page2TrafficEnabled) return 'traffic'
     if (videoStore.page2Yolov26BarrierExperimentalEnabled) return 'yolov26barrier'
     return 'none'
   }

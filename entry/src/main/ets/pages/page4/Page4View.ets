@@ -2187,7 +2187,7 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位'])) {
+    if (this.containsAny(lower, ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位','查看所有映射点位'])) {
       this.pushAssistant(this.buildPoiMappingSummaryText())
       return
     }

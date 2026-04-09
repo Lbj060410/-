@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "5ce8ab57-5487-43a2-bcfd-300a04a95079",
+      "agentId": "main",
+      "sessionKey": "agent:main:openai:ccae3101-d5aa-47dd-96cb-a68657bb1d28",
+      "name": "明天下午3:30闹钟",
+      "enabled": true,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774250377906,
+      "updatedAtMs": 1774250377906,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-24T07:30:00.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "⏰ 闹钟提醒：现在是明天下午3:30！"
+      },
+      "state": {
+        "nextRunAtMs": 1774337400000,
+        "runningAtMs": 1774337400008
+      }
+    }
+  ]
+}

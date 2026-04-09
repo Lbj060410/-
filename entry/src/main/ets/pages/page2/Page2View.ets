@@ -165,11 +165,17 @@ export struct Page2View {
           .borderRadius(Page1Theme.RADIUS_L)
           .backgroundColor(Page1Theme.SURFACE)
           .shadow({ radius: 40, color: '#00000022', offsetX: 0, offsetY: 10 })
+          .onClick((): void => {
+            // Prevent backdrop click handler from closing when interacting with replay content.
+          })
         }
         .width('100%')
         .height('100%')
         .backgroundColor('#00000033')
         .align(Alignment.Bottom)
+        .onClick((): void => {
+          this.showReplay = false
+        })
       }
     }
     .width('100%')
@@ -393,7 +399,11 @@ export struct Page2View {
           .fontWeight(FontWeight.Bold)
           .border({ width: 1, color: this.videoStore.page2TrafficEnabled ? '#BBF7D0' : '#E2E8F0' })
           .onClick((): void => {
-            this.videoStore.setPage2TrafficEnabled(!this.videoStore.page2TrafficEnabled)
+            const nextEnabled: boolean = !this.videoStore.page2TrafficEnabled
+            this.videoStore.setPage2TrafficEnabled(nextEnabled)
+            if (nextEnabled && !this.videoStore.recognitionEnabled) {
+              this.videoStore.setRecognitionEnabled(true)
+            }
             this.c.onModelSwitchChanged()
           })
       }
@@ -915,12 +925,11 @@ export struct Page2View {
 
   private minOverlayScore(subtype: RecognitionSubtype, label: string): number {
     if (subtype === RecognitionSubtype.YOLOV26BARRIER) {
-      const normalized: string = label.trim().toLowerCase()
-      if (normalized === 'trafficlight' || normalized === 'traffic_light') return 0.12
-      return 0.2
+      void label
+      return 0.75
     }
-    if (subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 0.25
-    return 0.2
+    if (subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 0.5
+    return 0.75
   }
 
   private maxVisiblePerSubtype(subtype: RecognitionSubtype): number {

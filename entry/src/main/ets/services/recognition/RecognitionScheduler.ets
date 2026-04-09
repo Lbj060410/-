@@ -780,11 +780,11 @@ export class RecognitionScheduler {
   }
 
   private confForTask(task: RecognitionTask, defaultConf: number): number {
-    if (task.subtype === RecognitionSubtype.YOLOV26BARRIER &&
-      task.kind === RecognitionTaskKind.SNAPSHOT &&
-      (task.source === RecognitionTaskSource.GALLERY || task.source === RecognitionTaskSource.PAGE2_BUTTON)) {
-      return Math.min(defaultConf, 0.12)
-    }
+    // Per-model confidence policy:
+    // - yolov26barrier: 75%
+    // - traffic_light: 50%
+    if (task.subtype === RecognitionSubtype.YOLOV26BARRIER) return 0.75
+    if (task.subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 0.5
     return defaultConf
   }
 
