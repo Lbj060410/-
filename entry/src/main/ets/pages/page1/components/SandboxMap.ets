@@ -14,6 +14,66 @@ import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
 
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
+// 视觉配置中心：后续改地图样式优先改这里，而不是到处改魔法数字。
+interface ParkingMapStyle {
+  spotsPerRow: number
+  rowHeights: Array<number>
+  sidePaddingWidth: number
+  oceanBandHeight: number
+  horizontalLane: {
+    borderHeight: number
+    mainHeight: number
+    borderColor: string
+    mainColor: string
+  }
+  verticalLane: {
+    borderWidth: number
+    mainWidth: number
+    borderColor: string
+    mainColor: string
+  }
+  palette: {
+    ocean: string
+    parkingCell: string
+    parkingCellBorder: string
+  }
+  parkingCellBorderWidth: number
+  routeHighlight: {
+    color: string
+    lineWidth: number
+  }
+}
+
+const PARKING_MAP_STYLE: ParkingMapStyle = {
+  spotsPerRow: 2,
+  rowHeights: [110, 190, 190, 110],
+  sidePaddingWidth: 148,
+  oceanBandHeight: 60,
+  horizontalLane: {
+    borderHeight: 2,
+    mainHeight: 12,
+    borderColor: '#0016D278',
+    mainColor: '#C4D6E1'
+  },
+  verticalLane: {
+    borderWidth: 2,
+    mainWidth: 12,
+    borderColor: '#16D278',
+    mainColor: '#C4D6E1'
+  },
+  palette: {
+    ocean: '#00FFFF',
+    parkingCell: '#FFFFFF',
+    parkingCellBorder: '#16D278'
+  },
+  parkingCellBorderWidth: 2,
+  routeHighlight: {
+    color: '#FFD400',
+    lineWidth: 10
+  }
+}
+
+
 interface NodeBlockRule {
   fullBlockThreshold: number
 }
@@ -31,28 +91,11 @@ interface MapBlockCellRect extends MapRoadRect {
   color: string
 }
 
-interface MapPathSegment {
-  id: string
-  fromId: string
-  toId: string
-  ax: number
-  ay: number
-  bx: number
-  by: number
-  index: number
-}
-
-interface MapTurnNode {
-  id: string
-  x: number
-  y: number
-  index: number
-}
-
 @Component
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
+  private readonly parkingMapStyle: ParkingMapStyle = PARKING_MAP_STYLE
   // 取消 Page1 分层式渲染显示：统一按单一细节层渲染。
   private readonly flatRenderModeEnabled: boolean = true
 
@@ -70,6 +113,7 @@ export struct SandboxMap {
 
   // 手动操作后的临时失权窗口
   @State private manualOverrideUntilMs: number = 0
+  private lastTishixianDebugSig: string = ''
 
   // 手动操作后允许自动跟随恢复的等待时间（毫秒）
   private readonly MANUAL_OVERRIDE_MS: number = 4800
@@ -92,10 +136,12 @@ export struct SandboxMap {
     this.pinchStartZoomScale = this.DEFAULT_ROUTE_ZOOM
     this.clampAll()
     this.syncCameraFollow()
+    this.probeTishixianRenderInput()
 
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
       this.syncCameraFollow()
+      this.probeTishixianRenderInput()
     }, this.FOLLOW_TICK_MS) as number
   }
 
@@ -174,11 +220,12 @@ export struct SandboxMap {
       // 分层渲染：BaseLayer -> GridLayer -> RouteLayer -> ObstacleLayer -> VehicleLayer -> LabelLayer
       Stack() {
         Stack() {
-          Image($rawfile('sandbox_map.png'))
-            .width('100%')
-            .height('100%')
-            .objectFit(ImageFit.Fill)
+          // 仅使用代码绘制地图（不再使用历史图片底图）。
+          this.buildParkingLotGrid()
+          // 图层2：路线（地图上方）
+          this.buildPlannedRouteHighlight()
 
+          // 图层3：点位/障碍/目的地标志（路线上方）
           if (!this.isOverviewLevel()) {
             this.buildGridOverlay()
             this.buildBlockedNodeMarkers()
@@ -186,6 +233,8 @@ export struct SandboxMap {
             this.buildBlockedEdgeMarkers()
           }
           this.buildDestinationMarker()
+
+          // 图层4：小车相关（最上层）
           this.buildCarDot()
           this.buildCarHeadingArrow()
           if (this.isDetailLevel()) {
@@ -231,6 +280,7 @@ export struct SandboxMap {
           if (id.length > 0) {
             this.store.destDraft = id
             this.store.mapTargetPendingSend = true
+            this.debugTishixian('pick', `goal=${id} pending=1`)
             this.store.pushLog(`目标点选：${id}，点击“目标”按钮确认发送`)
             this.store.targetPickEnabled = false
           }
@@ -469,6 +519,8 @@ export struct SandboxMap {
     if (this.store.mapTargetPendingSend && pending.length > 0) return pending
 
     const applied: string = this.store.destApplied.trim().toUpperCase()
+    if (pending.length > 0 && pending !== applied) return pending
+
     if (applied.length > 0) return applied
     return ''
   }
@@ -879,6 +931,122 @@ export struct SandboxMap {
   }
 
   @Builder
+  private buildPlannedRouteHighlight(): void {
+    ForEach(this.highlightRouteRects(), (r: MapRoadRect): void => {
+      Column() {}
+        .width(r.w)
+        .height(r.h)
+        .borderRadius(Math.min(r.w, r.h) / 2)
+        .backgroundColor(this.parkingMapStyle.routeHighlight.color)
+        .border({ width: 1, color: '#000000AA' })
+        .position({ x: r.x, y: r.y })
+        .opacity(1)
+        .zIndex(1)
+    }, (r: MapRoadRect): string => `hl-${r.id}`)
+  }
+
+  private highlightRouteRects(): Array<MapRoadRect> {
+    const nodes: Array<string> = this.activeHighlightNodes()
+    const thickness: number = this.routeHighlightThickness(this.parkingMapStyle)
+    const rects: Array<MapRoadRect> = this.plannedRouteRectsByNodes(nodes, thickness)
+    const head: string = nodes.length > 0 ? nodes[0] : ''
+    const tail: string = nodes.length > 0 ? nodes[nodes.length - 1] : ''
+    let firstRect: string = 'none'
+    if (rects.length > 0) {
+      const r: MapRoadRect = rects[0]
+      firstRect = `x=${r.x.toFixed(1)},y=${r.y.toFixed(1)},w=${r.w.toFixed(1)},h=${r.h.toFixed(1)}`
+    }
+    this.debugTishixian(
+      'render',
+      `nodes=${nodes.length}(${head}->${tail}) rects=${rects.length} thick=${thickness.toFixed(1)} map=${this.store.mapW.toFixed(1)}x${this.store.mapH.toFixed(1)} first=${firstRect}`
+    )
+    return rects
+  }
+
+  private routeHighlightThickness(style: ParkingMapStyle): number {
+    const v: number = style.routeHighlight.lineWidth
+    if (v <= 0) return 14
+    return v
+  }
+
+  private plannedRouteRectsByNodes(pathNodes: Array<string>, thickness: number): Array<MapRoadRect> {
+    const out: Array<MapRoadRect> = []
+    if (pathNodes.length < 2) return out
+
+    for (let i: number = 0; i < pathNodes.length - 1; i++) {
+      const fromId: string = pathNodes[i]
+      const toId: string = pathNodes[i + 1]
+      const a: GridNode | undefined = this.findGridNodeById(fromId)
+      const b: GridNode | undefined = this.findGridNodeById(toId)
+      if (!a || !b) continue
+
+      const ax: number = a.xNorm * this.store.mapW
+      const ay: number = a.yNorm * this.store.mapH
+      const bx: number = b.xNorm * this.store.mapW
+      const by: number = b.yNorm * this.store.mapH
+      const dx: number = Math.abs(bx - ax)
+      const dy: number = Math.abs(by - ay)
+      const segId: string = RouteEdgeCodec.normalize(fromId, toId)
+
+      if (dx >= dy) {
+        const x: number = Math.min(ax, bx) - thickness / 2
+        const y: number = (ay + by) / 2 - thickness / 2
+        const w: number = dx + thickness
+        const h: number = thickness
+        out.push({ id: `route-hl-${segId}-${i}`, x: x, y: y, w: w, h: h })
+      } else {
+        const x: number = (ax + bx) / 2 - thickness / 2
+        const y: number = Math.min(ay, by) - thickness / 2
+        const w: number = thickness
+        const h: number = dy + thickness
+        out.push({ id: `route-hl-${segId}-${i}`, x: x, y: y, w: w, h: h })
+      }
+    }
+
+    return out
+  }
+
+  private activeHighlightNodes(): Array<string> {
+    if (this.store.mapTargetPendingSend) {
+      this.debugTishixian('active', 'source=path pending=1')
+    }
+    if (this.store.pathNodes.length >= 2) {
+      this.debugTishixian('active', `source=path len=${this.store.pathNodes.length} nodes=${this.store.pathNodes.join('->')}`)
+      return this.store.pathNodes
+    }
+    this.debugTishixian('active', 'source=none len=0')
+    return []
+  }
+
+  private debugTishixian(stage: string, message: string): void {
+    const sig: string = `${stage}|${message}`
+    if (sig === this.lastTishixianDebugSig) return
+    this.lastTishixianDebugSig = sig
+    this.store.pushLog(`[tishixian] ${stage} ${message}`)
+  }
+
+  private probeTishixianRenderInput(): void {
+    const nodes: Array<string> = this.activeHighlightNodes()
+    const thickness: number = this.routeHighlightThickness(this.parkingMapStyle)
+    const rects: Array<MapRoadRect> = this.plannedRouteRectsByNodes(nodes, thickness)
+    const head: string = nodes.length > 0 ? nodes[0] : ''
+    const tail: string = nodes.length > 0 ? nodes[nodes.length - 1] : ''
+    let inside: number = 0
+    let screenVisible: number = 0
+    for (let i: number = 0; i < rects.length; i++) {
+      const r: MapRoadRect = rects[i]
+      const hitX: boolean = r.x + r.w >= 0 && r.x <= this.store.mapW
+      const hitY: boolean = r.y + r.h >= 0 && r.y <= this.store.mapH
+      if (hitX && hitY) inside += 1
+      if (this.isWorldRectVisible(r.x, r.y, r.w, r.h, 0)) screenVisible += 1
+    }
+    this.debugTishixian(
+      'probe',
+      `pending=${this.store.mapTargetPendingSend ? 1 : 0} nodes=${nodes.length}(${head}->${tail}) rects=${rects.length} inside=${inside} screenVisible=${screenVisible} zoom=${this.zoomScale.toFixed(2)} offset=(${this.offsetX.toFixed(1)},${this.offsetY.toFixed(1)}) map=${this.store.mapW.toFixed(1)}x${this.store.mapH.toFixed(1)}`
+    )
+  }
+
+  @Builder
   private buildProceduralMapBase(): void {
     Stack() {
       Column() {}
@@ -911,7 +1079,7 @@ export struct SandboxMap {
   }
 
   @Builder
-  private buildRoadRects(rects: Array<MapRoadRect>, color: string, rounded: boolean = true): void {
+  private buildRoadRects(rects: Array<MapRoadRect>, color: string, rounded: boolean = true, zLevel: number = 1): void {
     ForEach(rects, (r: MapRoadRect): void => {
       Column() {}
         .width(r.w)
@@ -919,7 +1087,7 @@ export struct SandboxMap {
         .borderRadius(rounded ? Math.min(r.w, r.h) / 2 : 0)
         .backgroundColor(color)
         .position({ x: r.x, y: r.y })
-        .zIndex(1)
+        .zIndex(zLevel)
     }, (r: MapRoadRect): string => r.id)
   }
 
@@ -1423,42 +1591,49 @@ export struct SandboxMap {
   private nodeDotBg(id: string): string {
     if (this.isBlockedNode(id)) return '#FF5C5C66'
     if (this.isPathCurrent(id)) {
-      return '#27B8FF'
+      return '#27B8FF'// 当前点
     }
     if (this.isPathNext(id)) {
-      return '#FFD166'
+      return '#ffe557ee' // 下一个点
     }
     if (this.isPathVisited(id)) {
-      return '#245A7C'
+      return '#ff4bf506' // 已走过
     }
     if (this.isPathFuture(id)) {
-      return '#1D7CBF66'
+      return '#edf30c0c' // 未走
     }
     if (this.isCurrentNode(id)) {
-      return '#27B8FF'
+      return '#27B8FF'// 当前点
     }
-    return '#28597A66'
+    return '#28597A66'// 默认点
   }
 
   private nodeLabelColor(id: string): string {
+    // 1. 如果这个节点是【被挡住/障碍物】 → 文字变浅红色
     if (this.isBlockedNode(id)) return '#FF9E9E'
+    // 2. 如果是【当前所在节点】 → 浅蓝色
     if (this.isPathCurrent(id)) {
       return '#73D7FF'
     }
+    // 3. 如果是【下一个要走的节点】 → 黄色
     if (this.isPathNext(id)) {
       return '#FFD166'
     }
+    // 4. 如果是【已经走过的节点】 → 灰蓝色
     if (this.isPathVisited(id)) {
       return '#86AEC8'
     }
+    // 5. 如果是【还没走的未来路径点】 → 天蓝色
     if (this.isPathFuture(id)) {
       return '#5FC7FF'
     }
+    // 6. 如果是小车当前吸附的节点（同当前点）→ 浅蓝色
     if (this.isCurrentNode(id)) {
       return '#73D7FF'
     }
+    // 7. 其他普通节点 → 灰蓝色
     return '#86AEC8'
-  }
+}
 
   private nodeLabelWeight(id: string): FontWeight {
     if (this.isBlockedNode(id)) {
@@ -1536,5 +1711,123 @@ export struct SandboxMap {
       return Number.isFinite(n) ? n : 0
     }
     return 0
+  }
+
+  @Builder
+  private buildParkingLotGrid(): void {
+    Column() {
+      this.buildOceanBand(this.parkingMapStyle)
+
+      ForEach(this.parkingMapStyle.rowHeights, (rowHeight: number): void => {
+        this.buildHorizontalLane(this.parkingMapStyle)
+
+        Row() {
+          this.buildSideParkingCell(this.parkingMapStyle, 'left')
+          ForEach(this.parkingSpotIndexes(), (_spotIndex: number): void => {
+            this.buildVerticalLane(this.parkingMapStyle)
+            this.buildParkingCell(this.parkingMapStyle)
+          }, (spotIndex: number): string => `spot-${spotIndex}`)
+          this.buildVerticalLane(this.parkingMapStyle)
+          this.buildSideParkingCell(this.parkingMapStyle, 'right')
+        }
+        .width('100%')
+        .height(rowHeight)
+        .backgroundColor(this.parkingMapStyle.palette.ocean)
+      }, (_rowHeight: number, index: number): string => `row-${index}`)
+
+      this.buildHorizontalLane(this.parkingMapStyle)
+      this.buildOceanBand(this.parkingMapStyle)
+    }
+    .width('100%').height('100%').backgroundColor(this.parkingMapStyle.palette.ocean)
+  }
+
+  @Builder
+  private buildOceanBand(style: ParkingMapStyle): void {
+    Row() {
+      this.buildOceanSideCell(style, 'left')
+      ForEach(this.parkingSpotIndexes(), (_spotIndex: number): void => {
+        this.buildVerticalLane(style)
+        this.buildOceanCenterCell(style)
+      }, (spotIndex: number): string => `ocean-spot-${spotIndex}`)
+      this.buildVerticalLane(style)
+      this.buildOceanSideCell(style, 'right')
+    }
+    .width('100%')
+    .height(style.oceanBandHeight)
+    .backgroundColor(style.palette.ocean)
+  }
+
+  @Builder
+  private buildHorizontalLane(style: ParkingMapStyle): void {
+    Row()
+      .width('100%')
+      .height(style.horizontalLane.mainHeight)
+      .backgroundColor(style.horizontalLane.mainColor)
+  }
+
+  @Builder
+  private buildVerticalLane(style: ParkingMapStyle): void {
+    Column()
+      .width(style.verticalLane.mainWidth)
+      .height('100%')
+      .backgroundColor(style.verticalLane.mainColor)
+  }
+
+  @Builder
+  private buildParkingCell(style: ParkingMapStyle): void {
+    Column()
+      .layoutWeight(1)
+      .height('100%')
+      .backgroundColor(style.palette.parkingCell)
+      .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
+  }
+
+  @Builder
+  private buildOceanCenterCell(style: ParkingMapStyle): void {
+    Column()
+      .layoutWeight(1)
+      .height('100%')
+      .backgroundColor(style.palette.ocean)
+      .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
+  }
+
+  @Builder
+  private buildOceanSideCell(style: ParkingMapStyle, side: 'left' | 'right'): void {
+    Column()
+      .width(style.sidePaddingWidth)
+      .height('100%')
+      .backgroundColor(style.palette.ocean)
+      .border({
+        width: {
+          left: side === 'left' ? 0 : style.parkingCellBorderWidth,
+          right: side === 'right' ? 0 : style.parkingCellBorderWidth,
+          top: style.parkingCellBorderWidth,
+          bottom: style.parkingCellBorderWidth
+        },
+        color: style.palette.parkingCellBorder
+      })
+  }
+
+  @Builder
+  private buildSideParkingCell(style: ParkingMapStyle, side: 'left' | 'right'): void {
+    Column()
+      .width(style.sidePaddingWidth)
+      .height('100%')
+      .backgroundColor(style.palette.parkingCell)
+      .border({
+        width: {
+          left: side === 'left' ? 0 : style.parkingCellBorderWidth,
+          right: side === 'right' ? 0 : style.parkingCellBorderWidth,
+          top: style.parkingCellBorderWidth,
+          bottom: style.parkingCellBorderWidth
+        },
+        color: style.palette.parkingCellBorder
+      })
+  }
+
+  private parkingSpotIndexes(): Array<number> {
+    const out: Array<number> = []
+    for (let i: number = 0; i < this.parkingMapStyle.spotsPerRow; i++) out.push(i)
+    return out
   }
 }

@@ -40,7 +40,9 @@
       "Bash(/tmp/find_path.sh:*)",
       "Bash(__NEW_LINE_84142afc14b1fb3f__ chmod +x /tmp/find_path.sh)",
       "Read(//tmp/**)",
-      "Bash(xargs sed:*)"
+      "Bash(xargs sed:*)",
+      "Bash(identify \"C:\\\\Users\\\\来不及捂手\\\\Desktop\\\\素材\\\\720.png\")",
+      "Bash(npm run:*)"
     ]
   }
 }

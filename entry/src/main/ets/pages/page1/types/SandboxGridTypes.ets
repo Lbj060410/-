@@ -19,8 +19,8 @@ export class SandboxGridModel {
     // rows 1/7 only have B/D/F, rows 2/4/6 have A/B/D/F/G.
     const cols: Array<string> = ['A', 'B', 'D', 'F', 'G']
     // 边缘列保持小的向内偏移以便于交互。
-    const xNorms: Array<number> = [0.020, 0.195, 0.504, 0.810, 0.980]
-    const yNorms: Array<number> = [0.096, 0.251, 0.499, 0.745, 0.902]
+    const xNorms: Array<number> = [0.015, 0.189, 0.499, 0.809, 0.985]
+    const yNorms: Array<number> = [0.087, 0.241, 0.500, 0.759, 0.916]
     const rowLabels: Array<number> = [1, 2, 4, 6, 7]
 
     // 保持边缘列与中心列共线，以便 A/G 起点沿黑线。
