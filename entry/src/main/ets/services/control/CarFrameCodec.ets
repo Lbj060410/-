@@ -8,26 +8,10 @@
 // entry/src/main/ets/services/control/CarFrameCodec.ets
 
 export class CarFrameCodec {
-  static readonly HEADER_8: number = 0x55
-  static readonly FOOTER: number = 0xBB
-
+  //原安卓数据包真头
   static readonly HEADER_12: number = 0xCC
-
-  // ===== 8字节：0x55 type major p1 p2 p3 chk 0xBB =====
-  static build8(type: number, major: number, p1: number, p2: number, p3: number): Uint8Array {
-    const out: Uint8Array = new Uint8Array(8)
-    out[0] = CarFrameCodec.HEADER_8
-    out[1] = CarFrameCodec.u8(type)
-    out[2] = CarFrameCodec.u8(major)
-    out[3] = CarFrameCodec.u8(p1)
-    out[4] = CarFrameCodec.u8(p2)
-    out[5] = CarFrameCodec.u8(p3)
-
-    const chk: number = (CarFrameCodec.u8(major) + CarFrameCodec.u8(p1) + CarFrameCodec.u8(p2) + CarFrameCodec.u8(p3)) % 256
-    out[6] = CarFrameCodec.u8(chk)
-    out[7] = CarFrameCodec.FOOTER
-    return out
-  }
+  //原安卓数据包帧尾
+  static readonly FOOTER: number = 0xBB
 
   // ===== 12字节：0xCC h payload[8] chk 0xBB =====
   static build12(h: number, payload8: Uint8Array): Uint8Array {

@@ -131,17 +131,6 @@ export class CarProtocolService {
     hilog.info(DOMAIN, TAGRUN, '%{public}s', `${text} x${Math.max(1, Math.trunc(sendTimes))}`)
   }
 
-  // ===== 8B =====
-  // 8B 命令帧：用于紧凑型控制指令
-  async sendCmd8WithType(type: number, major: number, p1: number, p2: number, p3: number): Promise<void> {
-    const frame: Uint8Array = CarFrameCodec.build8(type, major, p1, p2, p3)
-    await this.sendRaw(frame, `8B type=0x${type.toString(16)} major=0x${major.toString(16)}`)
-  }
-
-  async sendCmd8(major: number, p1: number, p2: number, p3: number): Promise<void> {
-    await this.sendCmd8WithType(0xaa, major, p1, p2, p3)
-  }
-
   // ===== 12B =====
   // 12B 数据帧：h 表示主命令，payload8 承载子命令/参数
   async sendData12(h: number, payload8: Uint8Array): Promise<void> {
@@ -219,7 +208,7 @@ export class CarProtocolService {
   }
 
   async light(): Promise<void> {
-    await this.sendControl0A(0x0D, '光照指发送')
+    await this.sendControl0A(0x0D, '光照值获取')
   }
 
   async uturn(): Promise<void> {
@@ -251,8 +240,8 @@ export class CarProtocolService {
   }
   //调用dapart小车开闸门的同时会自己前进
   async depart(): Promise<void>{
-    // 道闸命令要求“快速3连发”，不插入人为延时，避免被小车识别成多次离散动作。
-    await this.sendControl0ABurst(0x15, "出库和入库", 3, 0)
+    // 与其他控制指令保持一致：2连发。
+    await this.sendControl0ABurst(0x15, "出库和入库", 2, 0)
   }
 
   async carport(plie: number): Promise<void> {
@@ -312,27 +301,27 @@ export class CarProtocolService {
     await this.sendData12(0x0B, payload8)
     hilog.info(DOMAIN, TAGRUN, '%{public}s', text)
   }
-  async voiceone(): Promise<void> {
-    await this.sendControl0B(0x2B, '发送已为您重新规划路线')
-  }
-
-  async voicetow(): Promise<void> {
-    await this.sendControl0B(0x2C, '发送已找到停车位，正在为您停车')
-  }
-
-  async voicethree(): Promise<void> {
-    await this.sendControl0B(0x2D, '发送达目的地，祝您旅途愉快')
-  }
-  async voicefour(): Promise<void> {
-    await this.sendControl0B(0x2E, '发送以为你规划最优路径，小创')
-  }
-  async voicefive(): Promise<void> {
-    await this.sendControl0B(0x2F, '发送紧急避险')
-  }
-
-  async voicesex(): Promise<void> {
-    await this.sendControl0B(0x30, '当前车位已被占用，正在为您寻找其他车位')
-  }
+  // async voiceone(): Promise<void> {
+  //   await this.sendControl0B(0x2B, '发送已为您重新规划路线')
+  // }
+  //
+  // async voicetow(): Promise<void> {
+  //   await this.sendControl0B(0x2C, '发送已找到停车位，正在为您停车')
+  // }
+  //
+  // async voicethree(): Promise<void> {
+  //   await this.sendControl0B(0x2D, '发送达目的地，祝您旅途愉快')
+  // }
+  // async voicefour(): Promise<void> {
+  //   await this.sendControl0B(0x2E, '发送以为你规划最优路径，小创')
+  // }
+  // async voicefive(): Promise<void> {
+  //   await this.sendControl0B(0x2F, '发送紧急避险')
+  // }
+  //
+  // async voicesex(): Promise<void> {
+  //   await this.sendControl0B(0x30, '当前车位已被占用，正在为您寻找其他车位')
+  // }
 
 
 
