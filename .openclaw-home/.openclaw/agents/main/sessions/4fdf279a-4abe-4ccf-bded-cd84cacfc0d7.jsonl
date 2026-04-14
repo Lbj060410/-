@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"4fdf279a-4abe-4ccf-bded-cd84cacfc0d7","timestamp":"2026-04-14T08:06:06.871Z","cwd":"F:\\openclaw-main\\openclaw-main\\workspace"}
+{"type":"model_change","id":"68697dad","parentId":null,"timestamp":"2026-04-14T08:06:06.872Z","provider":"deepseek","modelId":"deepseek-chat"}
+{"type":"thinking_level_change","id":"3e31e872","parentId":"68697dad","timestamp":"2026-04-14T08:06:06.872Z","thinkingLevel":"off"}
+{"type":"custom","customType":"model-snapshot","data":{"timestamp":1776153966873,"provider":"deepseek","modelApi":"openai-completions","modelId":"deepseek-chat"},"id":"f366c34c","parentId":"3e31e872","timestamp":"2026-04-14T08:06:06.873Z"}
+{"type":"message","id":"3d70024b","parentId":"f366c34c","timestamp":"2026-04-14T08:06:06.879Z","message":{"role":"user","content":[{"type":"text","text":"F7设置为家"}],"timestamp":1776153966877}}
+{"type":"message","id":"7dac984a","parentId":"3d70024b","timestamp":"2026-04-14T08:06:10.536Z","message":{"role":"assistant","content":[{"type":"text","text":"{\"role\":\"home\",\"place\":\"F7\"}"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-chat","usage":{"input":9408,"output":10,"cacheRead":3648,"cacheWrite":0,"totalTokens":13066,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1776153966878}}

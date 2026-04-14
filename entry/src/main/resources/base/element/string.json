@@ -10,23 +10,7 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
-    },
-    {
-      "name": "SaveScreenshot",
-      "value": "用于保存截图到本地相册"
-    },
-    {
-      "name": "readScreenshot",
-      "value": "用于读取本地相册"
-    },
-    {
-      "name": "writeScreenshot",
-      "value": "用于写入本地相册"
-    },
-    {
-      "name": "outputScreenshot",
-      "value": "用于读取本地相册"
+      "value": "小车嵌入式应用"
     }
   ]
 }

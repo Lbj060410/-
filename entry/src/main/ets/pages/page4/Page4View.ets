@@ -936,6 +936,9 @@ export struct Page4View {
       return
     }
     this.queuedPromptCount += 1
+    if (this.queuedPromptCount > 1) {
+      this.pushAssistant(`已加入队列，前方还有 ${this.queuedPromptCount - 1} 条。`)
+    }
 
     const runOne = async (): Promise<void> => {
       this.assistantBusy = true
@@ -1582,8 +1585,8 @@ export struct Page4View {
         endpoint: buildOpenClawChatCompletionsUrl(host),
         bearerToken: token,
         model: OPENCLAW_CHAT_MODEL,
-        connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
-        readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
+        connectTimeoutMs: Math.min(3500, this.adaptiveOpenClawConnectTimeoutMs),
+        readTimeoutMs: Math.min(9000, this.adaptiveOpenClawReadTimeoutMs)
       })
       const result = await client.complete(messages)
       if (!result.ok) continue
@@ -1850,6 +1853,11 @@ export struct Page4View {
     return `系统上下文：当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}。\n${mappingText}`
   }
 
+  private buildOpenClawRuntimeContextPromptLite(): string {
+    const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
+    return `系统上下文：当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；链路=${this.connStateText()}。`
+  }
+
   private normalizePlaceInput(text: string): string {
     // 比赛讲解点（点位绑定第二步）：
     // 先做归一化，减少 ASR 文本中的空格/标点/大小写干扰，提升匹配命中率。
@@ -2001,7 +2009,7 @@ export struct Page4View {
     return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态\n7. 获取当前摄像头画面\n8. 查看所有点位映射名称\n9. 导出点位映射为JSON'
   }
 
-  private buildOpenClawMessages(maxHistory: number = 14): Array<OpenClawChatMessage> {
+  private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
     const out: Array<OpenClawChatMessage> = []
     out.push({
       role: 'system',
@@ -2009,7 +2017,7 @@ export struct Page4View {
     })
     out.push({
       role: 'system',
-      content: this.buildOpenClawRuntimeContextPrompt()
+      content: this.buildOpenClawRuntimeContextPromptLite()
     })
 
     const begin: number = this.messages.length > maxHistory ? this.messages.length - maxHistory : 0
@@ -2047,10 +2055,8 @@ export struct Page4View {
       for (let i: number = 0; i < hosts.length; i++) {
         const host: string = hosts[i]
         const endpoint: string = buildOpenClawChatCompletionsUrl(host)
-        const connectTimeoutMs: number =
-          i <= 0 ? OPENCLAW_CONNECT_TIMEOUT_MS : Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs)
-        const readTimeoutMs: number =
-          i <= 0 ? OPENCLAW_READ_TIMEOUT_MS : Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
+        const connectTimeoutMs: number = Math.min(4000, this.adaptiveOpenClawConnectTimeoutMs)
+        const readTimeoutMs: number = Math.min(18000, this.adaptiveOpenClawReadTimeoutMs)
         const client: OpenClawGatewayClient = new OpenClawGatewayClient({
           endpoint,
           bearerToken: token,
@@ -2298,12 +2304,6 @@ export struct Page4View {
 
     if (this.containsAny(lower, ['视频', '相机'])) {
       this.pushAssistant(`视频模式=${videoStore.displayMode} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | status=${videoStore.statusText}`)
-      return
-    }
-
-    const openClawSingleTasks: Array<Page4PlannedTask> = await this.planTasksByOpenClaw(text)
-    if (openClawSingleTasks.length > 0) {
-      await this.executePlannedTasks(openClawSingleTasks)
       return
     }
 

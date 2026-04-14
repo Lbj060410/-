@@ -244,7 +244,6 @@ export class PathPlannerAStar {
         const nb: string = nbrs[i]
         // 节点阻塞直接跳过
         if (blockedSet.get(nb) === true) continue
-
         // 边阻塞也跳过（例如 G4-G2 问题就依赖这里的边定义与屏蔽）
         const edgeId: string = RouteEdgeCodec.normalize(current.id, nb)
         if (blockedEdgeSet.get(edgeId) === true) continue

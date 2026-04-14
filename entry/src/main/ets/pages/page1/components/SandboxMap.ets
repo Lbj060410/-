@@ -11,6 +11,8 @@ import { page1Store, Page1UiStore, XYPos, RouteObstaclePoint } from '../app/Page
 import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
+import fs from '@ohos.file.fs'
+import util from '@ohos.util'
 
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
@@ -91,6 +93,13 @@ interface MapBlockCellRect extends MapRoadRect {
   color: string
 }
 
+interface PlaceBindingPayload {
+  homeNodeId?: string
+  companyNodeId?: string
+}
+
+const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
+
 @Component
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
@@ -114,6 +123,9 @@ export struct SandboxMap {
   // 手动操作后的临时失权窗口
   @State private manualOverrideUntilMs: number = 0
   private lastTishixianDebugSig: string = ''
+  @State private homeNodeId: string = ''
+  @State private companyNodeId: string = ''
+  private lastPlaceBindingSig: string = ''
 
   // 手动操作后允许自动跟随恢复的等待时间（毫秒）
   private readonly MANUAL_OVERRIDE_MS: number = 4800
@@ -137,6 +149,7 @@ export struct SandboxMap {
     this.clampAll()
     this.syncCameraFollow()
     this.probeTishixianRenderInput()
+    this.reloadPlaceBindings()
 
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
@@ -359,13 +372,22 @@ export struct SandboxMap {
   private buildGridOverlay(): void {
     ForEach(this.visibleGridNodesForRender(), (n: GridNode): void => {
       if (!this.isCurrentNode(n.id) && this.shouldShowGridNode(n.id)) {
-        Column() {}
-        .width(this.gridDotSize())
-        .height(this.gridDotSize())
-        .borderRadius(this.gridDotSize() / 2)
-        .backgroundColor(this.nodeDotBg(n.id))
-        .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
-        .zIndex(2)
+        if (this.isSpecialPlaceNode(n.id)) {
+          Image(this.specialPlaceIcon(n.id))
+            .width(this.specialPlaceIconSize())
+            .height(this.specialPlaceIconSize())
+            .objectFit(ImageFit.Contain)
+            .position(this.store.gridNodeDotPos(n, this.specialPlaceIconSize()))
+            .zIndex(7)
+        } else {
+          Column() {}
+            .width(this.gridDotSize())
+            .height(this.gridDotSize())
+            .borderRadius(this.gridDotSize() / 2)
+            .backgroundColor(this.nodeDotBg(n.id))
+            .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
+            .zIndex(2)
+        }
 
         if (this.shouldShowNodeLabel(n.id)) {
           Text(n.id)
@@ -662,6 +684,70 @@ export struct SandboxMap {
       return $rawfile('icon/堵塞.png')
     }
     return $rawfile('icon/堵塞占用.png')
+  }
+
+  private specialPlaceIcon(nodeId: string): any {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length > 0 && x === this.homeNodeId) return $rawfile('icon/家.png')
+    return $rawfile('icon/公司.png')
+  }
+
+  private specialPlaceIconSize(): number {
+    if (this.isDetailLevel()) return 44
+    if (this.isRouteLevel()) return 40
+    return 36
+  }
+
+  private isSpecialPlaceNode(nodeId: string): boolean {
+    const x: string = nodeId.trim().toUpperCase()
+    if (x.length <= 0) return false
+    if (this.homeNodeId.length > 0 && x === this.homeNodeId) return true
+    if (this.companyNodeId.length > 0 && x === this.companyNodeId) return true
+    return false
+  }
+
+  private isValidGridId(id: string): boolean {
+    if (id.length !== 2) return false
+    const col: string = id.charAt(0)
+    const row: string = id.charAt(1)
+    return col >= 'A' && col <= 'G' && row >= '1' && row <= '7'
+  }
+
+  private reloadPlaceBindings(): void {
+    let home: string = ''
+    let company: string = ''
+    let f: fs.File | undefined = undefined
+    try {
+      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
+      const size: number = Number(st.size)
+      if (Number.isFinite(size) && size > 0 && size <= 4096) {
+        const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
+        const readLen: number = fs.readSync(f.fd, buf)
+        if (readLen > 0) {
+          const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
+          const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
+          const parsed: PlaceBindingPayload = JSON.parse(txt) as PlaceBindingPayload
+          const h: string = String(parsed.homeNodeId ?? '').trim().toUpperCase()
+          const c: string = String(parsed.companyNodeId ?? '').trim().toUpperCase()
+          home = this.isValidGridId(h) ? h : ''
+          company = this.isValidGridId(c) ? c : ''
+        }
+      }
+    } catch (_) {
+      home = ''
+      company = ''
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+
+    const sig: string = `${home}|${company}`
+    if (sig === this.lastPlaceBindingSig) return
+    this.lastPlaceBindingSig = sig
+    this.homeNodeId = home
+    this.companyNodeId = company
   }
 
   private nodeBlockTypeOf(nodeId: string): NodeBlockType {
@@ -1716,19 +1802,23 @@ export struct SandboxMap {
   @Builder
   private buildParkingLotGrid(): void {
     Column() {
-      this.buildOceanBand(this.parkingMapStyle)
+      this.buildOceanBand(this.parkingMapStyle, 'top')
 
-      ForEach(this.parkingMapStyle.rowHeights, (rowHeight: number): void => {
+      ForEach(this.parkingMapStyle.rowHeights, (rowHeight: number, rowIndex?: number): void => {
         this.buildHorizontalLane(this.parkingMapStyle)
 
         Row() {
-          this.buildSideParkingCell(this.parkingMapStyle, 'left')
+          if (rowIndex === 0) {
+            this.buildSideParkingCell(this.parkingMapStyle, 'left', rowIndex, 0)
+          } else {
+            this.buildSideParkingCell(this.parkingMapStyle, 'left', rowIndex, 0)
+          }
           ForEach(this.parkingSpotIndexes(), (_spotIndex: number): void => {
             this.buildVerticalLane(this.parkingMapStyle)
-            this.buildParkingCell(this.parkingMapStyle)
+            this.buildParkingCell(this.parkingMapStyle, rowIndex, _spotIndex + 1)
           }, (spotIndex: number): string => `spot-${spotIndex}`)
           this.buildVerticalLane(this.parkingMapStyle)
-          this.buildSideParkingCell(this.parkingMapStyle, 'right')
+          this.buildSideParkingCell(this.parkingMapStyle, 'right', rowIndex, 3)
         }
         .width('100%')
         .height(rowHeight)
@@ -1736,21 +1826,21 @@ export struct SandboxMap {
       }, (_rowHeight: number, index: number): string => `row-${index}`)
 
       this.buildHorizontalLane(this.parkingMapStyle)
-      this.buildOceanBand(this.parkingMapStyle)
+      this.buildOceanBand(this.parkingMapStyle, 'bottom')
     }
     .width('100%').height('100%').backgroundColor(this.parkingMapStyle.palette.ocean)
   }
 
   @Builder
-  private buildOceanBand(style: ParkingMapStyle): void {
+  private buildOceanBand(style: ParkingMapStyle, band: 'top' | 'bottom'): void {
     Row() {
-      this.buildOceanSideCell(style, 'left')
-      ForEach(this.parkingSpotIndexes(), (_spotIndex: number): void => {
+      this.buildOceanSideCell(style, 'left', band, 0)
+      ForEach(this.parkingSpotIndexes(), (spotIndex: number): void => {
         this.buildVerticalLane(style)
-        this.buildOceanCenterCell(style)
+        this.buildOceanCenterCell(style, band, spotIndex + 1)
       }, (spotIndex: number): string => `ocean-spot-${spotIndex}`)
       this.buildVerticalLane(style)
-      this.buildOceanSideCell(style, 'right')
+      this.buildOceanSideCell(style, 'right', band, 3)
     }
     .width('100%')
     .height(style.oceanBandHeight)
@@ -1774,29 +1864,90 @@ export struct SandboxMap {
   }
 
   @Builder
-  private buildParkingCell(style: ParkingMapStyle): void {
-    Column()
-      .layoutWeight(1)
-      .height('100%')
-      .backgroundColor(style.palette.parkingCell)
-      .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
+  private buildParkingCell(style: ParkingMapStyle, rowIndex?: number, blockIndex?: number): void {
+    Stack() {
+      Column()
+        .layoutWeight(1)
+        .height('100%')
+        .backgroundColor(style.palette.parkingCell)
+      if (this.hasParkingBlockImage(rowIndex, blockIndex)) {
+        Image(this.parkingBlockImagePath(rowIndex, blockIndex))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .clip(true)
+    .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
   }
 
   @Builder
-  private buildOceanCenterCell(style: ParkingMapStyle): void {
-    Column()
-      .layoutWeight(1)
-      .height('100%')
-      .backgroundColor(style.palette.ocean)
-      .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
+  private buildOceanCenterCell(style: ParkingMapStyle, band?: 'top' | 'bottom', blockIndex?: number): void {
+    Stack() {
+      Column()
+        .layoutWeight(1)
+        .height('100%')
+        .backgroundColor(style.palette.ocean)
+      if (this.hasOceanBandImage(band, blockIndex)) {
+        Image(this.oceanBandImagePath(band, blockIndex))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .clip(true)
+    .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
   }
 
   @Builder
-  private buildOceanSideCell(style: ParkingMapStyle, side: 'left' | 'right'): void {
-    Column()
-      .width(style.sidePaddingWidth)
-      .height('100%')
-      .backgroundColor(style.palette.ocean)
+  private buildOceanSideCell(style: ParkingMapStyle, side: 'left' | 'right', band?: 'top' | 'bottom', blockIndex?: number): void {
+    Stack() {
+      Column()
+        .width(style.sidePaddingWidth)
+        .height('100%')
+        .backgroundColor(style.palette.ocean)
+      if (this.hasOceanBandImage(band, blockIndex)) {
+        Image(this.oceanBandImagePath(band, blockIndex))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+      }
+    }
+    .width(style.sidePaddingWidth)
+    .height('100%')
+    .clip(true)
+    .border({
+      width: {
+        left: side === 'left' ? 0 : style.parkingCellBorderWidth,
+        right: side === 'right' ? 0 : style.parkingCellBorderWidth,
+        top: style.parkingCellBorderWidth,
+        bottom: style.parkingCellBorderWidth
+      },
+      color: style.palette.parkingCellBorder
+    })
+  }
+
+  @Builder
+  private buildSideParkingCell(style: ParkingMapStyle, side: 'left' | 'right', rowIndex?: number, blockIndex?: number): void {
+    Stack() {
+      Column()
+        .width(style.sidePaddingWidth)
+        .height('100%')
+        .backgroundColor(style.palette.parkingCell)
+      if (this.hasParkingBlockImage(rowIndex, blockIndex)) {
+        Image(this.parkingBlockImagePath(rowIndex, blockIndex))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+      }
+    }
+    .width(style.sidePaddingWidth)
+    .height('100%')
+    .clip(true)
       .border({
         width: {
           left: side === 'left' ? 0 : style.parkingCellBorderWidth,
@@ -1808,21 +1959,67 @@ export struct SandboxMap {
       })
   }
 
-  @Builder
-  private buildSideParkingCell(style: ParkingMapStyle, side: 'left' | 'right'): void {
-    Column()
-      .width(style.sidePaddingWidth)
-      .height('100%')
-      .backgroundColor(style.palette.parkingCell)
-      .border({
-        width: {
-          left: side === 'left' ? 0 : style.parkingCellBorderWidth,
-          right: side === 'right' ? 0 : style.parkingCellBorderWidth,
-          top: style.parkingCellBorderWidth,
-          bottom: style.parkingCellBorderWidth
-        },
-        color: style.palette.parkingCellBorder
-      })
+  private hasParkingBlockImage(rowIndex?: number, blockIndex?: number): boolean {
+    if (rowIndex === undefined || blockIndex === undefined) return false
+    if (rowIndex === 0 && blockIndex === 0) return true
+    if (rowIndex === 0 && blockIndex === 1) return true
+    if (rowIndex === 0 && blockIndex === 2) return true
+    if (rowIndex === 0 && blockIndex === 3) return true
+    if (rowIndex === 1 && blockIndex === 0) return true
+    if (rowIndex === 1 && blockIndex === 1) return true
+    if (rowIndex === 1 && blockIndex === 2) return true
+    if (rowIndex === 1 && blockIndex === 3) return true
+    if (rowIndex === 2 && blockIndex === 0) return true
+    if (rowIndex === 2 && blockIndex === 1) return true
+    if (rowIndex === 2 && blockIndex === 2) return true
+    if (rowIndex === 2 && blockIndex === 3) return true
+    if (rowIndex === 3 && blockIndex === 0) return true
+    if (rowIndex === 3 && blockIndex === 1) return true
+    if (rowIndex === 3 && blockIndex === 2) return true
+    if (rowIndex === 3 && blockIndex === 3) return true
+    return false
+  }
+
+  private parkingBlockImagePath(rowIndex?: number, blockIndex?: number): any {
+    if (rowIndex === undefined || blockIndex === undefined) return $rawfile('map/海昏侯.jpg')
+    // blockIndex: 每行白块从左到右编号 0..3
+    // rowIndex:   从上到下 0..3
+    if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/海昏侯.jpg')
+    if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/公司未设置.jpg')
+    if (rowIndex === 0 && blockIndex === 2) return $rawfile('map/省博物馆.jpg')
+    if (rowIndex === 0 && blockIndex === 3) return $rawfile('map/青山湖风景区.jpg')
+    if (rowIndex === 1 && blockIndex === 0) return $rawfile('map/梅岭.jpg')
+    if (rowIndex === 1 && blockIndex === 1) return $rawfile('map/滕王阁.jpg')
+    if (rowIndex === 1 && blockIndex === 2) return $rawfile('map/八一广场.jpg')
+    if (rowIndex === 1 && blockIndex === 3) return $rawfile('map/南昌之星摩天轮.jpg')
+    if (rowIndex === 2 && blockIndex === 0) return $rawfile('map/万寿宫.jpg')
+    if (rowIndex === 2 && blockIndex === 1) return $rawfile('map/八一起义纪念馆.jpg')
+    if (rowIndex === 2 && blockIndex === 2) return $rawfile('map/南昌火车站.jpg')
+    if (rowIndex === 2 && blockIndex === 3) return $rawfile('map/赣江风光带.jpg')
+    if (rowIndex === 3 && blockIndex === 0) return $rawfile('map/秋水广场.jpg')
+    if (rowIndex === 3 && blockIndex === 1) return $rawfile('map/八大山人纪念馆.jpg')
+    if (rowIndex === 3 && blockIndex === 2) return $rawfile('map/家未设置.jpg')
+    if (rowIndex === 3 && blockIndex === 3) return $rawfile('map/小兰工业园.jpg')
+    return $rawfile('map/海昏侯.jpg')
+  }
+
+  private hasOceanBandImage(band?: 'top' | 'bottom', blockIndex?: number): boolean {
+    if (band === undefined || blockIndex === undefined) return false
+    if (blockIndex < 0 || blockIndex > 3) return false
+    return true
+  }
+
+  private oceanBandImagePath(band?: 'top' | 'bottom', blockIndex?: number): any {
+    if (band === 'top') {
+      if (blockIndex === 0) return $rawfile('map/上边缘1.jpg')
+      if (blockIndex === 1) return $rawfile('map/上边缘2.jpg')
+      if (blockIndex === 2) return $rawfile('map/上边缘3.jpg')
+      return $rawfile('map/上边缘4.jpg')
+    }
+    if (blockIndex === 0) return $rawfile('map/下边缘1.jpg')
+    if (blockIndex === 1) return $rawfile('map/下边缘2.jpg')
+    if (blockIndex === 2) return $rawfile('map/下边缘3.jpg')
+    return $rawfile('map/下边缘4.jpg')
   }
 
   private parkingSpotIndexes(): Array<number> {

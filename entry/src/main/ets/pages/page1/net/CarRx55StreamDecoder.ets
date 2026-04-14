@@ -7,13 +7,12 @@
  */
 // entry/src/main/ets/pages/page1/net/CarRx55StreamDecoder.ets
 //
-// 工业级 RX 解码器
+// RX 解码器
 // 当前仅兼容：
 // 1) 55 AA 固定 8B，尾字节 BB
 //
 // 处理 TCP 粘包 / 半包 / 脏数据
 // 仅接收 0x55 开头并且第二字节为 0xAA 的帧
-//
 // 示例：
 //  8B: 55 AA BC B2 00 00 6E BB
 
