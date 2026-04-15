@@ -128,7 +128,7 @@ export struct SandboxMap {
   private lastPlaceBindingSig: string = ''
 
   // 手动操作后允许自动跟随恢复的等待时间（毫秒）
-  private readonly MANUAL_OVERRIDE_MS: number = 4800
+  private readonly MANUAL_OVERRIDE_MS: number = 2800
 
   private readonly FOLLOW_TICK_MS: number = 120
 
