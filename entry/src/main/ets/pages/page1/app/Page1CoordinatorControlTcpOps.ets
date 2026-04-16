@@ -287,6 +287,7 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
     const lux: number = decodeLuxFromBbFrame(f)
     msg = `RX 55AA cmd=0xBB 光照值=${lux}`
   } else if (f.cmd === 0xBC) {
+    /*1.从回传帧中提取超声波状态码，作为障碍判断依据*/
     const ultrasonicP1: number = f.p1 & 0xff
 
     if (ultrasonicP1 === 0x04) {
@@ -304,7 +305,7 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
       s.pushLog(msg)
       return
     }
-
+    /* 当收到00，01，02，进入超声波障碍判断*/
     if (ultrasonicP1 === 0x00 || ultrasonicP1 === 0x01 || ultrasonicP1 === 0x02) {
       const recvAtMs: number = Date.now()
       const parkingCtx: boolean =
@@ -313,7 +314,7 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
       ctx.lastUltrasonicAtMs = recvAtMs
       msg = `RX 55AA cmd=0xBC 超声波结果 p1=0x${byteToHex(ultrasonicP1)}`
       appendDiagKeyRxFrame(ctx, f, `超声波结果 p1=0x${byteToHex(ultrasonicP1)}`)
-
+      /*下一个点位不是停车位*/
       if (parkingCtx) {
         s.pushLog(
           ultrasonicP1 === 0x01
@@ -331,9 +332,12 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
             ? '超声波：行驶前方有障碍物(0x01)'
             : `超声波：行驶态结果 p1=0x${byteToHex(ultrasonicP1)}`
         )
+        /*2当状态码等于0x01时，判定前方存在障碍物*/
         if (ultrasonicP1 === 0x01) {
+          /*3写入page2的复盘，可以回看障碍事件，便于可视化追踪*/
           replayArchiveService.onObstacleTriggered('ULTRASONIC', '超声波检测到障碍并触发避障')
           void page2ReplayService.onUltrasonicObstacleSignal('接收到小车 0x01 障碍物信号')
+          /*4把障碍事件送入避障队列，交给重规划链路立即处理*/
           ctx.queueDrivingUltrasonicObstacle(ctx.lastUltrasonicAtMs)
         }
       }

@@ -227,37 +227,35 @@ export class PathPlannerAStar {
 
     // 主循环：每轮扩展一个“当前最优节点”
     while (open.length > 0) {
+      /*1.先从候选集合里取当前最优节点*/
       const current: AStarNode = PathPlannerAStar.popMinF(open)
+      /*2.跳过已经处理过的节点 */
       if (closed.get(current.id) === true) continue
-
-      // 终点出队时即得到最优路径（启发函数一致时）
+      /*3.命中终点立刻回溯路径并返回结果，让导航能够尽快进入执行*/
       if (current.id === goalId) {
         const path: Array<string> = PathPlannerAStar.reconstruct(goalId, parent)
         return { ok: true, reason: 'ok', path: path }
       }
 
       closed.set(current.id, true)
-
-      // 邻接扩展：把 current 的相邻节点逐个评估
       const nbrs: Array<string> = PathPlannerAStar.neighbors(current.id)
       for (let i: number = 0; i < nbrs.length; i++) {
         const nb: string = nbrs[i]
-        // 节点阻塞直接跳过
         if (blockedSet.get(nb) === true) continue
-        // 边阻塞也跳过（例如 G4-G2 问题就依赖这里的边定义与屏蔽）
         const edgeId: string = RouteEdgeCodec.normalize(current.id, nb)
         if (blockedEdgeSet.get(edgeId) === true) continue
         if (closed.get(nb) === true) continue
-
-        // 单步代价统一按 1 处理，当前路网属于“边权一致最短跳数”
+        /*4.计算从当前节点走到邻居的新代价，是后续“是否更新最优路径”的依据*/
         const tentativeG: number = current.g + 1
         const oldG: number | undefined = bestG.get(nb)
         if (oldG !== undefined && tentativeG >= oldG) continue
 
         parent.set(nb, current.id)
+        /*5.记录更优前驱关系和代价，为最终回溯整条最优路径做准备*/
         bestG.set(nb, tentativeG)
         const h: number = PathPlannerAStar.heuristic(nb, goalId)
         const f: number = tentativeG + h
+        /*6.把更新后的候选节点重新入队，继续下一轮最优搜索*/
         open.push(new AStarNode(nb, tentativeG, f, current.id))
       }
     }

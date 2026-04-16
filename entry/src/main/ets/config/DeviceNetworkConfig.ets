@@ -17,13 +17,34 @@ export const CAR_CAMERA_PASS: string = '888888'
 // 对于真实设备：
 // 1) 将 OPENCLAW_GATEWAY_HOST 设置为你的 PC 局域网 IP，或保持空以自动尝试 Wi-Fi 网关 IP。
 // 2) 通过应用设置 UI 设置 OPENCLAW_GATEWAY_TOKEN — 不要在此处硬编码令牌。
-export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.100'
-export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = ''
+export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.101'
+export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '192.168.156.102'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
 export const OPENCLAW_GATEWAY_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'  // 与运行中的网关令牌保持同步
+// 可选：放置具备 operator.read/operator.write 的节点令牌作为回退，避免 scope 不匹配导致能力受限。
+export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const OPENCLAW_CHAT_MODEL: string = 'deepseek/deepseek-chat'
 export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 8000
-export const OPENCLAW_READ_TIMEOUT_MS: number = 90000
+export const OPENCLAW_READ_TIMEOUT_MS: number = 15000
+
+// PC 工具网关配置（MVP）：
+// 用于执行受控工具：read_file / process_list / exec_cmd(白名单)。
+export const PC_TOOL_GATEWAY_HOST: string = '192.168.156.101'
+export const PC_TOOL_GATEWAY_PORT: number = 18789
+export const PC_TOOL_GATEWAY_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'
+export const PC_TOOL_GATEWAY_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
+export const PC_TOOL_CONNECT_TIMEOUT_MS: number = 5000
+export const PC_TOOL_READ_TIMEOUT_MS: number = 20000
+
+// 鸿蒙平板伴侣代理配置（MVP）：
+// 通过代理 App 执行受控跨应用能力（如设置闹钟、打开应用）。
+export const TABLET_COMPANION_HOST: string = '192.168.156.101'
+export const TABLET_COMPANION_PORT: number = 18789
+export const TABLET_COMPANION_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'
+export const TABLET_COMPANION_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
+export const TABLET_COMPANION_NODE_ID: string = 'tablet-main'
+export const TABLET_COMPANION_CONNECT_TIMEOUT_MS: number = 5000
+export const TABLET_COMPANION_READ_TIMEOUT_MS: number = 20000
 
 // 仅作为后备。运行时应优先使用当前 Wi-Fi 网关/发现结果。
 
@@ -89,4 +110,94 @@ export function resolveOpenClawHostCandidates(gatewayIp: string): Array<string> 
 
 export function buildOpenClawChatCompletionsUrl(host: string): string {
   return `http://${host}:${OPENCLAW_GATEWAY_PORT}/v1/chat/completions`
+}
+
+export function resolvePcToolGatewayHost(gatewayIp: string): string {
+  const configured: string = PC_TOOL_GATEWAY_HOST.trim()
+  if (configured.length > 0) return configured
+  return resolveOpenClawHost(gatewayIp)
+}
+
+export function resolvePcToolGatewayHostCandidates(gatewayIp: string): Array<string> {
+  const configured: string = PC_TOOL_GATEWAY_HOST.trim()
+  if (configured.length > 0) {
+    const out: Array<string> = []
+    const pushUnique = (ip: string): void => {
+      const one: string = ip.trim()
+      if (one.length <= 0) return
+      for (let i: number = 0; i < out.length; i++) {
+        if (out[i] === one) return
+      }
+      out.push(one)
+    }
+    pushUnique(configured)
+    const fallback: Array<string> = resolveOpenClawHostCandidates(gatewayIp)
+    for (let i: number = 0; i < fallback.length; i++) pushUnique(fallback[i])
+    return out
+  }
+  return resolveOpenClawHostCandidates(gatewayIp)
+}
+
+export function buildPcToolGatewayUrl(host: string, toolName: string): string {
+  const clean: string = toolName.trim().replace(/^\/+/, '')
+  return `http://${host}:${PC_TOOL_GATEWAY_PORT}/v1/tools/${clean}`
+}
+
+export function resolveTabletCompanionHostCandidates(gatewayIp: string): Array<string> {
+  const configured: string = TABLET_COMPANION_HOST.trim()
+  if (configured.length > 0) {
+    const out: Array<string> = []
+    const pushUnique = (ip: string): void => {
+      const one: string = ip.trim()
+      if (one.length <= 0) return
+      for (let i: number = 0; i < out.length; i++) {
+        if (out[i] === one) return
+      }
+      out.push(one)
+    }
+    pushUnique(configured)
+    const fallback: Array<string> = resolveOpenClawHostCandidates(gatewayIp)
+    for (let i: number = 0; i < fallback.length; i++) pushUnique(fallback[i])
+    return out
+  }
+  return resolveOpenClawHostCandidates(gatewayIp)
+}
+
+export function buildTabletCompanionUrl(host: string, action: string): string {
+  const clean: string = action.trim().replace(/^\/+/, '')
+  return `http://${host}:${TABLET_COMPANION_PORT}/v1/tablet/${clean}`
+}
+
+function pushUniqueToken(out: Array<string>, token: string): void {
+  const one: string = token.trim()
+  if (one.length <= 0) return
+  for (let i: number = 0; i < out.length; i++) {
+    if (out[i] === one) return
+  }
+  out.push(one)
+}
+
+export function resolveOpenClawTokenCandidates(): Array<string> {
+  const out: Array<string> = []
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN_FALLBACK)
+  return out
+}
+
+export function resolvePcToolTokenCandidates(): Array<string> {
+  const out: Array<string> = []
+  pushUniqueToken(out, PC_TOOL_GATEWAY_TOKEN)
+  pushUniqueToken(out, PC_TOOL_GATEWAY_TOKEN_FALLBACK)
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN_FALLBACK)
+  return out
+}
+
+export function resolveTabletCompanionTokenCandidates(): Array<string> {
+  const out: Array<string> = []
+  pushUniqueToken(out, TABLET_COMPANION_TOKEN)
+  pushUniqueToken(out, TABLET_COMPANION_TOKEN_FALLBACK)
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
+  pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN_FALLBACK)
+  return out
 }

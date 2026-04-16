@@ -194,14 +194,16 @@ export function planPath(ctx: any, dest: string): void {
     }
     return
   }
-
+  /*1.基于最新起点、终点和障碍信息重新计算路径*/
   const res: any = PathPlannerAStar.plan(start, goal, blocked, blockedEdges)
+  /*2.如果重规划失败时立即停止旧路径执行，防止错误动作继续下发*/
   if (!res.ok) {
+    /*3.把新路径替换到当前执行状态*/
     s.setPath([], 'A*失败')
     s.pushLog(`A*: FAIL reason=${res.reason} start=${start} goal=${goal} blockedN=[${blocked.join(',')}] blockedE=[${blockedEdges.join(',')}]`)
     return
   }
-
+  /*4.记录重规划前后差异，便于后续回放和评估*/
   s.setPath(res.path, 'A*')
   replayArchiveService.onPathReplanned(oldPath, res.path, 'A*')
   s.currentSnapNodeId = start

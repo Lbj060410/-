@@ -15,6 +15,7 @@ const DEFAULT_YOLOV26BARRIER_MODEL: string = 'yolov26barrier'
 
 // 模型标签表（仅保留当前项目内置可用模型）
 const MODEL_LABELS: Record<string, string[]> = {
+  //添加红绿灯的模型标签
   'honglvdeng': ['red', 'yellow', 'green'],
   'yolov26barrier': ['shigong', 'TrafficLight', 'GetOffTheCar']
 }
@@ -26,6 +27,7 @@ const MODEL_LABELS: Record<string, string[]> = {
 export const SUBTYPE_MODEL: Record<number, string> = {
   [RecognitionSubtype.OBSTACLE]: DEFAULT_YOLOV26BARRIER_MODEL,
   [RecognitionSubtype.YOLO]: DEFAULT_YOLOV26BARRIER_MODEL,
+  //添加红绿灯的离线模型映射
   [RecognitionSubtype.TRAFFIC_LIGHT]: 'honglvdeng',
   [RecognitionSubtype.YOLOV26BARRIER]: DEFAULT_YOLOV26BARRIER_MODEL
 }

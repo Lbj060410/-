@@ -1,4 +1,51 @@
 {
   "version": 1,
-  "jobs": []
+  "jobs": [
+    {
+      "id": "12aa1f18-8fa2-49a3-a5f9-f3f167373a0c",
+      "agentId": "main",
+      "sessionKey": "agent:main:openai:b2d9f3d9-c28c-420a-a928-f178b5aa6fc7",
+      "name": "闹钟提醒",
+      "enabled": true,
+      "deleteAfterRun": true,
+      "createdAtMs": 1776305559683,
+      "updatedAtMs": 1776305559683,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-04-16T04:14:00.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "闹钟提醒：现在是12:14，您设置的闹钟响了。"
+      },
+      "state": {
+        "nextRunAtMs": 1776312840000
+      }
+    },
+    {
+      "id": "7e71ad85-f16a-4a93-8e41-4b1a7856a5c5",
+      "agentId": "main",
+      "sessionKey": "agent:main:openai:9daa11b6-e92b-4032-b710-9eefe0879e65",
+      "name": "闹钟 7:30 你好",
+      "enabled": true,
+      "deleteAfterRun": true,
+      "createdAtMs": 1776306070993,
+      "updatedAtMs": 1776306070993,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-04-16T23:30:00.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "闹钟：你好"
+      },
+      "state": {
+        "nextRunAtMs": 1776382200000
+      }
+    }
+  ]
 }

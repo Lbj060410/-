@@ -14,15 +14,31 @@ import { commStore } from '../../state/CommStore'
 import { recogStore } from '../../state/RecogStore'
 import { videoStore } from '../../state/VideoStore'
 import {
+  buildPcToolGatewayUrl,
+  buildTabletCompanionUrl,
   buildOpenClawChatCompletionsUrl,
   OPENCLAW_CHAT_MODEL,
   OPENCLAW_CONNECT_TIMEOUT_MS,
   OPENCLAW_GATEWAY_TOKEN,
+  resolveOpenClawTokenCandidates,
+  PC_TOOL_CONNECT_TIMEOUT_MS,
+  PC_TOOL_GATEWAY_TOKEN,
+  resolvePcToolTokenCandidates,
+  PC_TOOL_READ_TIMEOUT_MS,
+  TABLET_COMPANION_CONNECT_TIMEOUT_MS,
+  TABLET_COMPANION_NODE_ID,
+  TABLET_COMPANION_READ_TIMEOUT_MS,
+  TABLET_COMPANION_TOKEN,
+  resolveTabletCompanionTokenCandidates,
   OPENCLAW_READ_TIMEOUT_MS,
+  resolveTabletCompanionHostCandidates,
+  resolvePcToolGatewayHostCandidates,
   resolveOpenClawHostCandidates
 } from '../../config/DeviceNetworkConfig'
 import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResolver'
 import { OpenClawGatewayClient, OpenClawChatMessage } from '../../services/assistant/OpenClawGatewayClient'
+import { PcToolGatewayClient } from '../../services/assistant/PcToolGatewayClient'
+import { TabletCompanionClient } from '../../services/assistant/TabletCompanionClient'
 import { installPage4TencentVoiceInputAdapter } from '../../services/assistant/Page4TencentVoiceInputAdapter'
 import { page4TencentLocalTtsService } from '../../services/assistant/Page4TencentLocalTtsService'
 import hilog from '@ohos.hilog'
@@ -131,12 +147,21 @@ export struct Page4View {
   private lastGoodOpenClawHost: string = ''
   private openClawHostCooldownUntilMs: Record<string, number> = {}
   private readonly openClawHostCooldownMs: number = 25000
-  private readonly openClawRetryConnectTimeoutMs: number = 5000
-  private readonly openClawRetryReadTimeoutMs: number = 45000
-  private adaptiveOpenClawConnectTimeoutMs: number = 5000
-  private adaptiveOpenClawReadTimeoutMs: number = 45000
+  private readonly openClawRetryConnectTimeoutMs: number = 8000
+  private readonly openClawRetryReadTimeoutMs: number = 15000
+  private adaptiveOpenClawConnectTimeoutMs: number = 8000
+  private adaptiveOpenClawReadTimeoutMs: number = 15000
+  private readonly pcToolAllowedCmdPrefixes: Array<string> = [
+    'Get-Process',
+    'Get-Service',
+    'Get-ChildItem',
+    'Get-Content',
+    'Test-Path',
+    'whoami',
+    'hostname'
+  ]
   private readonly openClawSystemPrompt: string =
-    '你是智能小车的车控助手。优先使用简洁中文回复；涉及行驶或安全动作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
+    '你是无人物流车的车控与调度助手。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
   private promptQueueTail: Promise<void> = Promise.resolve()
   private queuedPromptCount: number = 0
   private queuedPromptCap: number = 24
@@ -1050,8 +1075,8 @@ export struct Page4View {
     if (weak) {
       videoStore.setRecognizeIntervalMs(450)
       videoStore.switchCooldownMs = 4000
-      this.adaptiveOpenClawConnectTimeoutMs = 7000
-      this.adaptiveOpenClawReadTimeoutMs = 52000
+      this.adaptiveOpenClawConnectTimeoutMs = 10000
+      this.adaptiveOpenClawReadTimeoutMs = 20000
       this.queuedPromptCap = this.weakNetQueuedPromptCap
       if (forceNotify) {
         this.pushAssistant('已启用夜间/弱网策略：低频识别、延长超时、队列上限收紧。')
@@ -1316,9 +1341,278 @@ export struct Page4View {
       out.push(this.buildReceipt(`视频=${videoStore.rtspStateText} fps=${videoStore.diagVideoFps}`, true, true))
       return out
     }
+    if (name === 'set_recognition') {
+      const enabled: boolean | undefined = this.parseMethodBooleanArg(args, 'enabled')
+      if (typeof enabled === 'undefined') {
+        out.push(this.buildReceipt('set_recognition 参数错误 enabled', false, false))
+        return out
+      }
+      videoStore.setRecognitionEnabled(enabled)
+      out.push(this.buildReceipt(enabled ? '识别已开启' : '识别已关闭', true, true))
+      return out
+    }
+    if (name === 'set_auto_report') {
+      const enabled: boolean | undefined = this.parseMethodBooleanArg(args, 'enabled')
+      if (typeof enabled === 'undefined') {
+        out.push(this.buildReceipt('set_auto_report 参数错误 enabled', false, false))
+        return out
+      }
+      recogStore.setAutoReportEnabled(enabled)
+      out.push(this.buildReceipt(enabled ? '自动回传已开启' : '自动回传已关闭', true, true))
+      return out
+    }
+    if (name === 'set_vision_mode') {
+      const mode: string = String(args['mode'] ?? '').trim().toLowerCase()
+      if (mode === 'traffic') {
+        videoStore.setPage2TrafficEnabled(true)
+        out.push(this.buildReceipt('视觉模型已切换为 traffic', true, true))
+        return out
+      }
+      if (mode === 'barrier' || mode === 'yolov26barrier') {
+        videoStore.setPage2Yolov26BarrierEnabled(true)
+        out.push(this.buildReceipt('视觉模型已切换为 yolov26barrier', true, true))
+        return out
+      }
+      out.push(this.buildReceipt(`set_vision_mode 参数错误 mode=${mode}`, false, false))
+      return out
+    }
+    if (name === 'set_adaptive_strategy') {
+      const mode: string = String(args['mode'] ?? '').trim().toLowerCase()
+      if (mode === 'weak' || mode === 'night') {
+        videoStore.setRecognizeIntervalMs(450)
+        videoStore.switchCooldownMs = 4000
+        this.adaptiveOpenClawConnectTimeoutMs = 10000
+        this.adaptiveOpenClawReadTimeoutMs = 20000
+        this.queuedPromptCap = this.weakNetQueuedPromptCap
+        out.push(this.buildReceipt('策略已切换为弱网/夜间', true, true))
+        return out
+      }
+      if (mode === 'normal') {
+        videoStore.setRecognizeIntervalMs(220)
+        videoStore.switchCooldownMs = 2500
+        this.adaptiveOpenClawConnectTimeoutMs = this.openClawRetryConnectTimeoutMs
+        this.adaptiveOpenClawReadTimeoutMs = this.openClawRetryReadTimeoutMs
+        this.queuedPromptCap = this.normalQueuedPromptCap
+        out.push(this.buildReceipt('策略已切换为常规', true, true))
+        return out
+      }
+      out.push(this.buildReceipt(`set_adaptive_strategy 参数错误 mode=${mode}`, false, false))
+      return out
+    }
+    if (name === 'tablet_set_alarm') {
+      const hourText: string = String(args['hour'] ?? '').trim()
+      const minuteText: string = String(args['minute'] ?? '').trim()
+      const label: string = String(args['label'] ?? '').trim()
+      const hour: number = Math.trunc(Number(hourText))
+      const minute: number = Math.trunc(Number(minuteText))
+      if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        out.push(this.buildReceipt('tablet_set_alarm 参数错误 hour/minute', false, false))
+        return out
+      }
+      const r = await this.callTabletCompanion('set_alarm', { hour, minute, label })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'tablet_open_app') {
+      const bundleName: string = String(args['bundleName'] ?? args['bundle'] ?? '').trim()
+      if (bundleName.length <= 0) {
+        out.push(this.buildReceipt('tablet_open_app 参数错误 bundleName为空', false, false))
+        return out
+      }
+      const r = await this.callTabletCompanion('open_app', { bundleName })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'tablet_list_alarm') {
+      const r = await this.callTabletCompanion('list_alarm', {})
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'tablet_start_ability') {
+      const bundleName: string = String(args['bundleName'] ?? args['bundle'] ?? '').trim()
+      const abilityName: string = String(args['abilityName'] ?? '').trim()
+      const paramsRaw: Object | string | number | boolean | undefined = args['parameters']
+      const parameters: Record<string, Object | string | number | boolean | undefined> =
+        typeof paramsRaw === 'object' && paramsRaw !== null
+          ? (paramsRaw as Record<string, Object | string | number | boolean | undefined>)
+          : {}
+      if (bundleName.length <= 0) {
+        out.push(this.buildReceipt('tablet_start_ability 参数错误 bundleName为空', false, false))
+        return out
+      }
+      const r = await this.callTabletCompanion('start_ability', { bundleName, abilityName, parameters })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'tablet_open_url') {
+      const url: string = String(args['url'] ?? '').trim()
+      if (url.length <= 0) {
+        out.push(this.buildReceipt('tablet_open_url 参数错误 url为空', false, false))
+        return out
+      }
+      const r = await this.callTabletCompanion('open_url', { url })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'read_file') {
+      const path: string = String(args['path'] ?? '').trim()
+      if (path.length <= 0) {
+        out.push(this.buildReceipt('read_file 参数错误 path为空', false, false))
+        return out
+      }
+      const r = await this.callPcToolGateway('read_file', { path })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'process_list') {
+      const r = await this.callPcToolGateway('process_list', {})
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
+    if (name === 'exec_cmd') {
+      const cmd: string = String(args['cmd'] ?? args['command'] ?? '').trim()
+      if (cmd.length <= 0) {
+        out.push(this.buildReceipt('exec_cmd 参数错误 cmd为空', false, false))
+        return out
+      }
+      if (!this.isAllowedPcExecCmd(cmd)) {
+        out.push(this.buildReceipt(`exec_cmd 被策略拒绝:${cmd}`, false, false))
+        return out
+      }
+      const r = await this.callPcToolGateway('exec_cmd', { cmd })
+      out.push(this.buildReceipt(r.summary, r.ok, r.ok))
+      return out
+    }
 
     out.push(this.buildReceipt(`未实现方法:${name}`, false, false))
     return out
+  }
+
+  private isAllowedPcExecCmd(cmd: string): boolean {
+    const s: string = cmd.trim().toLowerCase()
+    if (s.length <= 0) return false
+    if (s.indexOf('remove-item') >= 0 || s.indexOf('rm ') >= 0 || s.indexOf('del ') >= 0) return false
+    if (s.indexOf('format-') >= 0 || s.indexOf('shutdown') >= 0 || s.indexOf('restart-computer') >= 0) return false
+    for (let i: number = 0; i < this.pcToolAllowedCmdPrefixes.length; i++) {
+      const p: string = this.pcToolAllowedCmdPrefixes[i].toLowerCase()
+      if (s === p || s.startsWith(`${p} `)) return true
+    }
+    return false
+  }
+
+  private summarizePcToolText(toolName: string, text: string): string {
+    const body: string = text.trim()
+    if (body.length <= 0) return `${toolName}: 空结果`
+    const oneLine: string = body.split('\n').join(' ').split('\r').join(' ')
+    const short: string = oneLine.length > 120 ? `${oneLine.substring(0, 120)}...` : oneLine
+    return `${toolName}: ${short}`
+  }
+
+  private summarizeTabletCompanionText(action: string, text: string): string {
+    const body: string = text.trim()
+    if (body.length <= 0) return `tablet.${action}: 空结果`
+    const oneLine: string = body.split('\n').join(' ').split('\r').join(' ')
+    const short: string = oneLine.length > 120 ? `${oneLine.substring(0, 120)}...` : oneLine
+    return `tablet.${action}: ${short}`
+  }
+
+  private normalizeGatewayErrorText(raw: string): string {
+    const text: string = raw.trim()
+    if (text.length <= 0) return '请求失败'
+    const low: string = text.toLowerCase()
+    if (low.indexOf('missing scope') >= 0) {
+      return `权限不足(${text})，请改用具备 operator.read/operator.write 的 token`
+    }
+    if (low.indexOf('timeout') >= 0 || low.indexOf('timed out') >= 0 || low.indexOf('connect failed') >= 0) {
+      return `网络超时(${text})`
+    }
+    if (low.indexOf('unauthorized') >= 0 || low.indexOf('forbidden') >= 0 || low.indexOf('401') >= 0 || low.indexOf('403') >= 0) {
+      return `鉴权失败(${text})`
+    }
+    return text
+  }
+
+  private async callPcToolGateway(
+    toolName: string,
+    args: Record<string, Object | string | number | boolean | undefined>
+  ): Promise<{ ok: boolean, summary: string }> {
+    const primaryToken: string = PC_TOOL_GATEWAY_TOKEN.trim()
+    const tokens: Array<string> = resolvePcToolTokenCandidates()
+    if (tokens.length <= 0 && primaryToken.length <= 0) {
+      return { ok: false, summary: 'PC_TOOL_GATEWAY_TOKEN 为空，请先配置。' }
+    }
+    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
+    const hosts: Array<string> = this.rankOpenClawHosts(resolvePcToolGatewayHostCandidates(gatewayIp))
+    if (hosts.length <= 0) {
+      return { ok: false, summary: '未检测到 PC 工具网关主机地址。' }
+    }
+    const errs: Array<string> = []
+    for (let i: number = 0; i < hosts.length; i++) {
+      const host: string = hosts[i]
+      for (let k: number = 0; k < tokens.length; k++) {
+        const token: string = tokens[k]
+        const client: PcToolGatewayClient = new PcToolGatewayClient({
+          endpoint: buildPcToolGatewayUrl(host, toolName),
+          bearerToken: token,
+          connectTimeoutMs: PC_TOOL_CONNECT_TIMEOUT_MS,
+          readTimeoutMs: PC_TOOL_READ_TIMEOUT_MS
+        })
+        const result = await client.call(args)
+        if (result.ok) {
+          this.markOpenClawHostSuccess(host)
+          return { ok: true, summary: this.summarizePcToolText(toolName, result.text) }
+        }
+        const errText: string = this.normalizeGatewayErrorText(result.errorText)
+        errs.push(`${host}/${k + 1}:${errText}`)
+      }
+      this.markOpenClawHostFail(host)
+    }
+    const merged: string = errs.length > 0 ? errs.join(' | ') : '请求失败'
+    return { ok: false, summary: `${toolName}: ${merged}` }
+  }
+
+  private async callTabletCompanion(
+    action: string,
+    args: Record<string, Object | string | number | boolean | undefined>
+  ): Promise<{ ok: boolean, summary: string }> {
+    const primaryToken: string = TABLET_COMPANION_TOKEN.trim()
+    const tokens: Array<string> = resolveTabletCompanionTokenCandidates()
+    if (tokens.length <= 0 && primaryToken.length <= 0) {
+      return { ok: false, summary: 'TABLET_COMPANION_TOKEN 为空，请先配置。' }
+    }
+    const nodeId: string = TABLET_COMPANION_NODE_ID.trim()
+    if (nodeId.length <= 0) {
+      return { ok: false, summary: 'TABLET_COMPANION_NODE_ID 为空，请先配置。' }
+    }
+    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
+    const hosts: Array<string> = this.rankOpenClawHosts(resolveTabletCompanionHostCandidates(gatewayIp))
+    if (hosts.length <= 0) {
+      return { ok: false, summary: '未检测到平板伴侣代理主机地址。' }
+    }
+    const errs: Array<string> = []
+    for (let i: number = 0; i < hosts.length; i++) {
+      const host: string = hosts[i]
+      for (let k: number = 0; k < tokens.length; k++) {
+        const token: string = tokens[k]
+        const client: TabletCompanionClient = new TabletCompanionClient({
+          endpoint: buildTabletCompanionUrl(host, action),
+          bearerToken: token,
+          nodeId,
+          connectTimeoutMs: TABLET_COMPANION_CONNECT_TIMEOUT_MS,
+          readTimeoutMs: TABLET_COMPANION_READ_TIMEOUT_MS
+        })
+        const result = await client.invoke(args)
+        if (result.ok) {
+          this.markOpenClawHostSuccess(host)
+          return { ok: true, summary: this.summarizeTabletCompanionText(action, result.text) }
+        }
+        const errText: string = this.normalizeGatewayErrorText(result.errorText)
+        errs.push(`${host}/${k + 1}:${errText}`)
+      }
+      this.markOpenClawHostFail(host)
+    }
+    const merged: string = errs.length > 0 ? errs.join(' | ') : '请求失败'
+    return { ok: false, summary: `tablet.${action}: ${merged}` }
   }
 
   private splitPromptToClauses(text: string): Array<string> {
@@ -1405,7 +1699,8 @@ export struct Page4View {
       '自动跟随', '自动驾驶', '真车模式', '仿真模式', 'real_send', 'dry_run',
       '撤销', '回到安全点',
       '抓拍', '截图', '拍照', '相机', '视频',
-      '查询状态', '状态', '识别', '视觉', '通信', '网络'
+      '查询状态', '状态', '识别', '视觉', '通信', '网络',
+      '读取文件', '读文件', '文件内容', '进程列表', '查询进程', '执行命令', '命令行', 'process', 'read_file', 'exec_cmd'
     ]
     return this.containsAny(lower, keywords)
   }
@@ -1442,7 +1737,19 @@ export struct Page4View {
       'query_status',
       'query_vision',
       'query_comm',
-      'query_video'
+      'query_video',
+      'read_file',
+      'process_list',
+      'exec_cmd',
+      'set_recognition',
+      'set_auto_report',
+      'set_vision_mode',
+      'set_adaptive_strategy',
+      'tablet_set_alarm',
+      'tablet_open_app',
+      'tablet_list_alarm',
+      'tablet_start_ability',
+      'tablet_open_url'
     ]
     for (let i: number = 0; i < allowed.length; i++) {
       if (allowed[i] === name) return true
@@ -1549,8 +1856,8 @@ export struct Page4View {
   }
 
   private async planTasksByOpenClaw(input: string): Promise<Array<Page4PlannedTask>> {
-    const token: string = OPENCLAW_GATEWAY_TOKEN.trim()
-    if (token.length <= 0) return []
+    const tokenCandidates: Array<string> = resolveOpenClawTokenCandidates()
+    if (tokenCandidates.length <= 0) return []
     const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
     const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
     if (hosts.length <= 0) return []
@@ -1559,13 +1866,14 @@ export struct Page4View {
       {
         role: 'system',
         content:
-          '你是车控任务解析器。把用户一句话解析为任务数组，输出严格 JSON：' +
+          '你是无人物流车任务解析器。把用户一句话解析为任务数组，输出严格 JSON：' +
           '{"tasks":[{"type":"route","dest":"B2"},{"type":"method","name":"set_auto_follow","args":{"enabled":true}}]}。' +
           'type 允许 route/action/auto_follow/send_mode/capture_frame/undo/query_status/query_vision/query_comm/query_video/method。' +
           'route.dest 必须是 A1-G7 这样的点位；action 仅 GO/BACK/LEFT/RIGHT/UTURN/STOP/SCRAM；' +
           'auto_follow 使用 enabled=true/false；send_mode 使用 mode=REAL_SEND/DRY_RUN。' +
-          'method.name 仅允许 start_manual_route/send_action/set_auto_follow/set_send_mode/speak_text/undo_to_safe_point/get_camera_frame/query_status/query_vision/query_comm/query_video。' +
-          'method.args: start_manual_route 传 dest; send_action 传 action; set_auto_follow 传 enabled; set_send_mode 传 mode; speak_text 传 text。' +
+          'method.name 仅允许 start_manual_route/send_action/set_auto_follow/set_send_mode/speak_text/undo_to_safe_point/get_camera_frame/query_status/query_vision/query_comm/query_video/read_file/process_list/exec_cmd/set_recognition/set_auto_report/set_vision_mode/set_adaptive_strategy/tablet_set_alarm/tablet_open_app/tablet_list_alarm/tablet_start_ability/tablet_open_url。' +
+          'method.args: start_manual_route 传 dest; send_action 传 action; set_auto_follow 传 enabled; set_send_mode 传 mode; speak_text 传 text; read_file 传 path; exec_cmd 传 cmd; set_recognition 传 enabled; set_auto_report 传 enabled; set_vision_mode 传 mode=traffic|barrier; set_adaptive_strategy 传 mode=normal|weak; tablet_set_alarm 传 hour/minute/label; tablet_open_app 传 bundleName; tablet_start_ability 传 bundleName/abilityName/parameters; tablet_open_url 传 url。' +
+          '请按物流场景理解用户意图（如去装货点、去卸货点、返仓、暂停、急停），但输出字段必须严格符合上述枚举与格式。' +
           '注意：对于 get_camera_frame 方法，系统会自动获取摄像头画面。你只需要返回标准的JSON任务数组即可。' +
           '不要输出任何解释文本。'
       },
@@ -1581,19 +1889,28 @@ export struct Page4View {
 
     for (let i: number = 0; i < hosts.length; i++) {
       const host: string = hosts[i]
-      const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-        endpoint: buildOpenClawChatCompletionsUrl(host),
-        bearerToken: token,
-        model: OPENCLAW_CHAT_MODEL,
-        connectTimeoutMs: Math.min(3500, this.adaptiveOpenClawConnectTimeoutMs),
-        readTimeoutMs: Math.min(9000, this.adaptiveOpenClawReadTimeoutMs)
-      })
-      const result = await client.complete(messages)
-      if (!result.ok) continue
-      const planned: Array<Page4PlannedTask> = this.mapOpenClawPlan(result.text)
-      if (planned.length > 0) {
-        this.markOpenClawHostSuccess(host)
-        return planned
+      for (let k: number = 0; k < tokenCandidates.length; k++) {
+        const token: string = tokenCandidates[k]
+        const client: OpenClawGatewayClient = new OpenClawGatewayClient({
+          endpoint: buildOpenClawChatCompletionsUrl(host),
+          bearerToken: token,
+          model: OPENCLAW_CHAT_MODEL,
+          connectTimeoutMs: Math.min(10000, this.adaptiveOpenClawConnectTimeoutMs),
+          readTimeoutMs: Math.min(25000, this.adaptiveOpenClawReadTimeoutMs)
+        })
+        try {
+          const result = await client.complete(messages)
+          if (!result.ok) {
+            continue
+          }
+          const planned: Array<Page4PlannedTask> = this.mapOpenClawPlan(result.text)
+          if (planned.length > 0) {
+            this.markOpenClawHostSuccess(host)
+            return planned
+          }
+        } catch (e) {
+          continue
+        }
       }
       this.markOpenClawHostFail(host)
     }
@@ -1813,12 +2130,12 @@ export struct Page4View {
     const dynamicAliases: Array<string> = []
     for (let i: number = 0; i < this.aliasDict.length; i++) {
       const one: Page4AliasItem = this.aliasDict[i]
-      if (one.name === '家' || one.name === '公司') continue
+      if (one.name === '物流中心' || one.name === '公司仓库') continue
       if (!GridIdCodec.isValidId(one.destNodeId)) continue
       dynamicAliases.push(`${one.name}->${one.destNodeId}`)
     }
     const extraText: string = dynamicAliases.length > 0 ? `；自定义别名=${dynamicAliases.join('，')}` : ''
-    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n家/公司：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
+    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n物流中心/公司仓库：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
   }
 
   private exportPoiMappingsToFile(): { ok: boolean, path: string, error: string } {
@@ -1850,7 +2167,7 @@ export struct Page4View {
   private buildOpenClawRuntimeContextPrompt(): string {
     const mappingText: string = this.buildPoiMappingSummaryText()
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return `系统上下文：当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}。\n${mappingText}`
+    return `系统上下文：当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n语义约定：home=物流中心，company=公司仓库。`
   }
 
   private buildOpenClawRuntimeContextPromptLite(): string {
@@ -2006,7 +2323,7 @@ export struct Page4View {
   }
 
   private buildExampleText(): string {
-    return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态\n7. 获取当前摄像头画面\n8. 查看所有点位映射名称\n9. 导出点位映射为JSON'
+    return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态\n7. 获取当前摄像头画面\n8. 查看所有点位映射名称\n9. 导出点位映射为JSON\n10. 读取文件 C:\\\\temp\\\\a.txt\n11. 查询进程列表\n12. 执行命令 Get-Process'
   }
 
   private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
@@ -2034,8 +2351,8 @@ export struct Page4View {
   }
 
   private async answerByOpenClaw(): Promise<void> {
-    const token: string = OPENCLAW_GATEWAY_TOKEN.trim()
-    if (token.length <= 0) {
+    const tokenCandidates: Array<string> = resolveOpenClawTokenCandidates()
+    if (tokenCandidates.length <= 0) {
       this.pushAssistant('OpenClaw token 为空，请在 DeviceNetworkConfig.ets 配置 OPENCLAW_GATEWAY_TOKEN。')
       return
     }
@@ -2049,39 +2366,74 @@ export struct Page4View {
 
     const reqMessages: Array<OpenClawChatMessage> = this.buildOpenClawMessages()
 
+    // 添加进度提示
+    this.pushAssistant('正在查询中，请稍候...')
     this.assistantBusy = true
+    
+    // 增加超时时间到45秒，特别是对于天气查询
+    const timeoutId: number = this.setManagedTimeout((): void => {
+      this.assistantBusy = false
+      // 移除进度提示
+      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
+      this.pushAssistant('查询超时（45秒），可能是网络较慢或服务繁忙，请稍后重试。')
+    }, 50000) // 总超时50秒，适合天气查询
+
     try {
       const errs: Array<string> = []
       for (let i: number = 0; i < hosts.length; i++) {
         const host: string = hosts[i]
         const endpoint: string = buildOpenClawChatCompletionsUrl(host)
-        const connectTimeoutMs: number = Math.min(4000, this.adaptiveOpenClawConnectTimeoutMs)
-        const readTimeoutMs: number = Math.min(18000, this.adaptiveOpenClawReadTimeoutMs)
-        const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-          endpoint,
-          bearerToken: token,
-          model: OPENCLAW_CHAT_MODEL,
-          connectTimeoutMs,
-          readTimeoutMs
-        })
+        
+        // 增加连接和读取超时时间
+        const connectTimeoutMs: number = Math.min(12000, this.adaptiveOpenClawConnectTimeoutMs)
+        const readTimeoutMs: number = Math.min(30000, this.adaptiveOpenClawReadTimeoutMs)
+        
+        for (let k: number = 0; k < tokenCandidates.length; k++) {
+          const token: string = tokenCandidates[k]
+          const client: OpenClawGatewayClient = new OpenClawGatewayClient({
+            endpoint,
+            bearerToken: token,
+            model: OPENCLAW_CHAT_MODEL,
+            connectTimeoutMs,
+            readTimeoutMs
+          })
 
-        this.logInfo('sendOpenClawRequest', `host=${host}, model=${OPENCLAW_CHAT_MODEL}, messages=${reqMessages.length}, ct=${connectTimeoutMs}, rt=${readTimeoutMs}`)
-        const result = await client.complete(reqMessages)
-        if (result.ok) {
-          this.markOpenClawHostSuccess(host)
-          this.logInfo('sendOpenClawSuccess', `host=${host}, chars=${result.text.length}`)
-          this.pushAssistant(result.text)
-          return
+          this.logInfo('sendOpenClawRequest', `host=${host}, model=${OPENCLAW_CHAT_MODEL}, messages=${reqMessages.length}, ct=${connectTimeoutMs}, rt=${readTimeoutMs}, tk=${k + 1}`)
+          const result = await client.complete(reqMessages)
+          if (result.ok) {
+            this.clearManagedTimer(timeoutId)
+            this.markOpenClawHostSuccess(host)
+            this.logInfo('sendOpenClawSuccess', `host=${host}, chars=${result.text.length}`)
+            
+            // 确保UI更新
+            this.assistantBusy = false
+            // 移除进度提示，添加实际结果
+            this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
+            this.pushAssistant(result.text)
+            return
+          }
+
+          const codeText: string = result.responseCode > 0 ? `HTTP ${result.responseCode}` : 'NETWORK'
+          const errText: string = this.normalizeGatewayErrorText(result.errorText)
+          this.logError('sendOpenClawFail', `host=${host}, code=${codeText}, reason=${errText}`)
+          errs.push(`${host}/${k + 1} ${codeText} ${errText}`)
         }
-
         this.markOpenClawHostFail(host)
-        const codeText: string = result.responseCode > 0 ? `HTTP ${result.responseCode}` : 'NETWORK'
-        this.logError('sendOpenClawFail', `host=${host}, code=${codeText}, reason=${result.errorText}`)
-        errs.push(`${host} ${codeText} ${result.errorText}`)
       }
 
+      this.clearManagedTimer(timeoutId)
       const merged: string = errs.length > 0 ? errs.join(' || ') : 'unknown'
+      
+      // 移除进度提示，添加错误信息
+      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
       this.pushAssistant(`OpenClaw请求失败：${merged}`)
+    } catch (e) {
+      this.clearManagedTimer(timeoutId)
+      const msg: string = e instanceof Error ? e.message : 'unknown error'
+      
+      // 移除进度提示，添加异常信息
+      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
+      this.pushAssistant(`OpenClaw请求异常：${msg}`)
     } finally {
       this.assistantBusy = false
     }
@@ -2264,8 +2616,9 @@ export struct Page4View {
       this.pushAssistant('已切换到 DRY_RUN。')
       return
     }
-
+    /*1.先尝试解析用户是否在下发“导航目标”*/
     const dest: string = this.extractDestNode(text)
+    /*2.命中导航意图就直接走导航链路，优先保证控制实时性*/
     if (dest.length > 0) {
       if (!GridIdCodec.isValidId(dest)) {
         this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
@@ -2279,12 +2632,13 @@ export struct Page4View {
       this.pushAssistant(`执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
       return
     }
-
+    /*3.如果不是导航，再识别是否是前进/停止等动作控制指令*/
     const action: Page1Action | undefined = this.resolveActionByText(lower)
     if (action !== undefined) {
       try {
         this.rememberSafePointFromStore()
         this.logInfo('sendVehicleActionRequest', `action=${this.actionName(action)}`)
+        /*4.命中动作后直达底层协调器执行，避免多余中间环节*/
         await page1Coordinator.onAction(action)
         this.logInfo('sendVehicleActionSuccess', `action=${this.actionName(action)}`)
         this.lastAction = action
@@ -2306,7 +2660,7 @@ export struct Page4View {
       this.pushAssistant(`视频模式=${videoStore.displayMode} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | status=${videoStore.statusText}`)
       return
     }
-
+    /*5.前两类都不命中时，再进入AI问答兜底*/
     await this.answerByOpenClaw()
   }
 
@@ -2379,8 +2733,11 @@ export struct Page4View {
   }
 
   private syncPlaceAliases(): void {
-    this.upsertSpecialAlias('家', this.homeNodeId)
-    this.upsertSpecialAlias('公司', this.companyNodeId)
+    this.upsertSpecialAlias('物流中心', this.homeNodeId)
+    this.upsertSpecialAlias('公司仓库', this.companyNodeId)
+    // 删除旧口令别名，避免与物流语义冲突
+    this.upsertSpecialAlias('家', '')
+    this.upsertSpecialAlias('公司', '')
   }
 
   private upsertSpecialAlias(name: string, destNodeId: string): void {
@@ -2416,37 +2773,50 @@ export struct Page4View {
     this.pendingPlaceAtMs = 0
   }
 
+  private parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
+    const token: string = raw.trim()
+    if (token === 'home' || token === '物流中心') return 'home'
+    if (token === 'company' || token === '公司仓库') return 'company'
+    return ''
+  }
+
+  private placeRoleText(role: '' | Page4PlaceRole): string {
+    if (role === 'home') return '物流中心'
+    if (role === 'company') return '公司仓库'
+    return '未指定点位'
+  }
+
   private parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
     const src: string = text.trim()
     if (src.length <= 0) return undefined
 
-    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(家|公司)/)
+    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(物流中心|公司仓库)/)
     if (p1 && p1.length >= 3) {
       const placeText: string = p1[1].trim()
-      const role: Page4PlaceRole = p1[2].trim() === '公司' ? 'company' : 'home'
-      if (placeText.length > 0) return { role, placeText }
+      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p1[2])
+      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
     }
 
-    const p2: RegExpMatchArray | null = src.match(/^(家|公司)\s*(?:设置为|设为|是)\s*(.+)$/)
+    const p2: RegExpMatchArray | null = src.match(/^(物流中心|公司仓库)\s*(?:设置为|设为|是)\s*(.+)$/)
     if (p2 && p2.length >= 3) {
-      const role: Page4PlaceRole = p2[1].trim() === '公司' ? 'company' : 'home'
+      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p2[1])
       const placeText: string = p2[2].trim()
-      if (placeText.length > 0) return { role, placeText }
+      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
     }
 
-    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(家|公司)\s*(?:为|到)?\s*(.+)$/)
+    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(物流中心|公司仓库)\s*(?:为|到)?\s*(.+)$/)
     if (p3 && p3.length >= 3) {
-      const role: Page4PlaceRole = p3[1].trim() === '公司' ? 'company' : 'home'
+      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p3[1])
       const placeText: string = p3[2].trim()
-      if (placeText.length > 0) return { role, placeText }
+      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
     }
 
     return undefined
   }
 
   private wantsPlaceBindingQuery(rawLower: string): { askHome: boolean, askCompany: boolean } | undefined {
-    const askHome: boolean = rawLower.indexOf('家') >= 0
-    const askCompany: boolean = rawLower.indexOf('公司') >= 0
+    const askHome: boolean = rawLower.indexOf('物流中心') >= 0
+    const askCompany: boolean = rawLower.indexOf('公司仓库') >= 0
     if (!askHome && !askCompany) return undefined
     const hasQueryWord: boolean = this.containsAny(rawLower, ['映射', '点位', '查询', '查看', '有没有', '是否', '在哪', '哪里'])
     if (!hasQueryWord) return undefined
@@ -2454,7 +2824,7 @@ export struct Page4View {
   }
 
   private formatPlaceBinding(role: Page4PlaceRole): string {
-    const roleText: string = role === 'home' ? '家' : '公司'
+    const roleText: string = this.placeRoleText(role)
     const node: string = role === 'home' ? this.homeNodeId : this.companyNodeId
     if (GridIdCodec.isValidId(node)) return `${roleText}=${node}`
     return `${roleText}=未设置`
@@ -2466,7 +2836,7 @@ export struct Page4View {
     const rawText: string = this.pendingPlaceRawText
     if (role.length <= 0 || !GridIdCodec.isValidId(node)) {
       this.clearPendingPlaceBinding()
-      this.pushAssistant('没有待确认的家/公司设置。')
+      this.pushAssistant('没有待确认的物流中心/公司仓库设置。')
       return
     }
 
@@ -2474,7 +2844,7 @@ export struct Page4View {
     else this.companyNodeId = node
     this.syncPlaceAliases()
     const ok: boolean = this.persistPlaceBindings()
-    const roleText: string = role === 'home' ? '家' : '公司'
+    const roleText: string = this.placeRoleText(role)
     this.clearPendingPlaceBinding()
 
     if (ok) {
@@ -2499,21 +2869,21 @@ export struct Page4View {
 
     if (this.pendingPlaceRole.length > 0) {
       if (this.containsAny(lower, ['取消', '算了', '不设置', '不用了'])) {
-        const roleText: string = this.pendingPlaceRole === 'home' ? '家' : '公司'
+        const roleText: string = this.placeRoleText(this.pendingPlaceRole)
         this.clearPendingPlaceBinding()
         this.pushAssistant(`已取消${roleText}设置。`)
         return true
       }
 
       if (this.containsAny(lower, ['确认', '确定'])) {
-        const mentionHome: boolean = lower.indexOf('家') >= 0
-        const mentionCompany: boolean = lower.indexOf('公司') >= 0
+        const mentionHome: boolean = lower.indexOf('物流中心') >= 0
+        const mentionCompany: boolean = lower.indexOf('公司仓库') >= 0
         if (mentionHome && this.pendingPlaceRole !== 'home') {
-          this.pushAssistant('当前待确认的是“公司”设置，请回复“确认公司”或“取消”。')
+          this.pushAssistant('当前待确认的是“公司仓库”设置，请回复“确认公司仓库”或“取消”。')
           return true
         }
         if (mentionCompany && this.pendingPlaceRole !== 'company') {
-          this.pushAssistant('当前待确认的是“家”设置，请回复“确认家”或“取消”。')
+          this.pushAssistant('当前待确认的是“物流中心”设置，请回复“确认物流中心”或“取消”。')
           return true
         }
         await this.applyPendingPlaceBinding()
@@ -2531,7 +2901,7 @@ export struct Page4View {
     const nodeFromAll: string = this.extractDestNode(text)
     const node: string = GridIdCodec.isValidId(nodeFromPlace) ? nodeFromPlace : nodeFromAll
     if (!GridIdCodec.isValidId(node)) {
-      const roleText: string = req.role === 'home' ? '家' : '公司'
+      const roleText: string = this.placeRoleText(req.role)
       this.pushAssistant(`未识别到可用点位，无法设置${roleText}。请直接说节点（如“将D4设置为${roleText}”）或说可映射地名。`)
       return true
     }
@@ -2540,13 +2910,15 @@ export struct Page4View {
     this.pendingPlaceNodeId = node
     this.pendingPlaceRawText = req.placeText
     this.pendingPlaceAtMs = Date.now()
-    const roleText: string = req.role === 'home' ? '家' : '公司'
+    const roleText: string = this.placeRoleText(req.role)
     this.pushAssistant(`请二次确认：将${roleText}设置为 ${node}（来源“${req.placeText}”）。回复“确认${roleText}”完成，或回复“取消”放弃。`)
     return true
   }
 
   private looksLikePlaceBindingIntent(lower: string): boolean {
-    const hasRole: boolean = lower.indexOf('家') >= 0 || lower.indexOf('公司') >= 0
+    const hasRole: boolean =
+      lower.indexOf('物流中心') >= 0 ||
+      lower.indexOf('公司仓库') >= 0
     if (!hasRole) return false
     if (this.containsAny(lower, ['映射', '点位', '查询', '查看', '有没有', '是否'])) return false
     return this.containsAny(lower, ['设置', '设为', '记为', '定义为', '改为', '改成', '当成', '作为'])
@@ -2566,8 +2938,8 @@ export struct Page4View {
 
     const roleRaw: string = String(obj['role'] ?? '').trim().toLowerCase()
     let role: Page4PlaceRole | '' = ''
-    if (roleRaw === 'home' || roleRaw === '家') role = 'home'
-    if (roleRaw === 'company' || roleRaw === '公司') role = 'company'
+    if (roleRaw === 'home' || roleRaw === '物流中心') role = 'home'
+    if (roleRaw === 'company' || roleRaw === '公司仓库') role = 'company'
     if (role.length <= 0) return undefined
 
     const placeText: string = String(obj['place'] ?? obj['target'] ?? obj['location'] ?? '').trim()
@@ -2589,8 +2961,8 @@ export struct Page4View {
   }
 
   private async parsePlaceBindingByOpenClaw(input: string): Promise<Page4PlaceBindingPlan | undefined> {
-    const token: string = OPENCLAW_GATEWAY_TOKEN.trim()
-    if (token.length <= 0) return undefined
+    const tokenCandidates: Array<string> = resolveOpenClawTokenCandidates()
+    if (tokenCandidates.length <= 0) return undefined
     const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
     const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
     if (hosts.length <= 0) return undefined
@@ -2599,8 +2971,9 @@ export struct Page4View {
       {
         role: 'system',
         content:
-          '你是位置映射解析器。把用户话语解析为严格JSON，不要解释。' +
+          '你是无人物流车位置映射解析器。把用户话语解析为严格JSON，不要解释。' +
           '输出格式：{"role":"home|company","place":"地点原文"}。' +
+          '语义约定：home 表示物流中心，company 表示公司仓库。' +
           '如果无法确定，输出：{"role":"","place":""}。'
       },
       {
@@ -2615,22 +2988,28 @@ export struct Page4View {
 
     for (let i: number = 0; i < hosts.length; i++) {
       const host: string = hosts[i]
-      const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-        endpoint: buildOpenClawChatCompletionsUrl(host),
-        bearerToken: token,
-        model: OPENCLAW_CHAT_MODEL,
-        connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
-        readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
-      })
-      const result = await client.complete(messages)
-      if (!result.ok) {
-        this.markOpenClawHostFail(host)
-        continue
-      }
-      const plan: Page4PlaceBindingPlan | undefined = this.parsePlaceBindingPlanText(result.text)
-      if (plan) {
-        this.markOpenClawHostSuccess(host)
-        return plan
+      for (let k: number = 0; k < tokenCandidates.length; k++) {
+        const token: string = tokenCandidates[k]
+        const client: OpenClawGatewayClient = new OpenClawGatewayClient({
+          endpoint: buildOpenClawChatCompletionsUrl(host),
+          bearerToken: token,
+          model: OPENCLAW_CHAT_MODEL,
+          connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
+          readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
+        })
+        try {
+          const result = await client.complete(messages)
+          if (!result.ok) {
+            continue
+          }
+          const plan: Page4PlaceBindingPlan | undefined = this.parsePlaceBindingPlanText(result.text)
+          if (plan) {
+            this.markOpenClawHostSuccess(host)
+            return plan
+          }
+        } catch (e) {
+          continue
+        }
       }
       this.markOpenClawHostFail(host)
     }
