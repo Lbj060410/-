@@ -27,6 +27,7 @@ import { BBoxNorm, RecognitionResult } from '../../services/recognition/Recognit
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 import { page1Store } from '../page1/app/Page1UiStore'
 import { validateJpegBuffer } from '../../utils/BackgroundCompute'
+import { saveSignalCarBatch, SignalCarPayload } from '../../services/webpageinteraction/webconnect'
 
 const PAGE2_LAST_ENDPOINT_PATH: string = '/data/storage/el2/base/haps/entry/files/page2_last_endpoint.json'
 
@@ -80,6 +81,13 @@ export class Page2Coordinator {
   private lastPerfPulseLogAtMs: number = 0
   private pulseTimerId: number = -1
   private readonly pulseTimerIntervalMs: number = 2000
+  private readonly signalCarId: string = '001'
+  private readonly signalUploadMinIntervalMs: number = 1500
+  private signalUploadBusy: boolean = false
+  private lastSignalUploadAtMs: number = 0
+  private lastSignalUploadTaskId: string = ''
+  private lastSignalUploadColor: string = ''
+  private signalUploadSeq: number = 0
   private readonly replayIngestMinIntervalMs: number = 180
   private readonly replayIngestMaxIntervalMs: number = 420
   private dynamicReplayIngestIntervalMs: number = 180
@@ -753,6 +761,7 @@ export class Page2Coordinator {
 
   private maybeLogPerfPulse(nowMs: number): void {
     this.maybeHealFramePipeline(nowMs)
+    void this.maybeUploadTrafficSignal(nowMs)
     if (nowMs - this.lastPerfPulseLogAtMs < 2000) return
     this.lastPerfPulseLogAtMs = nowMs
     const total: number = Math.max(0, recogStore.ncnnTotalDetect)
@@ -762,6 +771,81 @@ export class Page2Coordinator {
     console.info(
       `[PERF][pulse] vFps=${videoStore.diagVideoFps} vLat=${videoStore.diagVideoLatencyMs}ms pull=${videoStore.diagVideoPullIntervalMs}ms rFps=${recogStore.recogFps} rCost=${recogStore.recogLastCostMs}ms liveInt=${this.currentLiveIntervalMs}ms repInt=${this.dynamicReplayIngestIntervalMs}ms rPause=${Date.now() < this.recognitionPauseUntilMs ? 1 : 0} wkCost=${recogStore.ncnnWorkerCostMs}ms wkFail=${recogStore.ncnnWorkerFail} fallback=${recogStore.ncnnFallbackUsed}/${recogStore.ncnnTotalDetect}(${fallbackRateText}%) bypass=${recogStore.ncnnWorkerBypass ? 1 : 0}`
     )
+  }
+
+  private async maybeUploadTrafficSignal(nowMs: number): Promise<void> {
+    if (!videoStore.page2TrafficEnabled) return
+    if (this.signalUploadBusy) return
+    const result: RecognitionResult | undefined = this.latestSuccessfulPage2LiveResult()
+    if (!result) return
+    if (result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
+
+    const topColor: string = this.pickTopTrafficLightColor(result.boxes)
+    if (topColor.length <= 0) return
+
+    const sameTask: boolean = result.taskId.length > 0 && result.taskId === this.lastSignalUploadTaskId
+    if (sameTask) return
+    const sameColorCooldown: boolean =
+      topColor === this.lastSignalUploadColor && (nowMs - this.lastSignalUploadAtMs < this.signalUploadMinIntervalMs)
+    if (sameColorCooldown) return
+
+    this.signalUploadBusy = true
+    try {
+      const payload: SignalCarPayload = {
+        id: this.buildSignalUploadId(nowMs),
+        lightColor: topColor,
+        carId: this.signalCarId,
+        vehicleStatus: this.vehicleStatusByLight(topColor),
+        recordTime: this.formatSignalRecordTime(nowMs)
+      }
+      await saveSignalCarBatch([payload])
+      this.lastSignalUploadAtMs = nowMs
+      this.lastSignalUploadTaskId = result.taskId
+      this.lastSignalUploadColor = topColor
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : 'signal upload failed'
+      console.warn(`[Page2] signal upload failed: ${msg}`)
+    } finally {
+      this.signalUploadBusy = false
+    }
+  }
+
+  private pickTopTrafficLightColor(boxes: Array<BBoxNorm>): string {
+    let bestLabel: string = ''
+    let bestScore: number = -1
+    for (let i: number = 0; i < boxes.length; i++) {
+      const one: BBoxNorm = boxes[i]
+      const label: string = one.label.trim().toLowerCase()
+      if (label !== 'red' && label !== 'yellow' && label !== 'green') continue
+      if (one.score > bestScore) {
+        bestScore = one.score
+        bestLabel = label
+      }
+    }
+    return bestLabel
+  }
+
+  private vehicleStatusByLight(color: string): string {
+    if (color === 'red') return 'stopped'
+    if (color === 'green') return 'moving'
+    return 'waiting'
+  }
+
+  private buildSignalUploadId(nowMs: number): string {
+    this.signalUploadSeq += 1
+    const seq: string = String(this.signalUploadSeq).padStart(3, '0')
+    return `SC_${this.signalCarId}_${nowMs}_${seq}`
+  }
+
+  private formatSignalRecordTime(tsMs: number): string {
+    const d: Date = new Date(tsMs)
+    const yyyy: string = String(d.getFullYear())
+    const mm: string = String(d.getMonth() + 1).padStart(2, '0')
+    const dd: string = String(d.getDate()).padStart(2, '0')
+    const hh: string = String(d.getHours()).padStart(2, '0')
+    const mi: string = String(d.getMinutes()).padStart(2, '0')
+    const ss: string = String(d.getSeconds()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`
   }
 
   private maybeHealFramePipeline(nowMs: number): void {

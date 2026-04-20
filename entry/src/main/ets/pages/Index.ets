@@ -11,6 +11,15 @@ import { Page3View } from './page3/Page3View'
 import { Page4View } from './page4/Page4View'
 import { Page1Theme } from './page1/Page1Theme'
 import { page2Coordinator } from './page2/Page2Coordinator'
+import { page1Store } from './page1/app/Page1UiStore'
+import fs from '@ohos.file.fs'
+import util from '@ohos.util'
+
+const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
+interface Page4PlaceBindingPayload {
+  homeNodeId?: string
+  companyNodeId?: string
+}
 
 @Entry
 @Component
@@ -19,9 +28,40 @@ struct Index {
   @State private showFloatingNav: boolean = false
 
   aboutToAppear(): void {
+    this.restorePlaceConfiguredOnAppEnter()
     // Page2 识别链路需要在非 Page2 页面也持续工作；入口页先以后台低频模式拉起。
     page2Coordinator.enterBackgroundMode()
     void page2Coordinator.start()
+  }
+
+  private restorePlaceConfiguredOnAppEnter(): void {
+    let home: string = ''
+    let company: string = ''
+    let f: fs.File | undefined = undefined
+    try {
+      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
+      const size: number = Number(st.size)
+      if (Number.isFinite(size) && size > 0 && size <= 4096) {
+        const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
+        const readLen: number = fs.readSync(f.fd, buf)
+        if (readLen > 0) {
+          const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
+          const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
+          const parsed: Page4PlaceBindingPayload = JSON.parse(txt) as Page4PlaceBindingPayload
+          home = String(parsed.homeNodeId ?? '').trim().toUpperCase()
+          company = String(parsed.companyNodeId ?? '').trim().toUpperCase()
+        }
+      }
+    } catch (_) {
+      home = ''
+      company = ''
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) {}
+      }
+    }
+    page1Store.setPlaceConfigured(home, company)
   }
 
   build() {

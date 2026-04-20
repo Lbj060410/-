@@ -19,17 +19,31 @@ import hilog from '@ohos.hilog'
 import { commStore } from '../../state/CommStore'
 
 const API_URL = 'http://121.40.121.6:8080/adminsystem/car/trajectory/save'
+const SIGNAL_BATCH_API_URL = 'http://121.40.121.6:8080/adminsystem/api/signal-car/batch-save'
 const DEFAULT_CAR_ID = '001'
 const SENDWEB_DOMAIN = 0xFF02
 const SENDWEB_TAG = 'sendweb'
 
-interface SaveTrajectoryPayload {
+export interface SaveTrajectoryPayload {
   carId: string
+  plateNumber?: string
+  vehicleType?: number
   xCoordinate: string
   yCoordinate: string
   interval: number
   speed: number
   status: number
+  seconds?: number
+  startPoint?: string
+  endPoint?: string
+}
+
+export interface SignalCarPayload {
+  id: string
+  lightColor: string
+  carId: string
+  vehicleStatus: string
+  recordTime: string
 }
 
 function appendWebDiag(status: string, line: string): void {
@@ -95,7 +109,17 @@ export async function saveCarTrajectory(payload: SaveTrajectoryPayload): Promise
   }
 }
 
-export async function saveCarTrajectoryByNode(nodeId: string, intervalMs: number): Promise<boolean> {
+export interface SaveByNodeOptions {
+  startPoint?: string
+  endPoint?: string
+  plateNumber?: string
+  vehicleType?: number
+  seconds?: number
+  speed?: number
+  status?: number
+}
+
+export async function saveCarTrajectoryByNode(nodeId: string, intervalMs: number, options?: SaveByNodeOptions): Promise<boolean> {
   const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
   const payload = buildPayloadByNode(nodeId, safeIntervalMs)
   if (!payload) {
@@ -104,8 +128,44 @@ export async function saveCarTrajectoryByNode(nodeId: string, intervalMs: number
     appendWebDiag('SKIP', `bad nodeId=${nodeId}`)
     return false
   }
+  const ext: SaveByNodeOptions = options ?? {}
+  if (typeof ext.startPoint === 'string') payload.startPoint = sanitizeNodeId(ext.startPoint)
+  if (typeof ext.endPoint === 'string') payload.endPoint = sanitizeNodeId(ext.endPoint)
+  if (typeof ext.plateNumber === 'string' && ext.plateNumber.trim().length > 0) payload.plateNumber = ext.plateNumber.trim()
+  if (typeof ext.vehicleType === 'number') payload.vehicleType = Math.max(0, Math.trunc(ext.vehicleType))
+  if (typeof ext.seconds === 'number') payload.seconds = Math.max(0, Math.trunc(ext.seconds))
+  if (typeof ext.speed === 'number') payload.speed = Number(ext.speed)
+  if (typeof ext.status === 'number') payload.status = Math.max(0, Math.trunc(ext.status))
+
   await saveCarTrajectory(payload)
   return true
 }
 
+export async function saveSignalCarBatch(payloads: SignalCarPayload[]): Promise<string> {
+  const list: SignalCarPayload[] = Array.isArray(payloads) ? payloads : []
+  if (list.length <= 0) {
+    appendWebDiag('SKIP', 'signal-car batch payload empty')
+    return 'SKIP_EMPTY'
+  }
+  const httpRequest = http.createHttp()
+  const payloadText: string = JSON.stringify(list)
+  try {
+    hilog.info(SENDWEB_DOMAIN, SENDWEB_TAG, 'send signal batch payload: %{public}s', payloadText)
+    const requestOptions = {
+      method: http.RequestMethod.POST,
+      header: { 'Content-Type': 'application/json' },
+      extraData: list
+    }
+    const response = await httpRequest.request(SIGNAL_BATCH_API_URL, requestOptions)
+    const resultText: string = String(response.result)
+    appendWebDiag('SENT', `signal-batch payload=${payloadText} response=${resultText}`)
+    return resultText
+  } catch (err) {
+    const message: string = (err as BusinessError).message
+    appendWebDiag('FAILED', `signal-batch payload=${payloadText} err=${message}`)
+    throw err
+  } finally {
+    httpRequest.destroy()
+  }
+}
 

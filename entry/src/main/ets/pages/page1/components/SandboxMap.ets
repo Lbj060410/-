@@ -11,8 +11,6 @@ import { page1Store, Page1UiStore, XYPos, RouteObstaclePoint } from '../app/Page
 import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
-import fs from '@ohos.file.fs'
-import util from '@ohos.util'
 
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
@@ -93,13 +91,6 @@ interface MapBlockCellRect extends MapRoadRect {
   color: string
 }
 
-interface PlaceBindingPayload {
-  homeNodeId?: string
-  companyNodeId?: string
-}
-
-const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
-
 @Component
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
@@ -123,9 +114,8 @@ export struct SandboxMap {
   // 手动操作后的临时失权窗口
   @State private manualOverrideUntilMs: number = 0
   private lastTishixianDebugSig: string = ''
-  @State private homeNodeId: string = ''
-  @State private companyNodeId: string = ''
-  private lastPlaceBindingSig: string = ''
+  @State private homePlaceConfigured: boolean = false
+  @State private companyPlaceConfigured: boolean = false
 
   // 手动操作后允许自动跟随恢复的等待时间（毫秒）
   private readonly MANUAL_OVERRIDE_MS: number = 2800
@@ -149,12 +139,13 @@ export struct SandboxMap {
     this.clampAll()
     this.syncCameraFollow()
     this.probeTishixianRenderInput()
-    this.reloadPlaceBindings()
+    this.syncPlaceConfiguredFromStore()
 
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
       this.syncCameraFollow()
       this.probeTishixianRenderInput()
+      this.syncPlaceConfiguredFromStore()
     }, this.FOLLOW_TICK_MS) as number
   }
 
@@ -167,6 +158,13 @@ export struct SandboxMap {
       clearInterval(this.followTimerId)
       this.followTimerId = -1
     }
+  }
+
+  private syncPlaceConfiguredFromStore(): void {
+    const home: boolean = this.store.homePlaceConfigured
+    const company: boolean = this.store.companyPlaceConfigured
+    if (home !== this.homePlaceConfigured) this.homePlaceConfigured = home
+    if (company !== this.companyPlaceConfigured) this.companyPlaceConfigured = company
   }
 
   build() {
@@ -372,22 +370,13 @@ export struct SandboxMap {
   private buildGridOverlay(): void {
     ForEach(this.visibleGridNodesForRender(), (n: GridNode): void => {
       if (!this.isCurrentNode(n.id) && this.shouldShowGridNode(n.id)) {
-        if (this.isSpecialPlaceNode(n.id)) {
-          Image(this.specialPlaceIcon(n.id))
-            .width(this.specialPlaceIconSize())
-            .height(this.specialPlaceIconSize())
-            .objectFit(ImageFit.Contain)
-            .position(this.store.gridNodeDotPos(n, this.specialPlaceIconSize()))
-            .zIndex(7)
-        } else {
-          Column() {}
-            .width(this.gridDotSize())
-            .height(this.gridDotSize())
-            .borderRadius(this.gridDotSize() / 2)
-            .backgroundColor(this.nodeDotBg(n.id))
-            .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
-            .zIndex(2)
-        }
+        Column() {}
+          .width(this.gridDotSize())
+          .height(this.gridDotSize())
+          .borderRadius(this.gridDotSize() / 2)
+          .backgroundColor(this.nodeDotBg(n.id))
+          .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
+          .zIndex(2)
 
         if (this.shouldShowNodeLabel(n.id)) {
           Text(n.id)
@@ -684,70 +673,6 @@ export struct SandboxMap {
       return $rawfile('icon/堵塞.png')
     }
     return $rawfile('icon/堵塞占用.png')
-  }
-
-  private specialPlaceIcon(nodeId: string): any {
-    const x: string = nodeId.trim().toUpperCase()
-    if (x.length > 0 && x === this.homeNodeId) return $rawfile('icon/家.png')
-    return $rawfile('icon/公司.png')
-  }
-
-  private specialPlaceIconSize(): number {
-    if (this.isDetailLevel()) return 44
-    if (this.isRouteLevel()) return 40
-    return 36
-  }
-
-  private isSpecialPlaceNode(nodeId: string): boolean {
-    const x: string = nodeId.trim().toUpperCase()
-    if (x.length <= 0) return false
-    if (this.homeNodeId.length > 0 && x === this.homeNodeId) return true
-    if (this.companyNodeId.length > 0 && x === this.companyNodeId) return true
-    return false
-  }
-
-  private isValidGridId(id: string): boolean {
-    if (id.length !== 2) return false
-    const col: string = id.charAt(0)
-    const row: string = id.charAt(1)
-    return col >= 'A' && col <= 'G' && row >= '1' && row <= '7'
-  }
-
-  private reloadPlaceBindings(): void {
-    let home: string = ''
-    let company: string = ''
-    let f: fs.File | undefined = undefined
-    try {
-      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
-      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
-      const size: number = Number(st.size)
-      if (Number.isFinite(size) && size > 0 && size <= 4096) {
-        const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
-        const readLen: number = fs.readSync(f.fd, buf)
-        if (readLen > 0) {
-          const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
-          const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
-          const parsed: PlaceBindingPayload = JSON.parse(txt) as PlaceBindingPayload
-          const h: string = String(parsed.homeNodeId ?? '').trim().toUpperCase()
-          const c: string = String(parsed.companyNodeId ?? '').trim().toUpperCase()
-          home = this.isValidGridId(h) ? h : ''
-          company = this.isValidGridId(c) ? c : ''
-        }
-      }
-    } catch (_) {
-      home = ''
-      company = ''
-    } finally {
-      if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
-      }
-    }
-
-    const sig: string = `${home}|${company}`
-    if (sig === this.lastPlaceBindingSig) return
-    this.lastPlaceBindingSig = sig
-    this.homeNodeId = home
-    this.companyNodeId = company
   }
 
   private nodeBlockTypeOf(nodeId: string): NodeBlockType {
@@ -1985,7 +1910,10 @@ export struct SandboxMap {
     // blockIndex: 每行白块从左到右编号 0..3
     // rowIndex:   从上到下 0..3
     if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/海昏侯.jpg')
-    if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/公司未设置.jpg')
+    if (rowIndex === 0 && blockIndex === 1) {
+      if (this.companyPlaceConfigured) return $rawfile('map/公司仓库设置.jpg')
+      return $rawfile('map/公司仓库未设置.jpg')
+    }
     if (rowIndex === 0 && blockIndex === 2) return $rawfile('map/省博物馆.jpg')
     if (rowIndex === 0 && blockIndex === 3) return $rawfile('map/青山湖风景区.jpg')
     if (rowIndex === 1 && blockIndex === 0) return $rawfile('map/梅岭.jpg')
@@ -1998,7 +1926,10 @@ export struct SandboxMap {
     if (rowIndex === 2 && blockIndex === 3) return $rawfile('map/赣江风光带.jpg')
     if (rowIndex === 3 && blockIndex === 0) return $rawfile('map/秋水广场.jpg')
     if (rowIndex === 3 && blockIndex === 1) return $rawfile('map/八大山人纪念馆.jpg')
-    if (rowIndex === 3 && blockIndex === 2) return $rawfile('map/家未设置.jpg')
+    if (rowIndex === 3 && blockIndex === 2) {
+      if (this.homePlaceConfigured) return $rawfile('map/物流中心设置.jpg')
+      return $rawfile('map/物流中心未设置.jpg')
+    }
     if (rowIndex === 3 && blockIndex === 3) return $rawfile('map/小兰工业园.jpg')
     return $rawfile('map/海昏侯.jpg')
   }

@@ -75,6 +75,8 @@ export class Page1UiStore {
   carX: number = 0.210
   carY: number = 0.902
   carDotSize: number = 26
+  homePlaceConfigured: boolean = false
+  companyPlaceConfigured: boolean = false
 
   // ===== 黑线路网节点（行号 1/2/4/6/7）=====
   gridNodes: Array<GridNode> = SandboxGridModel.buildDefaultNodes()
@@ -255,6 +257,19 @@ export class Page1UiStore {
       this.carX = this.clamp01(p.xNorm)
       this.carY = this.clamp01(p.yNorm)
     }
+  }
+
+  setPlaceConfigured(homeNodeId: string, companyNodeId: string): void {
+    this.homePlaceConfigured = this.isValidPlaceNodeId(homeNodeId)
+    this.companyPlaceConfigured = this.isValidPlaceNodeId(companyNodeId)
+  }
+
+  private isValidPlaceNodeId(raw: string): boolean {
+    const id: string = String(raw ?? '').trim().toUpperCase()
+    if (id.length !== 2) return false
+    const col: string = id.charAt(0)
+    const row: string = id.charAt(1)
+    return col >= 'A' && col <= 'G' && row >= '1' && row <= '7'
   }
 
   private normHeadingDeg(v: number): number {

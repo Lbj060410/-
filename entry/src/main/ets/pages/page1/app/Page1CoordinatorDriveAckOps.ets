@@ -60,6 +60,9 @@ function resolvePathAckCommandKey(actionText: string): string {
   if (actionText === '右半转') return 'RIGHT_HALF'
   if (actionText === '掉头') return 'UTURN'
   if (actionText === '闸口放行') return 'GATE_DEPART'
+  if (actionText === '车库调至一层并获取当前层数') return 'LOWCARPORT'
+  if (actionText === '车库到2层') return 'CARPORT_2'
+  if (actionText === '车库调至一层不会获取当前层数') return 'LOWCAR'
   return ''
 }
 
@@ -76,7 +79,10 @@ async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number
     key === 'LEFT_HALF' ||
     key === 'RIGHT_HALF' ||
     key === 'UTURN' ||
-    key === 'GATE_DEPART'
+    key === 'GATE_DEPART' ||
+    key === 'LOWCARPORT' ||
+    key === 'CARPORT_2' ||
+    key === 'LOWCAR'
   if (isMotionKey && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(key, 'PATH_ACK_RETRY')) {
     return false
   }
@@ -113,6 +119,18 @@ async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number
   }
   if (key === 'GATE_DEPART') {
     await ctx.proto.depart()
+    return true
+  }
+  if (key === 'LOWCARPORT') {
+    await ctx.proto.lowcarport()
+    return true
+  }
+  if (key === 'CARPORT_2') {
+    await ctx.proto.carport(2)
+    return true
+  }
+  if (key === 'LOWCAR') {
+    await ctx.proto.lowcar()
     return true
   }
   return false
@@ -202,7 +220,6 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   else if (a === Page1Action.UTURN) actionText = '掉头'
   else if (a === Page1Action.STOP) actionText = '停止'
 
-  if (shouldSkipDuplicateAutoAction(ctx, a, actionText)) return false
   const isPathMotion: boolean = isPathMotionAction(a)
 
   if (!ctx.canRealSend()) {
@@ -214,6 +231,7 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   }
 
   if (isPathMotion && !canSendPathCommandNow(ctx, actionText)) return false
+  if (shouldSkipDuplicateAutoAction(ctx, a, actionText)) return false
 
   const isInitialPathGo: boolean = a === Page1Action.GO && !ctx.pathAckFirstCommandSent
   if (isPathMotion) {
@@ -453,6 +471,7 @@ export function onPathAckFrame(ctx: any, f: any): void {
   }
 
   if (status === 0x02) {
+    const completedKey: string = String(ctx.pathAckCommandKey || '')
     clearPathAckRetryTimer(ctx)
     ctx.pathAckLastStatusCode = 0x02
     ctx.pathAckAwaitingComplete = false
@@ -513,6 +532,18 @@ export function onPathAckFrame(ctx: any, f: any): void {
       }
     }
     startPendingAckMotionOnComplete(ctx)
+
+    const isGarageSpecialAck: boolean =
+      completedKey === 'LOWCARPORT' ||
+      completedKey === 'CARPORT_2' ||
+      completedKey === 'LOWCAR'
+    if (isGarageSpecialAck && !ctx.pendingAckMotion) {
+      const s3 = ctx.store
+      if (s3) s3.pushLog(`PATH_ACK_CONTINUE: ${completedKey} 完成，继续尝试下发下一段动作`)
+      if (typeof ctx.followPathOnce === 'function') {
+        void ctx.followPathOnce(Date.now(), true)
+      }
+    }
   }
 }
 

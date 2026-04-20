@@ -85,7 +85,7 @@ export class Page1EmergencyCoordinator {
     const s: Page1UiStore | undefined = this.ctx.store as Page1UiStore | undefined
     if (!s) return
     const safeCount: number = Math.max(1, Math.round(repeatCount))
-    const safeIntervalMs: number = Math.max(0, Math.round(intervalMs))
+    const safeIntervalMs: number = Math.max(10, Math.round(intervalMs))
     this.ctx.emergencyAlarmBurstActive = true
     this.ctx.emergencyAlarmBurstAckAtMs = 0
     this.ctx.emergencyAlarmBurstLastSendAtMs = 0
@@ -105,13 +105,10 @@ export class Page1EmergencyCoordinator {
           break
         }
         if (i + 1 < safeCount && safeIntervalMs > 0) {
-          const deadlineMs: number = Date.now() + safeIntervalMs
-          while (Date.now() < deadlineMs) {
-            if (this.ctx.emergencyAlarmBurstAckAtMs >= this.ctx.emergencyAlarmBurstLastSendAtMs) {
-              s.pushLog('EMERGENCY_ALARM: received 0xBD/01, stop retries')
-              return
-            }
-            await this.ctx.sleep(2)
+          await this.ctx.sleep(safeIntervalMs)
+          if (this.ctx.emergencyAlarmBurstAckAtMs >= this.ctx.emergencyAlarmBurstLastSendAtMs) {
+            s.pushLog('EMERGENCY_ALARM: received 0xBD/01, stop retries')
+            return
           }
         }
       }

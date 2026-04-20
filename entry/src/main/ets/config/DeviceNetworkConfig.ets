@@ -17,8 +17,8 @@ export const CAR_CAMERA_PASS: string = '888888'
 // 对于真实设备：
 // 1) 将 OPENCLAW_GATEWAY_HOST 设置为你的 PC 局域网 IP，或保持空以自动尝试 Wi-Fi 网关 IP。
 // 2) 通过应用设置 UI 设置 OPENCLAW_GATEWAY_TOKEN — 不要在此处硬编码令牌。
-export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.101'
-export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '192.168.156.102'
+export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.100'
+export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '192.168.156.101'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
 export const OPENCLAW_GATEWAY_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'  // 与运行中的网关令牌保持同步
 // 可选：放置具备 operator.read/operator.write 的节点令牌作为回退，避免 scope 不匹配导致能力受限。

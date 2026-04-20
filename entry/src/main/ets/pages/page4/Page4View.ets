@@ -2048,20 +2048,23 @@ export struct Page4View {
   }
 
   private mapPoiNameToNode(input: string): string {
-    // 比赛讲解点（点位绑定第一步）：
-    // 这里维护“自然语言地名 -> 路网节点ID”的基础映射表。
+    /*先清洗输入，去掉头尾空格，降低脏数据干扰*/
     const s: string = input.trim()
+    /*输入直接返回，避免无效匹配*/
     if (s.length <= 0) return ''
     const normalized: string = this.normalizePlaceInput(s)
+    /*加载地名到节点的映射词典*/
     const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
     for (let i: number = 0; i < mappings.length; i++) {
       const item = mappings[i]
       for (let j: number = 0; j < item.aliases.length; j++) {
         const alias: string = item.aliases[j]
+        /*命中别名就立即返回节点ID，供导航模块直接使用*/
         if (s.indexOf(alias) >= 0) return item.node
         if (normalized.indexOf(this.normalizePlaceInput(alias)) >= 0) return item.node
       }
     }
+    /*未命中时显式返回空，交给上层做兜底处理*/
     return ''
   }
 
@@ -2071,12 +2074,14 @@ export struct Page4View {
       { node: 'D1', aliases: ['江西省博物馆', '省博物馆'] },
       { node: 'F1', aliases: ['青山湖风景区', '青山湖'] },
       { node: 'A2', aliases: ['梅岭风景区', '梅岭'] },
+      /*B2对应滕王阁*/
       { node: 'B2', aliases: ['滕王阁'] },
       { node: 'F2', aliases: ['八一广场'] },
       { node: 'G2', aliases: ['高新区住宅群', '艾溪湖东岸小区', '艾溪湖东岸', '艾溪湖'] },
       { node: 'A4', aliases: ['南昌之星摩天轮', '南昌之星', '摩天轮'] },
       { node: 'B4', aliases: ['万寿宫历史文化街区', '万寿宫'] },
       { node: 'F4', aliases: ['八一起义纪念馆'] },
+      /*G4对应南昌火车站*/
       { node: 'G4', aliases: ['南昌火车站', '铁路社区', '火车站'] },
       { node: 'A6', aliases: ['赣江风光带', '风光带'] },
       { node: 'B6', aliases: ['绳金塔'] },
@@ -2176,8 +2181,6 @@ export struct Page4View {
   }
 
   private normalizePlaceInput(text: string): string {
-    // 比赛讲解点（点位绑定第二步）：
-    // 先做归一化，减少 ASR 文本中的空格/标点/大小写干扰，提升匹配命中率。
     return text
       .trim()
       .toUpperCase()
@@ -2185,9 +2188,6 @@ export struct Page4View {
   }
 
   private extractDestNode(input: string): string {
-    // 比赛讲解点（点位绑定第三步）：
-    // 解析顺序：别名 -> 上下文 -> 显式节点ID -> 地名映射兜底。
-    // 这样可以兼顾“导航到D4”与“我要去滕王阁”两类输入。
     const aliasNode: string = this.resolveAliasNode(input)
     if (aliasNode.length > 0) return aliasNode
 
@@ -2195,16 +2195,12 @@ export struct Page4View {
     if (fromContext.length > 0) return fromContext
 
     const upper: string = input.trim().toUpperCase()
-    // 优先匹配明确的导航关键词（最高优先级，不受反向词干扰）
     const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到达|前进到)\s*([A-Z]\d{1,2})/)
     if (m1 && m1.length > 1) return m1[1]
-    // 如果节点 ID 出现在"出发/离开/从/起点"等非目标语境后，不当作目的地
     const antiNav: RegExpMatchArray | null = upper.match(/(?:离开|从|出发|起点|LEAVE|FROM|DEPART)\s*([A-Z]\d{1,2})/)
     if (antiNav) return ''
-    // 兜底：仅剩一个独立节点 ID 且无反向语境时才识别为目的地
     const m2: RegExpMatchArray | null = upper.match(/\b([A-Z]\d{1,2})\b/)
     if (m2 && m2.length > 1) return m2[1]
-    // 地名映射兜底：当没有明确节点ID时，仍可由地名命中节点
     const mapped: string = this.mapPoiNameToNode(input)
     if (mapped.length > 0) return mapped
     return ''
@@ -2504,6 +2500,22 @@ export struct Page4View {
     this.openClawHostCooldownUntilMs[host] = Date.now() + this.openClawHostCooldownMs
   }
 
+  //方法调用
+  private async RaprouteWith(dest: string): Promise<boolean> {
+    if (dest.length <= 0) return false
+    if (!GridIdCodec.isValidId(dest)) {
+      this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
+      return true
+    }
+    this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
+    const routeReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
+    const routedOk: boolean = routeReceipts.length > 0 && routeReceipts[0].sent
+    if (routedOk) this.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
+    else this.logError('sendRoutePlanFail', `dest=${dest}, reason=${this.lastRouteFailureReason}`)
+    this.pushAssistant(`执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+    return true
+  }
+
   private async submitPrompt(raw: string, fromQueue: boolean = false, _source: string = 'text'): Promise<void> {
     const text: string = raw.trim()
     if (text.length <= 0) return
@@ -2619,19 +2631,7 @@ export struct Page4View {
     /*1.先尝试解析用户是否在下发“导航目标”*/
     const dest: string = this.extractDestNode(text)
     /*2.命中导航意图就直接走导航链路，优先保证控制实时性*/
-    if (dest.length > 0) {
-      if (!GridIdCodec.isValidId(dest)) {
-        this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
-        return
-      }
-      this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
-      const routeReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
-      const routedOk: boolean = routeReceipts.length > 0 && routeReceipts[0].sent
-      if (routedOk) this.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
-      else this.logError('sendRoutePlanFail', `dest=${dest}, reason=${this.lastRouteFailureReason}`)
-      this.pushAssistant(`执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
-      return
-    }
+    if (await this.RaprouteWith(dest))return
     /*3.如果不是导航，再识别是否是前进/停止等动作控制指令*/
     const action: Page1Action | undefined = this.resolveActionByText(lower)
     if (action !== undefined) {
@@ -2708,6 +2708,7 @@ export struct Page4View {
         try { fs.closeSync(f.fd) } catch (_) {}
       }
     }
+    page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
     this.syncPlaceAliases()
   }
 
@@ -2842,6 +2843,7 @@ export struct Page4View {
 
     if (role === 'home') this.homeNodeId = node
     else this.companyNodeId = node
+    page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
     this.syncPlaceAliases()
     const ok: boolean = this.persistPlaceBindings()
     const roleText: string = this.placeRoleText(role)

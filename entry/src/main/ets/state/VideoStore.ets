@@ -95,6 +95,10 @@ export class VideoStore {
   }
 
   setDisplayMode(mode: DisplayMode, reason: string): void {
+    if (mode === DisplayMode.RTSP) {
+      this.markSwitch(DisplayMode.HTTP, `${reason} (RTSP disabled)`)
+      return
+    }
     this.markSwitch(mode, reason)
   }
 

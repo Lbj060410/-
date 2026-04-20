@@ -256,6 +256,13 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
   const fromId = s.pathNodes[idx]
   const toId = s.pathNodes[idx + 1]
 
+  // F7 特殊流兜底：
+  // 到达 F6 时若 carport(2) 因门控等原因未成功发送，主循环在 F6 段继续补发，
+  // 避免“到达瞬间一次性尝试失败后被吞指令”。
+  if (typeof ctx.maybeHandleF7GarageSpecialFlowOnArrival === 'function') {
+    await ctx.maybeHandleF7GarageSpecialFlowOnArrival(fromId)
+  }
+
   const gateEdge: boolean =
     (fromId.trim().toUpperCase() === 'B2' && toId.trim().toUpperCase() === 'B4') ||
     (fromId.trim().toUpperCase() === 'B4' && toId.trim().toUpperCase() === 'B2')

@@ -21,7 +21,8 @@
         "text": "闹钟提醒：现在是12:14，您设置的闹钟响了。"
       },
       "state": {
-        "nextRunAtMs": 1776312840000
+        "nextRunAtMs": 1776312840000,
+        "runningAtMs": 1776500936215
       }
     },
     {
@@ -44,31 +45,8 @@
         "text": "闹钟：你好"
       },
       "state": {
-        "nextRunAtMs": 1776382200000
-      }
-    },
-    {
-      "id": "6536aa1c-739d-4e63-93b6-60c1200044d4",
-      "agentId": "main",
-      "sessionKey": "agent:main:openai:d2cfd3e2-3cb2-4405-8775-6106b1febd29",
-      "name": "10:30闹钟提醒",
-      "enabled": true,
-      "deleteAfterRun": true,
-      "createdAtMs": 1776306551374,
-      "updatedAtMs": 1776306551374,
-      "schedule": {
-        "kind": "at",
-        "at": "2026-04-16T02:30:00.000Z"
-      },
-      "sessionTarget": "main",
-      "wakeMode": "now",
-      "payload": {
-        "kind": "systemEvent",
-        "text": "⏰ 闹钟提醒：现在是10:30"
-      },
-      "state": {
-        "nextRunAtMs": 1776306600000,
-        "runningAtMs": 1776306600012
+        "nextRunAtMs": 1776382200000,
+        "runningAtMs": 1776500936215
       }
     }
   ]

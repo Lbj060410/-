@@ -185,56 +185,41 @@ export struct Page2View {
   @Builder
   private buildVideoArea(): void {
     Column() {
-      if (this.videoStore.displayMode === DisplayMode.RTSP) {
-        XComponent({
-          id: 'page2_video_surface',
-          type: 'surface',
-          controller: this.xCtrl
-        })
+      Stack() {
+        Column().width('100%').height('100%').backgroundColor('#000000')
+
+        if (this.videoStore.livePixelMap) {
+          Image(this.videoStore.livePixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Contain)
+            .backgroundColor('#00000000')
+        } else {
+          Column({ space: 8 }) {
+            LoadingProgress()
+              .width(40)
+              .height(40)
+              .color(Page1Theme.PRIMARY)
+            Text('Waiting for camera frame...')
+              .fontSize(13)
+              .fontColor(Page1Theme.TEXT_SECONDARY)
+          }
+          .justifyContent(FlexAlign.Center)
           .width('100%')
           .height('100%')
           .backgroundColor('#000000')
-          .onLoad((): void => {
-            const surfaceId: string = this.xCtrl.getXComponentSurfaceId()
-            this.c.bindSurface(surfaceId)
-          })
-      } else {
-        Stack() {
-          Column().width('100%').height('100%').backgroundColor('#000000')
-
-          if (this.videoStore.livePixelMap) {
-            Image(this.videoStore.livePixelMap)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Contain)
-              .backgroundColor('#00000000')
-          } else {
-            Column({ space: 8 }) {
-              LoadingProgress()
-                .width(40)
-                .height(40)
-                .color(Page1Theme.PRIMARY)
-              Text('Waiting for camera frame...')
-                .fontSize(13)
-                .fontColor(Page1Theme.TEXT_SECONDARY)
-            }
-            .justifyContent(FlexAlign.Center)
-            .width('100%')
-            .height('100%')
-            .backgroundColor('#000000')
-          }
-
-          this.buildLiveOverlay()
         }
-        .width('100%')
-        .height('100%')
-        .clip(true)
-        .onAreaChange((oldValue: Area, newValue: Area): void => {
-          void oldValue
-          this.videoAreaWidth = this.lengthToNumber(newValue.width)
-          this.videoAreaHeight = this.lengthToNumber(newValue.height)
-        })
+
+        this.buildLiveOverlay()
       }
+      .width('100%')
+      .height('100%')
+      .clip(true)
+      .onAreaChange((oldValue: Area, newValue: Area): void => {
+        void oldValue
+        this.videoAreaWidth = this.lengthToNumber(newValue.width)
+        this.videoAreaHeight = this.lengthToNumber(newValue.height)
+      })
     }
     .width('100%')
     .height('100%')
@@ -365,14 +350,8 @@ export struct Page2View {
           .fontWeight(FontWeight.Bold)
           .border({ width: 1, color: '#E2E8F0' })
           .onClick((): void => {
-            const toRtsp: boolean = this.videoStore.displayMode !== DisplayMode.RTSP
-            if (toRtsp) {
-              this.videoStore.setDisplayMode(DisplayMode.RTSP, 'manual switch')
-              this.videoStore.setStatus('已切到 RTSP 预览')
-            } else {
-              this.videoStore.setDisplayMode(DisplayMode.HTTP, 'manual switch')
-              this.videoStore.setStatus('已切到 HTTP 预览')
-            }
+            this.videoStore.setDisplayMode(DisplayMode.HTTP, 'manual switch')
+            this.videoStore.setStatus('当前设备仅启用 HTTP 预览')
           })
 
         Button(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '开障' : '关障')

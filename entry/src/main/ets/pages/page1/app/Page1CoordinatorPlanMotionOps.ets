@@ -23,6 +23,20 @@ function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
   return from === 'B4' && to === 'B6'
 }
 
+function shouldEnableTrafficByPoseAtB4(ctx: any): boolean {
+  const s = ctx.store
+  if (!s) return false
+  const curId: string = s.currentSnapNodeId.trim().toUpperCase()
+  if (curId !== 'B4') return false
+  if (typeof ctx.segmentHeadingDeg !== 'function') return false
+  const desiredHeadingDeg: number = ctx.segmentHeadingDeg('B4', 'B6')
+  const rawHeadingDeg: number = Number(ctx.logicalHeadingDeg) || 0
+  const currentHeadingDeg: number = typeof ctx.normToCardinal === 'function'
+    ? ctx.normToCardinal(rawHeadingDeg)
+    : (Math.round(rawHeadingDeg / 90) % 4) * 90
+  return currentHeadingDeg === desiredHeadingDeg
+}
+
 function syncRecognitionBySegment(fromId: string, toId: string): void {
   const trafficEnabled: boolean = shouldEnableTrafficBySegment(fromId, toId)
   videoStore.setRecognitionEnabled(true)
@@ -36,6 +50,11 @@ function syncRecognitionBySegment(fromId: string, toId: string): void {
 function syncRecognitionByPathCursor(ctx: any): void {
   const s = ctx.store
   if (!s) return
+  if (shouldEnableTrafficByPoseAtB4(ctx)) {
+    videoStore.setRecognitionEnabled(true)
+    videoStore.setPage2TrafficEnabled(true)
+    return
+  }
   if (s.pathNodes.length <= 1) {
     videoStore.setRecognitionEnabled(true)
     videoStore.setPage2Yolov26BarrierEnabled(true)
@@ -150,6 +169,9 @@ export function planPath(ctx: any, dest: string): void {
     s.setPath([], '起点非法')
     s.pushLog(`A*: 起点非法 start=${start}`)
     return
+  }
+  if (typeof ctx.setTrajectoryPlanEndpoints === 'function') {
+    ctx.setTrajectoryPlanEndpoints(start, goal)
   }
 
   const blocked: Array<string> = s.blockedNodes

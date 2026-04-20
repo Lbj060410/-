@@ -173,7 +173,6 @@ const TEXTONE1_DOMAIN = 0xFF02
 const TEXTONE1_TAG = 'textone1'
 const GARAGE_CARPORT_ACK_RELEASE_TIMEOUT_MS = 7000
 const GARAGE_LOWCARPORT_ACK_RELEASE_TIMEOUT_MS = 6000
-const GARAGE_SPECIAL_ACK_HOLD_TIMEOUT_MS = 1800
 
 export class Page1Coordinator {
   private store?: Page1UiStore
@@ -272,9 +271,6 @@ export class Page1Coordinator {
   private garageF7DestLowSent: boolean = false
   private garageLowcarportAckPending: boolean = false
   private garageLowcarportAckSentAtMs: number = 0
-  private garageSpecialAckHoldPending: boolean = false
-  private garageSpecialAckHoldSentAtMs: number = 0
-  private garageSpecialAckHoldSourceTag: string = ''
   private trafficGateWaiting: boolean = false
   private trafficGateEdgeKey: string = ''
   private trafficGateLastLogAtMs: number = 0
@@ -313,6 +309,8 @@ export class Page1Coordinator {
   private lightMetricReady: boolean = false
   private lightMetricLastQueryAtMs: number = 0
   private lightMetricQueriedOnPageOpen: boolean = false
+  private trajectoryPlanStartPoint: string = ''
+  private trajectoryPlanEndPoint: string = ''
   private lastYolov26BarrierEmergencyTaskId: string = ''
   private lastYolov26BarrierEmergencyTsMs: number = 0
   private started: boolean = false
@@ -537,12 +535,6 @@ export class Page1Coordinator {
   private onPathAckStatusForDashboard(status: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
-    if (this.garageSpecialAckHoldPending) {
-      const elapsedMs: number = this.garageSpecialAckHoldSentAtMs > 0 ? Math.max(0, Date.now() - this.garageSpecialAckHoldSentAtMs) : 0
-      const sourceTag: string = this.garageSpecialAckHoldSourceTag.length > 0 ? this.garageSpecialAckHoldSourceTag : 'GARAGE_SPECIAL'
-      this.clearGarageSpecialAckHold()
-      s.pushLog(`GARAGE_SPECIAL_ACK: ${sourceTag} recv BD/${status.toString(16).padStart(2, '0').toUpperCase()} elapsed=${elapsedMs}ms`)
-    }
     if (!s.realSendEnabled) {
       s.setMetricSpeedCms(0)
       s.setMetricDistanceCm(0)
@@ -1112,7 +1104,10 @@ export class Page1Coordinator {
     const id: string = nodeId.trim().toUpperCase()
     if (id.length <= 0) return
     const intervalMs: number = this.gateBillingIntervalMs(Date.now())
-    void saveCarTrajectoryByNode(id, intervalMs)
+    void saveCarTrajectoryByNode(id, intervalMs, {
+      startPoint: this.trajectoryPlanStartPoint,
+      endPoint: this.trajectoryPlanEndPoint
+    })
       .then((ok: boolean): void => {
         if (!ok) s.pushLog(`WEB_CONNECT: 上报跳过 node=${id}`)
       })
@@ -1120,6 +1115,11 @@ export class Page1Coordinator {
         const message: string = (err as Error).message
         s.pushLog(`WEB_CONNECT: 上报失败 node=${id} err=${message}`)
       })
+  }
+
+  private setTrajectoryPlanEndpoints(startPoint: string, endPoint: string): void {
+    this.trajectoryPlanStartPoint = startPoint.trim().toUpperCase()
+    this.trajectoryPlanEndPoint = endPoint.trim().toUpperCase()
   }
 
   private updatePoseAndTelemetryForDisplay(xNorm: number, yNorm: number, headingDeg: number, speed: number): void {
@@ -1365,7 +1365,6 @@ export class Page1Coordinator {
     this.garageF7StartRiseSent = false
     this.garageF7DestLowSent = false
     this.clearGarageLowcarportAckWait()
-    this.clearGarageSpecialAckHold()
     this.gateBillingRunning = false
     this.gateBillingStartAtMs = 0
     this.gateBillingElapsedMs = 0
@@ -1449,18 +1448,6 @@ export class Page1Coordinator {
   private armGarageLowcarportAckWait(): void {
     this.garageLowcarportAckPending = true
     this.garageLowcarportAckSentAtMs = Date.now()
-  }
-
-  private clearGarageSpecialAckHold(): void {
-    this.garageSpecialAckHoldPending = false
-    this.garageSpecialAckHoldSentAtMs = 0
-    this.garageSpecialAckHoldSourceTag = ''
-  }
-
-  private armGarageSpecialAckHold(sourceTag: string): void {
-    this.garageSpecialAckHoldPending = true
-    this.garageSpecialAckHoldSentAtMs = Date.now()
-    this.garageSpecialAckHoldSourceTag = sourceTag
   }
 
   private armGarageCarportAckRetry(level: number): void {
@@ -1598,6 +1585,7 @@ export class Page1Coordinator {
           return true
         }
         await this.proto.lowcarport()
+        this.markPathCommandSent('车库调至一层并获取当前层数')
         if (this.canRealSend()) this.armGarageLowcarportAckWait()
         {
           const payloadText: string = 'textone1 GARAGE_DEPART sent_0x19 lowcarport'
@@ -1726,7 +1714,7 @@ export class Page1Coordinator {
           this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
           s.bumpTx()
           await this.proto.carport(2)
-          if (this.canRealSend()) this.armGarageSpecialAckHold('F7_START_AT_F6:CARPORT_2')
+          this.markPathCommandSent('车库到2层')
           // F7->F6 升库不再占用全局 ACK 门控，避免吞掉后续路线指令。
           this.garageF7StartRiseSent = true
           s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 -> sent carport(2)')
@@ -1746,7 +1734,7 @@ export class Page1Coordinator {
             this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
             s.bumpTx()
             await this.proto.lowcar()
-            if (this.canRealSend()) this.armGarageSpecialAckHold('F7_DEST_PRE3:LOWCAR')
+            this.markPathCommandSent('车库调至一层不会获取当前层数')
             this.garageF7DestLowSent = true
             s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 -> sent lowcar()')
           } else {
@@ -1878,23 +1866,6 @@ export class Page1Coordinator {
     const nowMs: number = Date.now()
     const s: Page1UiStore | undefined = this.store
     this.releaseStaleGarageAckWaitIfNeeded(nowMs)
-    if (this.garageSpecialAckHoldPending) {
-      const elapsedMs: number = this.garageSpecialAckHoldSentAtMs > 0 ? Math.max(0, nowMs - this.garageSpecialAckHoldSentAtMs) : 0
-      if (elapsedMs >= GARAGE_SPECIAL_ACK_HOLD_TIMEOUT_MS) {
-        this.clearGarageSpecialAckHold()
-        if (s) s.pushLog(`GARAGE_SPECIAL_ACK: wait timeout(${elapsedMs}ms), release motion guard`)
-      } else {
-        const allowSource: boolean = sourceTag === 'F7_START_AT_F6' || sourceTag === 'F7_DEST_PRE3'
-        if (!allowSource) {
-          if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
-            this.motionCommandBlockLastLogAtMs = nowMs
-            const source: string = this.garageSpecialAckHoldSourceTag.length > 0 ? this.garageSpecialAckHoldSourceTag : 'GARAGE_SPECIAL'
-            s.pushLog(`GARAGE_SPECIAL_ACK_WAIT: ${sourceTag}:${commandKey} blocked by ${source}, elapsed=${elapsedMs}ms`)
-          }
-          return false
-        }
-      }
-    }
     if (this.emergencyMotionCommandLocked) {
       if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
         this.motionCommandBlockLastLogAtMs = nowMs
@@ -1919,7 +1890,7 @@ export class Page1Coordinator {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
     const safeCount: number = Math.max(1, Math.round(repeatCount))
-    const safeIntervalMs: number = Math.max(0, Math.round(intervalMs))
+    const safeIntervalMs: number = Math.max(10, Math.round(intervalMs))
     this.emergencyAlarmBurstActive = true
     this.emergencyAlarmBurstAckAtMs = 0
     this.emergencyAlarmBurstLastSendAtMs = 0
@@ -1939,13 +1910,10 @@ export class Page1Coordinator {
           break
         }
         if (i + 1 < safeCount && safeIntervalMs > 0) {
-          const deadlineMs: number = Date.now() + safeIntervalMs
-          while (Date.now() < deadlineMs) {
-            if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
-              s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
-              return
-            }
-            await this.sleep(2)
+          await this.sleep(safeIntervalMs)
+          if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
+            s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
+            return
           }
         }
       }
