@@ -7,8 +7,9 @@
  */
 import { CarProtocolService, CarSendMode } from '../control/CarProtocolService'
 import { RecogStore } from '../../state/RecogStore'
+import { videoStore } from '../../state/VideoStore'
 import { RecognitionResult } from './RecognitionResult'
-import { RecognitionSubtype } from './RecognitionTask'
+import { RecognitionSubtype, RecognitionTaskKind, RecognitionTaskSource } from './RecognitionTask'
 import { EncodedPayload12B, RecogPayload, RecogPayloadKind } from './RecogPayload'
 import { RecognitionResultViewHelper } from './RecognitionResultViewHelper'
 
@@ -16,6 +17,11 @@ export class RecognitionReportService {
   private readonly store: RecogStore
   private readonly proto: CarProtocolService = new CarProtocolService()
   private boundProto?: CarProtocolService
+  private lastTrafficSignalTaskId: string = ''
+  private lastTrafficSignalToken: string = ''
+  private lastTrafficSignalSentAtMs: number = 0
+  private readonly trafficSignalSendMinIntervalMs: number = 1200
+  private trafficSignalSendBusy: boolean = false
 
   constructor(store: RecogStore) {
     this.store = store
@@ -36,6 +42,16 @@ export class RecognitionReportService {
     if (!this.store.autoReportEnabled) return
     if (!result.ok) return
 
+    if (result.subtype === RecognitionSubtype.TRAFFIC_LIGHT) {
+      try {
+        await this.maybeSendTrafficSignalCommand(result)
+      } catch (e) {
+        const msg: string = e instanceof Error ? e.message : String(e)
+        console.warn(`[shibie] traffic-auto-report-error msg=${msg}`)
+      }
+      return
+    }
+
     const encoded: EncodedPayload12B | null = this.tryEncode(result)
     if (!encoded) return
 
@@ -44,6 +60,43 @@ export class RecognitionReportService {
 
   private currentProto(): CarProtocolService {
     return this.boundProto ?? this.proto
+  }
+
+  private async maybeSendTrafficSignalCommand(result: RecognitionResult): Promise<void> {
+    // 仅 Page2 实时识别触发灯色指令；其他来源不发送，避免指令风暴。
+    if (result.kind !== RecognitionTaskKind.LIVE) return
+    if (result.source !== RecognitionTaskSource.PAGE2_BUTTON) return
+    if (!videoStore.recognitionEnabled || !videoStore.page2TrafficEnabled) return
+
+    const token: string = this.normalizeTrafficLightToken(
+      RecognitionResultViewHelper.bestTextForSubtype(result, RecognitionSubtype.TRAFFIC_LIGHT)
+    )
+    if (token !== 'R' && token !== 'G') return
+    if (this.trafficSignalSendBusy) return
+
+    const taskId: string = result.taskId || ''
+    const nowMs: number = Date.now()
+    if (taskId.length > 0 && taskId === this.lastTrafficSignalTaskId && token === this.lastTrafficSignalToken) return
+    if (token === this.lastTrafficSignalToken && (nowMs - this.lastTrafficSignalSentAtMs) < this.trafficSignalSendMinIntervalMs) return
+
+    this.trafficSignalSendBusy = true
+    try {
+      const p: CarProtocolService = this.currentProto()
+      if (token === 'R') {
+        await p.red()
+      } else {
+        await p.green()
+      }
+      this.lastTrafficSignalTaskId = taskId
+      this.lastTrafficSignalToken = token
+      this.lastTrafficSignalSentAtMs = nowMs
+      console.info(`[shibie] traffic-direct-send token=${token} task=${taskId}`)
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      console.warn(`[shibie] traffic-direct-send-error token=${token} task=${taskId} msg=${msg}`)
+    } finally {
+      this.trafficSignalSendBusy = false
+    }
   }
 
   private tryEncode(result: RecognitionResult): EncodedPayload12B | null {
@@ -175,4 +228,3 @@ export class RecognitionReportService {
     return out
   }
 }
-

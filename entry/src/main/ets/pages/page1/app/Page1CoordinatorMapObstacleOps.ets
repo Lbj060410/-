@@ -113,15 +113,48 @@ export async function previewManualActionOnMapAsync(ctx: any, action: Page1Actio
   const startHeadingDeg = ctx.norm360(s.pose.headingDeg)
   if (action === Page1Action.GO || action === Page1Action.BACK) {
     const headingDeg = ctx.normToCardinal(startHeadingDeg)
-    let dirX = 0
-    let dirY = 0
-    if (headingDeg === 0) dirX = 1
-    else if (headingDeg === 90) dirY = 1
-    else if (headingDeg === 180) dirX = -1
-    else dirY = -1
-    const sign = action === Page1Action.BACK ? -1 : 1
-    const toXNorm = clamp01Value(startXNorm + dirX * P1C.MANUAL_MAP_STEP_NORM * sign)
-    const toYNorm = clamp01Value(startYNorm + dirY * P1C.MANUAL_MAP_STEP_NORM * sign)
+    const fromIdCandidate: string =
+      GridIdCodec.isValidId(s.currentSnapNodeId.trim().toUpperCase())
+        ? s.currentSnapNodeId.trim().toUpperCase()
+        : String(ctx.nearestNodeIdByPose()).trim().toUpperCase()
+    const fromNode = GridIdCodec.isValidId(fromIdCandidate) ? ctx.findNode(fromIdCandidate) : undefined
+    let toXNorm = startXNorm
+    let toYNorm = startYNorm
+
+    if (fromNode) {
+      const moveHeadingDeg: number = action === Page1Action.BACK ? ctx.normToCardinal(headingDeg + 180) : headingDeg
+      const edges = PathPlannerAStar.routeEdges()
+      let targetId: string = ''
+      for (let i: number = 0; i < edges.length; i++) {
+        const e = edges[i]
+        let nb: string = ''
+        if (e.a === fromIdCandidate) nb = e.b
+        else if (e.b === fromIdCandidate) nb = e.a
+        else continue
+        const segHeading: number = ctx.segmentHeadingDeg(fromIdCandidate, nb)
+        if (segHeading === moveHeadingDeg) {
+          targetId = nb
+          break
+        }
+      }
+      if (targetId.length > 0) {
+        const targetNode = ctx.findNode(targetId)
+        if (targetNode) {
+          toXNorm = clamp01Value(targetNode.xNorm)
+          toYNorm = clamp01Value(targetNode.yNorm)
+        }
+      } else {
+        let dirX = 0
+        let dirY = 0
+        if (moveHeadingDeg === 0) dirX = 1
+        else if (moveHeadingDeg === 90) dirY = 1
+        else if (moveHeadingDeg === 180) dirX = -1
+        else dirY = -1
+        toXNorm = clamp01Value(startXNorm + dirX * P1C.MANUAL_MAP_STEP_NORM)
+        toYNorm = clamp01Value(startYNorm + dirY * P1C.MANUAL_MAP_STEP_NORM)
+      }
+    }
+
     const speed = action === Page1Action.BACK ? -20 : 20
     const token = ctx.beginMapPoseAnimation()
     await animateMapPoseTransition(
@@ -137,7 +170,7 @@ export async function previewManualActionOnMapAsync(ctx: any, action: Page1Actio
       token
     )
     if (!ctx.isMapPoseAnimationActive(token)) return
-    ctx.logicalHeadingDeg = headingDeg
+    ctx.logicalHeadingDeg = ctx.normToCardinal(startHeadingDeg)
     ctx.logicalHeadingInited = true
     syncCurrentSnapNodeByPose(ctx, toXNorm, toYNorm)
     return
@@ -689,5 +722,4 @@ export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
   ctx.planPath(goal)
   return true
 }
-
 

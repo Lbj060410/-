@@ -17,30 +17,30 @@ export const CAR_CAMERA_PASS: string = '888888'
 // 对于真实设备：
 // 1) 将 OPENCLAW_GATEWAY_HOST 设置为你的 PC 局域网 IP，或保持空以自动尝试 Wi-Fi 网关 IP。
 // 2) 通过应用设置 UI 设置 OPENCLAW_GATEWAY_TOKEN — 不要在此处硬编码令牌。
-export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.100'
-export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '192.168.156.101'
+export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.101'
+export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '172.18.65.43'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
-export const OPENCLAW_GATEWAY_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'  // 与运行中的网关令牌保持同步
+export const OPENCLAW_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'  // 使用具备 operator.read/operator.write 的令牌
 // 可选：放置具备 operator.read/operator.write 的节点令牌作为回退，避免 scope 不匹配导致能力受限。
 export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const OPENCLAW_CHAT_MODEL: string = 'deepseek/deepseek-chat'
-export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 8000
-export const OPENCLAW_READ_TIMEOUT_MS: number = 15000
+export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 12000
+export const OPENCLAW_READ_TIMEOUT_MS: number = 60000
 
 // PC 工具网关配置（MVP）：
 // 用于执行受控工具：read_file / process_list / exec_cmd(白名单)。
-export const PC_TOOL_GATEWAY_HOST: string = '192.168.156.101'
+export const PC_TOOL_GATEWAY_HOST: string = '192.168.156.102'
 export const PC_TOOL_GATEWAY_PORT: number = 18789
-export const PC_TOOL_GATEWAY_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'
+export const PC_TOOL_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const PC_TOOL_GATEWAY_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
 export const PC_TOOL_CONNECT_TIMEOUT_MS: number = 5000
 export const PC_TOOL_READ_TIMEOUT_MS: number = 20000
 
 // 鸿蒙平板伴侣代理配置（MVP）：
 // 通过代理 App 执行受控跨应用能力（如设置闹钟、打开应用）。
-export const TABLET_COMPANION_HOST: string = '192.168.156.101'
+export const TABLET_COMPANION_HOST: string = '192.168.156.102'
 export const TABLET_COMPANION_PORT: number = 18789
-export const TABLET_COMPANION_TOKEN: string = 'ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29'
+export const TABLET_COMPANION_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const TABLET_COMPANION_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
 export const TABLET_COMPANION_NODE_ID: string = 'tablet-main'
 export const TABLET_COMPANION_CONNECT_TIMEOUT_MS: number = 5000

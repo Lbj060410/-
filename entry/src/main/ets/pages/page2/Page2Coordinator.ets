@@ -25,7 +25,6 @@ import { RecognitionTaskKind, RecognitionTaskState } from '../../services/recogn
 import { RecogEngineType } from '../../services/recognition/RecognitionConfig'
 import { BBoxNorm, RecognitionResult } from '../../services/recognition/RecognitionResult'
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
-import { page1Store } from '../page1/app/Page1UiStore'
 import { validateJpegBuffer } from '../../utils/BackgroundCompute'
 import { saveSignalCarBatch, SignalCarPayload } from '../../services/webpageinteraction/webconnect'
 
@@ -70,6 +69,8 @@ export class Page2Coordinator {
   private autoSnapBusy: boolean = false
   private readonly autoSnapMinIntervalMs: number = 1200
   private recognitionPauseUntilMs: number = 0
+  // 防止拥塞保护长期压住识别：至少周期性放行一次实时识别探测帧。
+  private readonly recognitionForceProbeIntervalMs: number = 1800
   private activeSnapshotUrl: string = ''
   private started: boolean = false
   private starting: boolean = false
@@ -107,6 +108,10 @@ export class Page2Coordinator {
   private lastLiveFrameSignature: number = 0
   private lastLiveSignatureAtMs: number = 0
   private readonly liveUnchangedSkipWindowMs: number = 1200
+  // traffic 模式下需要更高刷新频率，避免静态画面被长时间去重导致“结果不更新”。
+  private readonly trafficUnchangedSkipWindowMs: number = 220
+  private lastTrafficRealtimeHintAtMs: number = 0
+  private lastRecognitionForceProbeLogAtMs: number = 0
   private pageBackgroundMode: boolean = false
 
   constructor() {
@@ -236,7 +241,10 @@ export class Page2Coordinator {
       this.lastLiveSignatureAtMs = nowMs
       return false
     }
-    if (nowMs - this.lastLiveSignatureAtMs < this.liveUnchangedSkipWindowMs) {
+    const skipWindowMs: number = videoStore.page2TrafficEnabled
+      ? this.trafficUnchangedSkipWindowMs
+      : this.liveUnchangedSkipWindowMs
+    if (nowMs - this.lastLiveSignatureAtMs < skipWindowMs) {
       return true
     }
     this.lastLiveSignatureAtMs = nowMs
@@ -958,6 +966,14 @@ export class Page2Coordinator {
   }
 
   private maybeAutoSnapshotFromVision(currentPm: image.PixelMap, nowMs: number): void {
+    // traffic 实时模式下关闭自动快照归档，避免 clone/写盘抬高延迟，导致 LIVE 长期掉帧。
+    if (videoStore.page2TrafficEnabled) {
+      if (nowMs - this.lastTrafficRealtimeHintAtMs >= 2000) {
+        this.lastTrafficRealtimeHintAtMs = nowMs
+        console.info('[Page2] traffic mode: skip auto snapshot archive for realtime refresh')
+      }
+      return
+    }
     const r: RecognitionResult | undefined = this.latestSuccessfulPage2LiveResult()
     if (!r) return
     if (r.subtype !== RecognitionSubtype.YOLOV26BARRIER && r.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
@@ -1010,6 +1026,16 @@ export class Page2Coordinator {
   }
 
   private refreshRecognitionPause(nowMs: number): void {
+    const sinceLastSubmitMs: number = nowMs - this.lastLiveSubmitAtMs
+    if (sinceLastSubmitMs >= this.recognitionForceProbeIntervalMs) {
+      // 即使处于拥塞态，也周期性放行一次识别，避免 UI 结果长时间不刷新。
+      if (nowMs - this.lastRecognitionForceProbeLogAtMs >= 2000) {
+        this.lastRecognitionForceProbeLogAtMs = nowMs
+        console.info(`[Page2] recognition force probe release sinceLast=${sinceLastSubmitMs}ms`)
+      }
+      return
+    }
+
     const videoLatencyMs: number = Math.max(0, Math.trunc(videoStore.diagVideoLatencyMs))
     const pullMs: number = Math.max(0, Math.trunc(videoStore.diagVideoPullIntervalMs))
     const vFps: number = Math.max(0, Math.trunc(videoStore.diagVideoFps))
@@ -1073,34 +1099,6 @@ export class Page2Coordinator {
     }
     if (videoStore.page2Yolov26BarrierExperimentalEnabled) return RecognitionSubtype.YOLOV26BARRIER
     return undefined
-  }
-
-  private isTrafficGatePoseMatched(): boolean {
-    const snapId: string = page1Store.currentSnapNodeId.trim().toUpperCase()
-    if (snapId.length <= 0) return false
-
-    const headingCardinal: number = this.normToCardinal(page1Store.pose.headingDeg)
-    if (snapId === 'B4' && headingCardinal === 90) return true
-    return false
-  }
-
-  private normToCardinal(v: number): number {
-    let x: number = v % 360
-    if (x < 0) x += 360
-
-    const cands: number[] = [0, 90, 180, 270]
-    let best: number = cands[0]
-    let bestErr: number = 360
-    for (let i: number = 0; i < cands.length; i++) {
-      const c: number = cands[i]
-      const d: number = Math.abs(x - c)
-      const err: number = Math.min(d, 360 - d)
-      if (err < bestErr) {
-        bestErr = err
-        best = c
-      }
-    }
-    return best
   }
 
   private modeText(): string {

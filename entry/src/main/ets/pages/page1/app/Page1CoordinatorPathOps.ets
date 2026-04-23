@@ -226,6 +226,15 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
   if (ctx.parkingInProgress) return
   if (ctx.gateDepartInProgress) return
   if (ctx.motionRunning()) return
+  if (ctx.lowcarAwaitingBc05) {
+    const lastLogAtMs: number = Number(ctx.lowcarAwaitingBc05LastLogAtMs) || 0
+    if (nowMs - lastLogAtMs >= 1200) {
+      ctx.lowcarAwaitingBc05LastLogAtMs = nowMs
+      const sWait = ctx.store
+      if (sWait) sWait.pushLog('LOWCAR_BC05: 等待 BC/05，主链暂停下发')
+    }
+    return
+  }
 
   if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
     if (!canSendNextCommand(ctx, nowMs)) return

@@ -257,6 +257,7 @@ export class PathPlannerAStar {
         const f: number = tentativeG + h
         /*6.把更新后的候选节点重新入队，继续下一轮最优搜索*/
         open.push(new AStarNode(nb, tentativeG, f, current.id))
+
       }
     }
 

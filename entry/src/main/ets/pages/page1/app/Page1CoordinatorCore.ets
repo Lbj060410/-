@@ -165,6 +165,7 @@ import {
   isShigongYolov26BarrierLabelKey,
   normalizeYolov26BarrierLabelKey
 } from './TrafficYolov26BarrierLabelPolicy'
+import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
 import { TimerManager } from './Page1TimerManager'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 import hilog from '@ohos.hilog'
@@ -173,6 +174,7 @@ const TEXTONE1_DOMAIN = 0xFF02
 const TEXTONE1_TAG = 'textone1'
 const GARAGE_CARPORT_ACK_RELEASE_TIMEOUT_MS = 7000
 const GARAGE_LOWCARPORT_ACK_RELEASE_TIMEOUT_MS = 6000
+const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 600
 
 export class Page1Coordinator {
   private store?: Page1UiStore
@@ -271,9 +273,14 @@ export class Page1Coordinator {
   private garageF7DestLowSent: boolean = false
   private garageLowcarportAckPending: boolean = false
   private garageLowcarportAckSentAtMs: number = 0
+  private lowcarAwaitingBc05: boolean = false
+  private lowcarAwaitingBc05SinceMs: number = 0
+  private lowcarAwaitingBc05LastLogAtMs: number = 0
   private trafficGateWaiting: boolean = false
   private trafficGateEdgeKey: string = ''
   private trafficGateLastLogAtMs: number = 0
+  private trafficGateResumeManual: boolean = false
+  private trafficGateRetryBusy: boolean = false
   private gateBillingRunning: boolean = false
   private gateBillingStartAtMs: number = 0
   private gateBillingElapsedMs: number = 0
@@ -963,11 +970,39 @@ export class Page1Coordinator {
     if (!s) return
     const safeCode: number = Math.max(0, Math.min(0xFF, Math.trunc(code)))
     const hexCode: string = `0x${safeCode.toString(16).toUpperCase().padStart(2, '0')}`
+    const motionKeyByCode: Record<number, string> = {
+      0x01: 'GO',
+      0x02: 'BACK',
+      0x03: 'LEFT',
+      0x04: 'RIGHT',
+      0x05: 'LEFT_HALF',
+      0x06: 'RIGHT_HALF',
+      0x0E: 'UTURN'
+    }
+    const motionKey: string | undefined = motionKeyByCode[safeCode]
+    if (motionKey && !this.canSendMotionCommand(motionKey, 'CUSTOM_0A')) {
+      s.pushLog(`自定义控制拦截：${hexCode}，发送锁未释放`)
+      return
+    }
+    if (safeCode === 0x01) {
+      if (maybeBlockGoByTrafficGate(this as object, Date.now(), true)) {
+        s.setAction(`自定义0x0A=${hexCode} 被红绿灯门禁阻塞`)
+        s.pushLog(`自定义控制拦截：${hexCode}，等待绿灯放行`)
+        return
+      }
+    }
     this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
     s.bumpTx()
     s.setAction(`自定义0x0A=${hexCode}`)
     s.pushLog(`自定义控制发送：${hexCode}`)
     await this.proto.sendCustomControl0A(safeCode, `自定义0x0A=${hexCode}`)
+    if (safeCode === 0x01) this.previewManualActionOnMap(Page1Action.GO)
+    else if (safeCode === 0x02) this.previewManualActionOnMap(Page1Action.BACK)
+    else if (safeCode === 0x03) this.previewManualActionOnMap(Page1Action.LEFT)
+    else if (safeCode === 0x04) this.previewManualActionOnMap(Page1Action.RIGHT)
+    else if (safeCode === 0x05) this.previewManualActionOnMap(Page1Action.LEFT_HALF)
+    else if (safeCode === 0x06) this.previewManualActionOnMap(Page1Action.RIGHT_HALF)
+    else if (safeCode === 0x0E) this.previewManualActionOnMap(Page1Action.UTURN)
   }
 
   private async sendDriveActionDirect(a: Page1Action): Promise<boolean> {
@@ -1365,6 +1400,9 @@ export class Page1Coordinator {
     this.garageF7StartRiseSent = false
     this.garageF7DestLowSent = false
     this.clearGarageLowcarportAckWait()
+    this.lowcarAwaitingBc05 = false
+    this.lowcarAwaitingBc05SinceMs = 0
+    this.lowcarAwaitingBc05LastLogAtMs = 0
     this.gateBillingRunning = false
     this.gateBillingStartAtMs = 0
     this.gateBillingElapsedMs = 0
@@ -1730,6 +1768,11 @@ export class Page1Coordinator {
       if (destId === 'F7' && s.pathNodes.length > 1) {
         const remainingNodes: number = s.pathNodes.length - s.pathIndex
         if (remainingNodes === 3) {
+          if (s.isBlockedEdge('D6', 'F6')) {
+            this.garageF7DestLowSent = true
+            s.pushLog('GARAGE_F7_FLOW: D6|F6 已阻塞，跳过 lowcar()')
+            return
+          }
           if (this.canSendMotionCommand('LOWCAR', 'F7_DEST_PRE3')) {
             this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
             s.bumpTx()
@@ -1742,6 +1785,36 @@ export class Page1Coordinator {
           }
         }
       }
+    }
+  }
+
+  private armLowcarBc05Wait(): void {
+    this.lowcarAwaitingBc05 = true
+    this.lowcarAwaitingBc05SinceMs = Date.now()
+    this.lowcarAwaitingBc05LastLogAtMs = 0
+  }
+
+  private onLowcarDone05(): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const elapsedMs: number = this.lowcarAwaitingBc05SinceMs > 0
+      ? Math.max(0, Date.now() - this.lowcarAwaitingBc05SinceMs)
+      : 0
+
+    this.lowcarAwaitingBc05 = false
+    this.lowcarAwaitingBc05SinceMs = 0
+    this.lowcarAwaitingBc05LastLogAtMs = 0
+
+    const blockedEdgeId: string = 'D6|F6'
+    const added: boolean = s.addBlockedEdgeIfAbsent(blockedEdgeId, 'LOWCAR_BC05')
+    s.pushLog(
+      added
+        ? `LOWCAR_BC05: 收到BC/05，已封禁边 ${blockedEdgeId}，elapsed=${elapsedMs}ms`
+        : `LOWCAR_BC05: 收到BC/05，边已封禁 ${blockedEdgeId}，elapsed=${elapsedMs}ms`
+    )
+
+    if (s.destApplied.length > 0) {
+      void this.followPathOnce(Date.now(), true)
     }
   }
 
@@ -1874,7 +1947,11 @@ export class Page1Coordinator {
       return false
     }
 
-    if (!this.isMotionCommandBlocked(nowMs)) return true
+    if (!this.isMotionCommandBlocked(nowMs)) {
+      // 全局 single-flight：任何入口放行后短时间内拒绝并发第二次发送。
+      this.setMotionCommandBlock(`SEND_LOCK:${sourceTag}:${commandKey}`, MOTION_SEND_SINGLE_FLIGHT_HOLD_MS)
+      return true
+    }
 
     if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
       this.motionCommandBlockLastLogAtMs = nowMs

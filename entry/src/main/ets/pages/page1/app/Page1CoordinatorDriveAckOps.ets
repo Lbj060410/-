@@ -130,6 +130,12 @@ async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number
     return true
   }
   if (key === 'LOWCAR') {
+    if (typeof s.isBlockedEdge === 'function' && s.isBlockedEdge('D6', 'F6')) {
+      if (typeof s.pushLog === 'function') {
+        s.pushLog('LOWCAR_SKIP: D6|F6 已阻塞，跳过 lowcar 重发')
+      }
+      return false
+    }
     await ctx.proto.lowcar()
     return true
   }
@@ -169,14 +175,15 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
   const nextSendCount: number = ctx.pathAckRetrySentCount + 1
   const sentOk: boolean = await sendPathAckCommandByKey(ctx, key, commandSeq)
   if (!sentOk) {
-    s.pushLog(`PATH_ACK_RETRY: 重发失败 key=${key}`)
+    s.pushLog(`PATH_ACK_RETRY[RETRY]: 重发失败 key=${key}`)
     return
   }
 
   ctx.pathAckRetrySentCount = nextSendCount
   ctx.pathAckLastSendAtMs = Date.now()
   ctx.pathAckLastStatusCode = 0
-  s.pushLog(`PATH_ACK_RETRY: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
+  s.setAction(`自动动作重发[RETRY]=${ctx.pathAckLastCommandText}`)
+  s.pushLog(`PATH_ACK_RETRY[RETRY]: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
   armPathAckRetryTimer(ctx)
 }
 
@@ -400,9 +407,17 @@ export function isPathMotionAction(action: Page1Action): boolean {
     action === Page1Action.UTURN
 }
 
+function formatActionWithBurstX2(actionText: string): string {
+  const t: string = actionText.trim()
+  if (t.length <= 0) return t
+  if (t.indexOf('x2') >= 0 || t.indexOf('X2') >= 0) return t
+  return `${t} x2`
+}
+
 export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean {
   const s = ctx.store
   if (!s) return false
+  const nextActionTextShown: string = formatActionWithBurstX2(nextActionText)
   if (!ctx.pathAckFirstCommandSent) return true
   if (!ctx.pathAckAwaitingComplete) return true
 
@@ -413,7 +428,7 @@ export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean
     const logElapsed: number = nowMs - ctx.pathAckLastWaitLogAtMs
     if (logElapsed >= P1C.PATH_ACK_WAIT_LOG_COOLDOWN_MS) {
       ctx.pathAckLastWaitLogAtMs = nowMs
-      s.pushLog(`PATH_ACK_BLOCKED: 等待上一条完成，下一条=${nextActionText}`)
+      s.pushLog(`PATH_ACK_BLOCKED: 等待上一条完成，下一条=${nextActionTextShown}`)
     }
     return false
   }
@@ -421,8 +436,8 @@ export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean
   if (elapsedMs >= P1C.PATH_ACK_TIMEOUT_MS) {
     ctx.pathAckBlocked = true
     ctx.pathAckLastWaitLogAtMs = nowMs
-    s.setAction(`路径指令等待超时：${ctx.pathAckLastCommandText}`)
-    s.pushLog(`PATH_ACK_TIMEOUT: 未收到 cmd=0xBD 完成回执(02)，上一条=${ctx.pathAckLastCommandText}`)
+    s.setAction(`路径指令等待超时：${formatActionWithBurstX2(ctx.pathAckLastCommandText)}`)
+    s.pushLog(`PATH_ACK_TIMEOUT: 未收到 cmd=0xBD 完成回执(02)，上一条=${formatActionWithBurstX2(ctx.pathAckLastCommandText)}`)
     return false
   }
 
@@ -430,9 +445,9 @@ export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean
   if (waitLogElapsed >= P1C.PATH_ACK_WAIT_LOG_COOLDOWN_MS) {
     ctx.pathAckLastWaitLogAtMs = nowMs
     if (ctx.pathAckLastStatusCode === 0x01) {
-      s.pushLog(`PATH_ACK_WAIT: 已收到(01)，等待完成(02)，下一条=${nextActionText}`)
+      s.pushLog(`PATH_ACK_WAIT: 已收到(01)，等待完成(02)，下一条=${nextActionTextShown}`)
     } else {
-      s.pushLog(`PATH_ACK_WAIT: 等待 cmd=0xBD 回执，下一条=${nextActionText}`)
+      s.pushLog(`PATH_ACK_WAIT: 等待 cmd=0xBD 回执，下一条=${nextActionTextShown}`)
     }
   }
 
@@ -446,7 +461,7 @@ export function markPathCommandSent(ctx: any, actionText: string): void {
   ctx.pathAckBlocked = false
   ctx.pathAckLastSendAtMs = Date.now()
   ctx.pathAckLastStatusCode = 0
-  ctx.pathAckLastCommandText = actionText
+  ctx.pathAckLastCommandText = formatActionWithBurstX2(actionText)
   ctx.pathAckRetrySentCount = 1
   ctx.pathAckCommandKey = resolvePathAckCommandKey(actionText)
   ctx.pathAckCommandSeq = commandSeq
@@ -537,7 +552,13 @@ export function onPathAckFrame(ctx: any, f: any): void {
       completedKey === 'LOWCARPORT' ||
       completedKey === 'CARPORT_2' ||
       completedKey === 'LOWCAR'
+    if (completedKey === 'LOWCAR' && typeof ctx.armLowcarBc05Wait === 'function') {
+      ctx.armLowcarBc05Wait()
+      const sWait = ctx.store
+      if (sWait) sWait.pushLog('LOWCAR_BC05: LOWCAR 已完成，等待 BC/05 后再续发')
+    }
     if (isGarageSpecialAck && !ctx.pendingAckMotion) {
+      if (completedKey === 'LOWCAR' && ctx.lowcarAwaitingBc05) return
       const s3 = ctx.store
       if (s3) s3.pushLog(`PATH_ACK_CONTINUE: ${completedKey} 完成，继续尝试下发下一段动作`)
       if (typeof ctx.followPathOnce === 'function') {

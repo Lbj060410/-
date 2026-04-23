@@ -117,6 +117,20 @@ interface Page4PlaceBindingPlan {
   placeText: string
 }
 
+interface MaintenanceOrder {
+  id: string
+  type: string
+  plateNo: string
+  contact: string
+  appointDate: string
+  appointTime: string
+  mileageKm: number
+  repairStatus: string
+  payStatus: string
+  storeName: string
+  createdAt: string
+}
+
 @Component
 export struct Page4View {
   private readonly logTag: string = 'Page4View'
@@ -140,6 +154,11 @@ export struct Page4View {
   @State private toastText: string = ''
   private chatScroller: Scroller = new Scroller()
   private toastTimerId: number = -1
+  private typingTimerId: number = -1
+  private typingToken: number = 0
+  private readonly typingCharIntervalMs: number = 24
+  private typingMessageId: string = ''
+  private typingFullText: string = ''
 
   private longPressTimerId: number = -1
   private readonly managedTimerIds: Set<number> = new Set<number>()
@@ -147,10 +166,10 @@ export struct Page4View {
   private lastGoodOpenClawHost: string = ''
   private openClawHostCooldownUntilMs: Record<string, number> = {}
   private readonly openClawHostCooldownMs: number = 25000
-  private readonly openClawRetryConnectTimeoutMs: number = 8000
-  private readonly openClawRetryReadTimeoutMs: number = 15000
-  private adaptiveOpenClawConnectTimeoutMs: number = 8000
-  private adaptiveOpenClawReadTimeoutMs: number = 15000
+  private readonly openClawRetryConnectTimeoutMs: number = 12000
+  private readonly openClawRetryReadTimeoutMs: number = 60000
+  private adaptiveOpenClawConnectTimeoutMs: number = 12000
+  private adaptiveOpenClawReadTimeoutMs: number = 60000
   private readonly pcToolAllowedCmdPrefixes: Array<string> = [
     'Get-Process',
     'Get-Service',
@@ -161,7 +180,7 @@ export struct Page4View {
     'hostname'
   ]
   private readonly openClawSystemPrompt: string =
-    '你是无人物流车的车控与调度助手。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
+    '你是无人物流车的车控与调度助手。默认地址=江西省南昌市。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
   private promptQueueTail: Promise<void> = Promise.resolve()
   private queuedPromptCount: number = 0
   private queuedPromptCap: number = 24
@@ -177,13 +196,49 @@ export struct Page4View {
   private placeBindingsLoaded: boolean = false
   private homeNodeId: string = ''
   private companyNodeId: string = ''
-  private pendingPlaceRole: '' | Page4PlaceRole = ''
-  private pendingPlaceNodeId: string = ''
-  private pendingPlaceRawText: string = ''
-  private pendingPlaceAtMs: number = 0
-  private readonly pendingPlaceTimeoutMs: number = 120000
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
+  private readonly maintenanceOrders: Array<MaintenanceOrder> = [
+    {
+      id: 'MR202604200004',
+      type: '常规保养',
+      plateNo: '浙B88888',
+      contact: "q'q'q - 2443544656",
+      appointDate: '2026-05-02',
+      appointTime: '17:32:00',
+      mileageKm: 8.72,
+      repairStatus: '待维修',
+      payStatus: '未支付',
+      storeName: '滨江江南大道店',
+      createdAt: '2026-04-20 17:32:54'
+    },
+    {
+      id: 'MR202604200003',
+      type: '常规保养',
+      plateNo: '浙B88888',
+      contact: 'uuu - 133454656',
+      appointDate: '2026-04-20',
+      appointTime: '17:30:00',
+      mileageKm: 8.12,
+      repairStatus: '待维修',
+      payStatus: '未支付',
+      storeName: '白云大道服务站',
+      createdAt: '2026-04-20 17:30:24'
+    },
+    {
+      id: 'MR202604130001',
+      type: '常规保养',
+      plateNo: '浙A88888',
+      contact: '张三 - 13800138000',
+      appointDate: '2026-04-20',
+      appointTime: '10:00:00',
+      mileageKm: 9.32,
+      repairStatus: '待确认',
+      payStatus: '未支付',
+      storeName: '杭州西湖4S服务中心',
+      createdAt: '2026-04-13 17:02:01'
+    }
+  ]
 
   aboutToAppear(): void {
     this.ensurePlaceBindingsLoaded()
@@ -199,6 +254,7 @@ export struct Page4View {
   }
 
   aboutToDisappear(): void {
+    this.stopAssistantTyping()
     this.clearLongPressTimer()
     this.clearToastTimer()
     this.clearAllManagedTimers()
@@ -796,7 +852,12 @@ export struct Page4View {
     this.scrollChatToBottomSoon()
   }
 
-  private pushAssistant(text: string): void {
+  private pushAssistant(text: string, typed: boolean = false): void {
+    this.stopAssistantTyping()
+    if (typed) {
+      this.pushAssistantTyped(text)
+      return
+    }
     this.messages.push({
       id: this.nextId(),
       role: 'assistant',
@@ -806,6 +867,91 @@ export struct Page4View {
     this.trimMessages()
     this.scrollChatToBottomSoon()
     void this.maybeAutoSpeakAssistantText(text)
+  }
+
+  private pushAssistantTyped(text: string): void {
+    const fullText: string = text
+    if (fullText.length <= 0) {
+      this.pushAssistant('')
+      return
+    }
+    const msgId: string = this.nextId()
+    const tsMs: number = Date.now()
+    this.messages.push({
+      id: msgId,
+      role: 'assistant',
+      text: '',
+      tsMs
+    })
+    this.trimMessages()
+    this.scrollChatToBottomSoon()
+    const firstIdx: number = this.findMessageIndexById(msgId)
+    if (firstIdx >= 0) {
+      this.replaceMessageTextByIndex(firstIdx, fullText.substring(0, 1))
+    }
+    this.typingMessageId = msgId
+    this.typingFullText = fullText
+    const token: number = this.typingToken
+    void this.runAssistantTyping(msgId, fullText, token)
+  }
+
+  private async runAssistantTyping(msgId: string, fullText: string, token: number): Promise<void> {
+    let pos: number = 1
+    while (pos < fullText.length) {
+      if (token !== this.typingToken) return
+      const idx: number = this.findMessageIndexById(msgId)
+      if (idx < 0) return
+
+      const remain: number = fullText.length - pos
+      const take: number = remain > 120 ? 6 : (remain > 60 ? 4 : (remain > 20 ? 2 : 1))
+      pos = Math.min(fullText.length, pos + take)
+      this.replaceMessageTextByIndex(idx, fullText.substring(0, pos))
+      this.scrollChatToBottomSoon()
+      await this.sleepMs(this.typingCharIntervalMs)
+    }
+    if (token !== this.typingToken) return
+    this.typingMessageId = ''
+    this.typingFullText = ''
+    void this.maybeAutoSpeakAssistantText(fullText)
+  }
+
+  private stopAssistantTyping(): void {
+    if (this.typingMessageId.length > 0 && this.typingFullText.length > 0) {
+      const idx: number = this.findMessageIndexById(this.typingMessageId)
+      if (idx >= 0) {
+        this.replaceMessageTextByIndex(idx, this.typingFullText)
+      }
+    }
+    this.typingMessageId = ''
+    this.typingFullText = ''
+    this.typingToken += 1
+    this.typingTimerId = this.clearManagedTimer(this.typingTimerId)
+  }
+
+  private findMessageIndexById(msgId: string): number {
+    for (let i: number = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].id === msgId) return i
+    }
+    return -1
+  }
+
+  private replaceMessageTextByIndex(index: number, text: string): void {
+    if (index < 0 || index >= this.messages.length) return
+    const next: Array<AssistantMessage> = []
+    for (let i: number = 0; i < this.messages.length; i++) {
+      const one: AssistantMessage = this.messages[i]
+      if (i === index) {
+        next.push({
+          id: one.id,
+          role: one.role,
+          text,
+          tsMs: one.tsMs
+        })
+      } else {
+        next.push(one)
+      }
+    }
+    this.messages = next
   }
 
   private trimMessages(): void {
@@ -1076,7 +1222,7 @@ export struct Page4View {
       videoStore.setRecognizeIntervalMs(450)
       videoStore.switchCooldownMs = 4000
       this.adaptiveOpenClawConnectTimeoutMs = 10000
-      this.adaptiveOpenClawReadTimeoutMs = 20000
+      this.adaptiveOpenClawReadTimeoutMs = 60000
       this.queuedPromptCap = this.weakNetQueuedPromptCap
       if (forceNotify) {
         this.pushAssistant('已启用夜间/弱网策略：低频识别、延长超时、队列上限收紧。')
@@ -1382,7 +1528,7 @@ export struct Page4View {
         videoStore.setRecognizeIntervalMs(450)
         videoStore.switchCooldownMs = 4000
         this.adaptiveOpenClawConnectTimeoutMs = 10000
-        this.adaptiveOpenClawReadTimeoutMs = 20000
+        this.adaptiveOpenClawReadTimeoutMs = 60000
         this.queuedPromptCap = this.weakNetQueuedPromptCap
         out.push(this.buildReceipt('策略已切换为弱网/夜间', true, true))
         return out
@@ -1460,6 +1606,10 @@ export struct Page4View {
         out.push(this.buildReceipt('read_file 参数错误 path为空', false, false))
         return out
       }
+      if (path.endsWith('/') || path.endsWith('\\')) {
+        out.push(this.buildReceipt(`read_file 参数错误 path疑似目录:${path}`, false, false))
+        return out
+      }
       const r = await this.callPcToolGateway('read_file', { path })
       out.push(this.buildReceipt(r.summary, r.ok, r.ok))
       return out
@@ -1522,6 +1672,9 @@ export struct Page4View {
     const low: string = text.toLowerCase()
     if (low.indexOf('missing scope') >= 0) {
       return `权限不足(${text})，请改用具备 operator.read/operator.write 的 token`
+    }
+    if (low.indexOf('eisdir') >= 0 || low.indexOf('illegal operation on a directory') >= 0) {
+      return `路径是目录而非文件(${text})，请传具体文件路径`
     }
     if (low.indexOf('timeout') >= 0 || low.indexOf('timed out') >= 0 || low.indexOf('connect failed') >= 0) {
       return `网络超时(${text})`
@@ -1695,6 +1848,7 @@ export struct Page4View {
     if (this.extractDestNode(text).length > 0) return true
     const keywords: Array<string> = [
       '导航', '前往', '去', '到',
+      '返仓', '回仓', '返航', '回基地', '回中心', '回物流中心', '回快递点', '回仓库', '返仓库',
       '前进', '后退', '左转', '右转', '掉头', '停止', '急停', '刹车',
       '自动跟随', '自动驾驶', '真车模式', '仿真模式', 'real_send', 'dry_run',
       '撤销', '回到安全点',
@@ -1896,7 +2050,7 @@ export struct Page4View {
           bearerToken: token,
           model: OPENCLAW_CHAT_MODEL,
           connectTimeoutMs: Math.min(10000, this.adaptiveOpenClawConnectTimeoutMs),
-          readTimeoutMs: Math.min(25000, this.adaptiveOpenClawReadTimeoutMs)
+          readTimeoutMs: Math.min(60000, this.adaptiveOpenClawReadTimeoutMs)
         })
         try {
           const result = await client.complete(messages)
@@ -2135,12 +2289,12 @@ export struct Page4View {
     const dynamicAliases: Array<string> = []
     for (let i: number = 0; i < this.aliasDict.length; i++) {
       const one: Page4AliasItem = this.aliasDict[i]
-      if (one.name === '物流中心' || one.name === '公司仓库') continue
+      if (one.name === '物流中心' || one.name === '快递点') continue
       if (!GridIdCodec.isValidId(one.destNodeId)) continue
       dynamicAliases.push(`${one.name}->${one.destNodeId}`)
     }
     const extraText: string = dynamicAliases.length > 0 ? `；自定义别名=${dynamicAliases.join('，')}` : ''
-    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n物流中心/公司仓库：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
+    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n物流中心/快递点：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
   }
 
   private exportPoiMappingsToFile(): { ok: boolean, path: string, error: string } {
@@ -2172,12 +2326,12 @@ export struct Page4View {
   private buildOpenClawRuntimeContextPrompt(): string {
     const mappingText: string = this.buildPoiMappingSummaryText()
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return `系统上下文：当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n语义约定：home=物流中心，company=公司仓库。`
+    return `系统上下文：默认地址=江西省南昌市；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n语义约定：home=物流中心，company=快递点。`
   }
 
   private buildOpenClawRuntimeContextPromptLite(): string {
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return `系统上下文：当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；链路=${this.connStateText()}。`
+    return `系统上下文：默认地址=江西省南昌市；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；链路=${this.connStateText()}。`
   }
 
   private normalizePlaceInput(text: string): string {
@@ -2194,6 +2348,9 @@ export struct Page4View {
     const fromContext: string = this.resolveContextDestNode(input)
     if (fromContext.length > 0) return fromContext
 
+    const fromShortcut: string = this.resolveFastDestShortcut(input)
+    if (fromShortcut.length > 0) return fromShortcut
+
     const upper: string = input.trim().toUpperCase()
     const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到达|前进到)\s*([A-Z]\d{1,2})/)
     if (m1 && m1.length > 1) return m1[1]
@@ -2203,6 +2360,35 @@ export struct Page4View {
     if (m2 && m2.length > 1) return m2[1]
     const mapped: string = this.mapPoiNameToNode(input)
     if (mapped.length > 0) return mapped
+    return ''
+  }
+
+  private resolveFastDestShortcut(input: string): string {
+    const raw: string = input.trim()
+    if (raw.length <= 0) return ''
+    const lower: string = raw.toLowerCase()
+    const homeNode: string = GridIdCodec.isValidId(this.homeNodeId) ? this.homeNodeId : ''
+    const companyNode: string = GridIdCodec.isValidId(this.companyNodeId) ? this.companyNodeId : ''
+
+    if (this.containsAny(raw, [
+      '前往物流中心', '去物流中心', '到物流中心', '返回物流中心', '回物流中心',
+      '返仓', '回仓', '返航', '回基地', '返回基地', '回中心'
+    ]) || this.containsAny(lower, ['go home', 'to home'])) {
+      return homeNode
+    }
+
+    if (this.containsAny(raw, [
+      '前往快递点', '去快递点', '到快递点', '返回快递点', '回快递点',
+      '前往公司仓库', '去公司仓库', '到公司仓库', '返回公司仓库', '回公司仓库'
+    ]) || this.containsAny(lower, ['go company', 'to company'])) {
+      return companyNode
+    }
+
+    if (this.containsAny(raw, ['前往仓库', '去仓库', '到仓库', '回仓库', '返回仓库'])) {
+      if (companyNode.length > 0) return companyNode
+      return homeNode
+    }
+
     return ''
   }
 
@@ -2237,6 +2423,83 @@ export struct Page4View {
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
     const recText: string = recogStore.recogText.length > 0 ? recogStore.recogText : '-'
     return `链路=${this.connStateText()} | 模式=${mode} | 自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'} | 风险=${this.store.riskText}(${this.store.riskScore}) | TX/RX=${this.store.txFrames}/${this.store.rxFrames} | Recog=${recText}`
+  }
+
+  private buildMaintenanceQueryText(queryText: string, mode: 'all' | 'earliest' | 'latest' = 'all'): string {
+    const q: string = queryText.trim().toUpperCase()
+    const matched: Array<MaintenanceOrder> = []
+    for (let i: number = 0; i < this.maintenanceOrders.length; i++) {
+      const one: MaintenanceOrder = this.maintenanceOrders[i]
+      if (q.length <= 0) {
+        matched.push(one)
+        continue
+      }
+      const idUp: string = one.id.toUpperCase()
+      const plateUp: string = one.plateNo.toUpperCase()
+      if (idUp.indexOf(q) >= 0 || plateUp.indexOf(q) >= 0) {
+        matched.push(one)
+      }
+    }
+    if (matched.length <= 0) {
+      return `维保查询：未找到匹配记录（关键词=${queryText}）`
+    }
+
+    const parseRecordTimeMs = (x: MaintenanceOrder): number => {
+      const recordIso: string = `${x.appointDate.trim()}T${x.appointTime.trim()}`
+      const recordMs: number = Date.parse(recordIso)
+      if (Number.isFinite(recordMs)) return recordMs
+
+      const createdIso: string = x.createdAt.replace(' ', 'T')
+      const createdMs: number = Date.parse(createdIso)
+      return Number.isFinite(createdMs) ? createdMs : 0
+    }
+    const sorted: Array<MaintenanceOrder> = []
+    for (let i: number = 0; i < matched.length; i++) sorted.push(matched[i])
+    sorted.sort((a: MaintenanceOrder, b: MaintenanceOrder): number => parseRecordTimeMs(a) - parseRecordTimeMs(b))
+
+    let out: Array<MaintenanceOrder> = []
+    if (mode === 'earliest') {
+      out = [sorted[0]]
+    } else if (mode === 'latest') {
+      out = [sorted[sorted.length - 1]]
+    } else {
+      out = sorted
+    }
+
+    let pendingRepair: number = 0
+    let pendingConfirm: number = 0
+    for (let i: number = 0; i < matched.length; i++) {
+      const s: string = matched[i].repairStatus
+      if (s === '待维修') pendingRepair += 1
+      if (s === '待确认') pendingConfirm += 1
+    }
+
+    let title: string = '维保查询结果'
+    if (mode === 'earliest') title = '维保查询结果（最早）'
+    if (mode === 'latest') title = '维保查询结果（最晚）'
+    let body: string = `${title}(${out.length}条，匹配总数=${matched.length})：待维修=${pendingRepair}，待确认=${pendingConfirm}\n`
+    for (let i: number = 0; i < out.length; i++) {
+      const one: MaintenanceOrder = out[i]
+      const idx: number = i + 1
+      body += `${idx}. ${one.id} | ${one.type} | ${one.plateNo} | ${one.contact} | 预约=${one.appointDate} ${one.appointTime} | 里程=${one.mileageKm.toFixed(2)}km | 维修=${one.repairStatus} | 支付=${one.payStatus} | 门店=${one.storeName} | 创建=${one.createdAt}`
+      if (i < out.length - 1) body += '\n'
+    }
+    return body
+  }
+
+  private looksLikeMaintenanceQueryIntent(text: string, lower: string): boolean {
+    const hasDomain: boolean = this.containsAny(lower, [
+      '维保', '维修', '保养', '工单', '维保记录', '维修记录', '保养记录'
+    ])
+    if (!hasDomain) return false
+    const hasVerb: boolean = this.containsAny(lower, [
+      '查', '查询', '查找', '查看', '看看', '给我', '列出', '统计', '记录'
+    ])
+    if (hasVerb) return true
+    if (this.containsAny(lower, ['最早', '最晚', '最新', '全部', '所有'])) return true
+    if (text.match(/MR\d{12,}/i)) return true
+    if (text.match(/[浙][A-Z][A-Z0-9]{5}/i)) return true
+    return false
   }
 
   private buildVisionSummaryText(): string {
@@ -2319,7 +2582,7 @@ export struct Page4View {
   }
 
   private buildExampleText(): string {
-    return '示例指令：\n1. 导航到 D4\n2. 前进 / 后退 / 左转 / 右转 / 停止\n3. 开启自动跟随 / 关闭自动跟随\n4. 开启真车模式 / 开启仿真模式\n5. 查询状态\n6. 识别状态\n7. 获取当前摄像头画面\n8. 查看所有点位映射名称\n9. 导出点位映射为JSON\n10. 读取文件 C:\\\\temp\\\\a.txt\n11. 查询进程列表\n12. 执行命令 Get-Process'
+    return '示例指令：\n1. 导航到 D4\n2. 前往物流中心 / 回仓 / 返仓 / 回快递点\n3. 前进 / 后退 / 左转 / 右转 / 停止\n4. 开启自动跟随 / 关闭自动跟随\n5. 开启真车模式 / 开启仿真模式\n6. 查询状态\n7. 识别状态\n8. 获取当前摄像头画面\n9. 查看所有点位映射名称\n10. 导出点位映射为JSON\n11. 读取文件 C:\\\\temp\\\\a.txt\n12. 查询进程列表\n13. 执行命令 Get-Process'
   }
 
   private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
@@ -2361,18 +2624,11 @@ export struct Page4View {
     }
 
     const reqMessages: Array<OpenClawChatMessage> = this.buildOpenClawMessages()
-
-    // 添加进度提示
-    this.pushAssistant('正在查询中，请稍候...')
     this.assistantBusy = true
-    
-    // 增加超时时间到45秒，特别是对于天气查询
     const timeoutId: number = this.setManagedTimeout((): void => {
       this.assistantBusy = false
-      // 移除进度提示
-      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
-      this.pushAssistant('查询超时（45秒），可能是网络较慢或服务繁忙，请稍后重试。')
-    }, 50000) // 总超时50秒，适合天气查询
+      this.pushAssistant('查询超时（45秒），请稍后重试。')
+    }, 60000)
 
     try {
       const errs: Array<string> = []
@@ -2382,7 +2638,7 @@ export struct Page4View {
         
         // 增加连接和读取超时时间
         const connectTimeoutMs: number = Math.min(12000, this.adaptiveOpenClawConnectTimeoutMs)
-        const readTimeoutMs: number = Math.min(30000, this.adaptiveOpenClawReadTimeoutMs)
+        const readTimeoutMs: number = Math.min(60000, this.adaptiveOpenClawReadTimeoutMs)
         
         for (let k: number = 0; k < tokenCandidates.length; k++) {
           const token: string = tokenCandidates[k]
@@ -2400,12 +2656,8 @@ export struct Page4View {
             this.clearManagedTimer(timeoutId)
             this.markOpenClawHostSuccess(host)
             this.logInfo('sendOpenClawSuccess', `host=${host}, chars=${result.text.length}`)
-            
-            // 确保UI更新
             this.assistantBusy = false
-            // 移除进度提示，添加实际结果
-            this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
-            this.pushAssistant(result.text)
+            this.pushAssistant(result.text, true)
             return
           }
 
@@ -2416,21 +2668,13 @@ export struct Page4View {
         }
         this.markOpenClawHostFail(host)
       }
-
-      this.clearManagedTimer(timeoutId)
       const merged: string = errs.length > 0 ? errs.join(' || ') : 'unknown'
-      
-      // 移除进度提示，添加错误信息
-      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
-      this.pushAssistant(`OpenClaw请求失败：${merged}`)
+      this.logError('sendOpenClawAllFailed', merged)
     } catch (e) {
-      this.clearManagedTimer(timeoutId)
       const msg: string = e instanceof Error ? e.message : 'unknown error'
-      
-      // 移除进度提示，添加异常信息
-      this.messages = this.messages.filter(msg => msg.text !== '正在查询中，请稍候...')
-      this.pushAssistant(`OpenClaw请求异常：${msg}`)
+      this.logError('sendOpenClawException', msg)
     } finally {
+      this.clearManagedTimer(timeoutId)
       this.assistantBusy = false
     }
   }
@@ -2603,6 +2847,20 @@ export struct Page4View {
       return
     }
 
+    if (this.looksLikeMaintenanceQueryIntent(text, lower)) {
+      let query: string = ''
+      const idMatch: RegExpMatchArray | null = text.match(/MR\d{12,}/i)
+      const plateMatch: RegExpMatchArray | null = text.match(/[浙][A-Z][A-Z0-9]{5}/i)
+      if (idMatch && idMatch.length > 0) query = idMatch[0]
+      else if (plateMatch && plateMatch.length > 0) query = plateMatch[0]
+      let mode: 'all' | 'earliest' | 'latest' = 'all'
+      if (this.containsAny(lower, ['最早'])) mode = 'earliest'
+      if (this.containsAny(lower, ['最晚', '最新'])) mode = 'latest'
+      if (this.containsAny(lower, ['全部', '所有'])) mode = 'all'
+      this.pushAssistant(this.buildMaintenanceQueryText(query, mode))
+      return
+    }
+
     if (this.containsAny(lower, ['开启自动跟随', '打开自动跟随', '自动跟随开启', '自动驾驶开启'])) {
       this.store.autoFollowEnabled = true
       this.store.pushLog('info assistant.autoFollow set=ON')
@@ -2735,6 +2993,8 @@ export struct Page4View {
 
   private syncPlaceAliases(): void {
     this.upsertSpecialAlias('物流中心', this.homeNodeId)
+    this.upsertSpecialAlias('快递点', this.companyNodeId)
+    // 兼容旧语义：公司仓库仍可识别到 company 点位
     this.upsertSpecialAlias('公司仓库', this.companyNodeId)
     // 删除旧口令别名，避免与物流语义冲突
     this.upsertSpecialAlias('家', '')
@@ -2757,33 +3017,16 @@ export struct Page4View {
     this.aliasDict = out
   }
 
-  private expirePendingPlaceBinding(): void {
-    if (this.pendingPlaceRole.length <= 0) return
-    const nowMs: number = Date.now()
-    if (nowMs - this.pendingPlaceAtMs <= this.pendingPlaceTimeoutMs) return
-    this.pendingPlaceRole = ''
-    this.pendingPlaceNodeId = ''
-    this.pendingPlaceRawText = ''
-    this.pendingPlaceAtMs = 0
-  }
-
-  private clearPendingPlaceBinding(): void {
-    this.pendingPlaceRole = ''
-    this.pendingPlaceNodeId = ''
-    this.pendingPlaceRawText = ''
-    this.pendingPlaceAtMs = 0
-  }
-
   private parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
     const token: string = raw.trim()
     if (token === 'home' || token === '物流中心') return 'home'
-    if (token === 'company' || token === '公司仓库') return 'company'
+    if (token === 'company' || token === '快递点' || token === '公司仓库') return 'company'
     return ''
   }
 
   private placeRoleText(role: '' | Page4PlaceRole): string {
     if (role === 'home') return '物流中心'
-    if (role === 'company') return '公司仓库'
+    if (role === 'company') return '快递点'
     return '未指定点位'
   }
 
@@ -2791,21 +3034,21 @@ export struct Page4View {
     const src: string = text.trim()
     if (src.length <= 0) return undefined
 
-    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(物流中心|公司仓库)/)
+    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(物流中心|快递点|公司仓库)/)
     if (p1 && p1.length >= 3) {
       const placeText: string = p1[1].trim()
       const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p1[2])
       if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
     }
 
-    const p2: RegExpMatchArray | null = src.match(/^(物流中心|公司仓库)\s*(?:设置为|设为|是)\s*(.+)$/)
+    const p2: RegExpMatchArray | null = src.match(/^(物流中心|快递点|公司仓库)\s*(?:设置为|设为|是)\s*(.+)$/)
     if (p2 && p2.length >= 3) {
       const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p2[1])
       const placeText: string = p2[2].trim()
       if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
     }
 
-    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(物流中心|公司仓库)\s*(?:为|到)?\s*(.+)$/)
+    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(物流中心|快递点|公司仓库)\s*(?:为|到)?\s*(.+)$/)
     if (p3 && p3.length >= 3) {
       const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p3[1])
       const placeText: string = p3[2].trim()
@@ -2817,7 +3060,7 @@ export struct Page4View {
 
   private wantsPlaceBindingQuery(rawLower: string): { askHome: boolean, askCompany: boolean } | undefined {
     const askHome: boolean = rawLower.indexOf('物流中心') >= 0
-    const askCompany: boolean = rawLower.indexOf('公司仓库') >= 0
+    const askCompany: boolean = rawLower.indexOf('快递点') >= 0 || rawLower.indexOf('公司仓库') >= 0
     if (!askHome && !askCompany) return undefined
     const hasQueryWord: boolean = this.containsAny(rawLower, ['映射', '点位', '查询', '查看', '有没有', '是否', '在哪', '哪里'])
     if (!hasQueryWord) return undefined
@@ -2831,34 +3074,8 @@ export struct Page4View {
     return `${roleText}=未设置`
   }
 
-  private async applyPendingPlaceBinding(): Promise<void> {
-    const role: '' | Page4PlaceRole = this.pendingPlaceRole
-    const node: string = this.pendingPlaceNodeId
-    const rawText: string = this.pendingPlaceRawText
-    if (role.length <= 0 || !GridIdCodec.isValidId(node)) {
-      this.clearPendingPlaceBinding()
-      this.pushAssistant('没有待确认的物流中心/公司仓库设置。')
-      return
-    }
-
-    if (role === 'home') this.homeNodeId = node
-    else this.companyNodeId = node
-    page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
-    this.syncPlaceAliases()
-    const ok: boolean = this.persistPlaceBindings()
-    const roleText: string = this.placeRoleText(role)
-    this.clearPendingPlaceBinding()
-
-    if (ok) {
-      this.pushAssistant(`已确认：${roleText}设置为 ${node}（来源“${rawText}”），已永久保存。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
-    } else {
-      this.pushAssistant(`已确认：${roleText}设置为 ${node}，但写入失败（本次运行仍生效）。`)
-    }
-  }
-
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
     this.ensurePlaceBindingsLoaded()
-    this.expirePendingPlaceBinding()
 
     const query = this.wantsPlaceBindingQuery(lower)
     if (query) {
@@ -2867,30 +3084,6 @@ export struct Page4View {
       if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
       this.pushAssistant(parts.length > 0 ? parts.join('，') : `${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
       return true
-    }
-
-    if (this.pendingPlaceRole.length > 0) {
-      if (this.containsAny(lower, ['取消', '算了', '不设置', '不用了'])) {
-        const roleText: string = this.placeRoleText(this.pendingPlaceRole)
-        this.clearPendingPlaceBinding()
-        this.pushAssistant(`已取消${roleText}设置。`)
-        return true
-      }
-
-      if (this.containsAny(lower, ['确认', '确定'])) {
-        const mentionHome: boolean = lower.indexOf('物流中心') >= 0
-        const mentionCompany: boolean = lower.indexOf('公司仓库') >= 0
-        if (mentionHome && this.pendingPlaceRole !== 'home') {
-          this.pushAssistant('当前待确认的是“公司仓库”设置，请回复“确认公司仓库”或“取消”。')
-          return true
-        }
-        if (mentionCompany && this.pendingPlaceRole !== 'company') {
-          this.pushAssistant('当前待确认的是“物流中心”设置，请回复“确认物流中心”或“取消”。')
-          return true
-        }
-        await this.applyPendingPlaceBinding()
-        return true
-      }
     }
 
     let req: { role: Page4PlaceRole, placeText: string } | undefined = this.parsePlaceBindingRequest(text)
@@ -2908,19 +3101,24 @@ export struct Page4View {
       return true
     }
 
-    this.pendingPlaceRole = req.role
-    this.pendingPlaceNodeId = node
-    this.pendingPlaceRawText = req.placeText
-    this.pendingPlaceAtMs = Date.now()
     const roleText: string = this.placeRoleText(req.role)
-    this.pushAssistant(`请二次确认：将${roleText}设置为 ${node}（来源“${req.placeText}”）。回复“确认${roleText}”完成，或回复“取消”放弃。`)
+    if (req.role === 'home') this.homeNodeId = node
+    else this.companyNodeId = node
+    page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
+    this.syncPlaceAliases()
+    const ok: boolean = this.persistPlaceBindings()
+    if (ok) {
+      this.pushAssistant(`已设置：${roleText}=${node}（来源“${req.placeText}”）。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
+    } else {
+      this.pushAssistant(`已设置：${roleText}=${node}，但写入失败（本次运行仍生效）。`)
+    }
     return true
   }
 
   private looksLikePlaceBindingIntent(lower: string): boolean {
     const hasRole: boolean =
       lower.indexOf('物流中心') >= 0 ||
-      lower.indexOf('公司仓库') >= 0
+      lower.indexOf('快递点') >= 0 || lower.indexOf('公司仓库') >= 0
     if (!hasRole) return false
     if (this.containsAny(lower, ['映射', '点位', '查询', '查看', '有没有', '是否'])) return false
     return this.containsAny(lower, ['设置', '设为', '记为', '定义为', '改为', '改成', '当成', '作为'])
@@ -2941,7 +3139,7 @@ export struct Page4View {
     const roleRaw: string = String(obj['role'] ?? '').trim().toLowerCase()
     let role: Page4PlaceRole | '' = ''
     if (roleRaw === 'home' || roleRaw === '物流中心') role = 'home'
-    if (roleRaw === 'company' || roleRaw === '公司仓库') role = 'company'
+    if (roleRaw === 'company' || roleRaw === '快递点' || roleRaw === '公司仓库') role = 'company'
     if (role.length <= 0) return undefined
 
     const placeText: string = String(obj['place'] ?? obj['target'] ?? obj['location'] ?? '').trim()
@@ -2975,7 +3173,7 @@ export struct Page4View {
         content:
           '你是无人物流车位置映射解析器。把用户话语解析为严格JSON，不要解释。' +
           '输出格式：{"role":"home|company","place":"地点原文"}。' +
-          '语义约定：home 表示物流中心，company 表示公司仓库。' +
+          '语义约定：home 表示物流中心，company 表示快递点。' +
           '如果无法确定，输出：{"role":"","place":""}。'
       },
       {

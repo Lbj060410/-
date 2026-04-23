@@ -56,9 +56,9 @@
                                 }
                },
     "tools":  {
-                  "profile":  "coding",
+                  "profile":  "messaging",
                   "alsoAllow":  [
-                                    "lobster"
+                                    
                                 ]
               },
     "commands":  {
@@ -84,7 +84,7 @@
                                   },
                     "auth":  {
                                  "mode":  "token",
-                                 "token":  "ddc7a0338fd434a6108e1837ea2b2e0304278ee0e580ee29"
+                                 "token":  "jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw"
                              },
                     "tailscale":  {
                                       "mode":  "off",

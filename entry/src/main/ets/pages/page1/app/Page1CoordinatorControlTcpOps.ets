@@ -305,6 +305,16 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
       s.pushLog(msg)
       return
     }
+
+    if (ultrasonicP1 === 0x05) {
+      if (typeof ctx.onLowcarDone05 === 'function') {
+        ctx.onLowcarDone05()
+      }
+      msg = `RX 55AA cmd=0xBC lowcar-done p1=0x${byteToHex(ultrasonicP1)}`
+      appendDiagKeyRxFrame(ctx, f, `lowcar-done p1=0x${byteToHex(ultrasonicP1)}`)
+      s.pushLog(msg)
+      return
+    }
     /* 当收到00，01，02，进入超声波障碍判断*/
     if (ultrasonicP1 === 0x00 || ultrasonicP1 === 0x01 || ultrasonicP1 === 0x02) {
       const recvAtMs: number = Date.now()
@@ -467,12 +477,6 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a !== Page1Action.GO) {
     ctx.manualGoGateToken += 1
     ctx.manualGoGateActive = false
-  }
-
-  if (isMotionAction(a)) {
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'MANUAL')) {
-      return
-    }
   }
 
   // 关键讲解点：统一切换发送模式（已连接真发；未连接或演示模式仅记录）

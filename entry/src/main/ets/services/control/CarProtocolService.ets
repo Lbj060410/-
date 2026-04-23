@@ -91,7 +91,10 @@ export class CarProtocolService {
       const sendTag: string = `${tag}#${i + 1}/${safeTimes}`
       // 统一在这里做 TX 统计 + 帧日志（即使 DRY_RUN 也记录“发送意图”）
       commStore.bumpTxPacket()
-      FrameLogService.appendTx(frame, sendTag)
+      if (i === 0) {
+        const mergedTag: string = safeTimes > 1 ? `${tag}#x${safeTimes}(merged)` : sendTag
+        FrameLogService.appendTx(frame, mergedTag)
+      }
       this.logConnectFrame(frame)
 
       if (this.mode !== CarSendMode.DRY_RUN) {
@@ -107,7 +110,7 @@ export class CarProtocolService {
 
   async sendRaw(frame: Uint8Array, tag: string): Promise<void> {
     const sendTimes: number = 2
-    const intervalMs: number = 10
+    const intervalMs: number = 5
     await this.sendRawBurst(frame, tag, sendTimes, intervalMs)
   }
 
@@ -145,15 +148,16 @@ export class CarProtocolService {
     const payload8: Uint8Array = new Uint8Array(8)
     payload8[0] = code & 0xff
     const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
+    const actionTextWithBurst: string = `${text} x2`
     commStore.appendDiagKeyTxFrame({
       tsMs: Date.now(),
       cmdHex: `0x${(code & 0xff).toString(16).toUpperCase().padStart(2, '0')}`,
-      actionText: text,
+      actionText: actionTextWithBurst,
       modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
       hex: this.frameToHex(previewFrame)
     })
     await this.sendData12(0x0A, payload8)
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', text)
+    hilog.info(DOMAIN, TAGRUN, '%{public}s', actionTextWithBurst)
   }
 
   // 自定义 0x0A 子命令入口：供 UI 输入框直接发送任意 1 字节动作码
@@ -284,6 +288,21 @@ export class CarProtocolService {
 
   async lowcar(): Promise<void>{
     await this.sendControl0A(0x1D,"车库调至一层不会获取当前层数")
+  }
+
+  async SpecialZones(): Promise<void>{
+    await this.sendControl0A(0x1E,"指定小车通过特殊路段")
+  }
+
+  async SlowProceed(): Promise<void>{
+    await this.sendControl0A(0x1F,"慢前进")
+  }
+
+  async red(): Promise<void>{
+    await this.sendControl0A(0x20,"红灯")
+  }
+  async green(): Promise<void>{
+    await this.sendControl0A(0x21,"绿灯")
   }
 
   // 注意：
