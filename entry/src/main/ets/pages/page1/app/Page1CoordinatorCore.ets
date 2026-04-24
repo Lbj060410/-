@@ -174,7 +174,7 @@ const TEXTONE1_DOMAIN = 0xFF02
 const TEXTONE1_TAG = 'textone1'
 const GARAGE_CARPORT_ACK_RELEASE_TIMEOUT_MS = 7000
 const GARAGE_LOWCARPORT_ACK_RELEASE_TIMEOUT_MS = 6000
-const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 600
+const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 2500
 
 export class Page1Coordinator {
   private store?: Page1UiStore
@@ -250,6 +250,7 @@ export class Page1Coordinator {
   private pathAckLastWaitLogAtMs: number = 0
   private pathAckRetryTimerId: number = -1
   private pathAckRetrySentCount: number = 0
+  private pathAckRetryEpoch: number = 0
   private pathAckCommandKey: string = ''
   private pathAckCommandSeq: number = 0
   private pendingAckMotion?: PendingAckMotion = undefined
@@ -281,12 +282,30 @@ export class Page1Coordinator {
   private trafficGateLastLogAtMs: number = 0
   private trafficGateResumeManual: boolean = false
   private trafficGateRetryBusy: boolean = false
+  private trafficGateGreenStreak: number = 0
+  private trafficGateLastSignalKey: string = ''
+  private trafficGateLastSignal: string = 'UNKNOWN'
+  private trafficGateResumeModelAfterPass: boolean = false
+  private trafficGateBypassEdgeKey: string = ''
+  private trafficGateBypassUntilMs: number = 0
+  private trafficGateAwaitGreenAck02: boolean = false
+  private trafficGateGreenAckEdgeKey: string = ''
+  private trafficGateGreenAckResumeManual: boolean = false
+  private trafficGateGreenAckInFlight: boolean = false
+  private trafficGateGreenAckSeen01: boolean = false
+  private trafficGateRedSendInFlight: boolean = false
+  private trafficGateLastSentSignal: string = ''
+  private trafficGateLastSentSignalAtMs: number = 0
+  private trafficGateLastGreenAckAtMs: number = 0
   private gateBillingRunning: boolean = false
   private gateBillingStartAtMs: number = 0
   private gateBillingElapsedMs: number = 0
   private motionCommandBlockUntilMs: number = 0
   private motionCommandBlockReason: string = ''
   private motionCommandBlockLastLogAtMs: number = 0
+  private motionDispatchBusy: boolean = false
+  private motionDispatchOwner: string = ''
+  private motionDispatchQueue: Array<{ owner: string, resolve: () => void }> = []
   private emergencyAlarmTimerId: number = -1
   private emergencyAutoRecoverTimerId: number = -1
   private emergencyAlarmBurstActive: boolean = false
@@ -312,6 +331,11 @@ export class Page1Coordinator {
   private metricDistanceMotionBaseCm: number = 0
   private realSendConnectKickAtMs: number = 0
   private simLightBaseLux: number = 0
+  private lastRxFrameDedupKey: string = ''
+  private lastRxFrameDedupAtMs: number = 0
+  private lastRxDupCountKey: string = ''
+  private lastRxDupCount: number = 1
+  private lastRxMergeLogAtMs: number = 0
   private lightMetricQueryEnabled: boolean = false
   private lightMetricReady: boolean = false
   private lightMetricLastQueryAtMs: number = 0
@@ -654,6 +678,11 @@ export class Page1Coordinator {
     this.metricDistanceMotionKey = ''
     this.metricDistanceMotionBaseCm = 0
     this.lightMetricQueryEnabled = false
+    this.lastRxFrameDedupKey = ''
+    this.lastRxFrameDedupAtMs = 0
+    this.lastRxDupCountKey = ''
+    this.lastRxDupCount = 1
+    this.lastRxMergeLogAtMs = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     store.setMetricSpeedCms(0)
@@ -718,10 +747,32 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.trafficGateResumeManual = false
+    this.trafficGateRetryBusy = false
+    this.trafficGateGreenStreak = 0
+    this.trafficGateLastSignalKey = ''
+    this.trafficGateLastSignal = 'UNKNOWN'
+    this.trafficGateResumeModelAfterPass = false
+    this.trafficGateBypassEdgeKey = ''
+    this.trafficGateBypassUntilMs = 0
+    this.trafficGateAwaitGreenAck02 = false
+    this.trafficGateGreenAckEdgeKey = ''
+    this.trafficGateGreenAckResumeManual = false
+    this.trafficGateGreenAckInFlight = false
+    this.trafficGateGreenAckSeen01 = false
+    this.trafficGateRedSendInFlight = false
+    this.trafficGateLastSentSignal = ''
+    this.trafficGateLastSentSignalAtMs = 0
+    this.trafficGateLastGreenAckAtMs = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
     this.lightMetricQueryEnabled = false
+    this.lastRxFrameDedupKey = ''
+    this.lastRxFrameDedupAtMs = 0
+    this.lastRxDupCountKey = ''
+    this.lastRxDupCount = 1
+    this.lastRxMergeLogAtMs = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     this.realSendConnectKickAtMs = 0
@@ -761,10 +812,32 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.trafficGateResumeManual = false
+    this.trafficGateRetryBusy = false
+    this.trafficGateGreenStreak = 0
+    this.trafficGateLastSignalKey = ''
+    this.trafficGateLastSignal = 'UNKNOWN'
+    this.trafficGateResumeModelAfterPass = false
+    this.trafficGateBypassEdgeKey = ''
+    this.trafficGateBypassUntilMs = 0
+    this.trafficGateAwaitGreenAck02 = false
+    this.trafficGateGreenAckEdgeKey = ''
+    this.trafficGateGreenAckResumeManual = false
+    this.trafficGateGreenAckInFlight = false
+    this.trafficGateGreenAckSeen01 = false
+    this.trafficGateRedSendInFlight = false
+    this.trafficGateLastSentSignal = ''
+    this.trafficGateLastSentSignalAtMs = 0
+    this.trafficGateLastGreenAckAtMs = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
     this.lightMetricQueryEnabled = false
+    this.lastRxFrameDedupKey = ''
+    this.lastRxFrameDedupAtMs = 0
+    this.lastRxDupCountKey = ''
+    this.lastRxDupCount = 1
+    this.lastRxMergeLogAtMs = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     this.simLightBaseLux = 0
@@ -819,6 +892,23 @@ export class Page1Coordinator {
     this.trafficGateWaiting = false
     this.trafficGateEdgeKey = ''
     this.trafficGateLastLogAtMs = 0
+    this.trafficGateResumeManual = false
+    this.trafficGateRetryBusy = false
+    this.trafficGateGreenStreak = 0
+    this.trafficGateLastSignalKey = ''
+    this.trafficGateLastSignal = 'UNKNOWN'
+    this.trafficGateResumeModelAfterPass = false
+    this.trafficGateBypassEdgeKey = ''
+    this.trafficGateBypassUntilMs = 0
+    this.trafficGateAwaitGreenAck02 = false
+    this.trafficGateGreenAckEdgeKey = ''
+    this.trafficGateGreenAckResumeManual = false
+    this.trafficGateGreenAckInFlight = false
+    this.trafficGateGreenAckSeen01 = false
+    this.trafficGateRedSendInFlight = false
+    this.trafficGateLastSentSignal = ''
+    this.trafficGateLastSentSignalAtMs = 0
+    this.trafficGateLastGreenAckAtMs = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -980,6 +1070,10 @@ export class Page1Coordinator {
       0x0E: 'UTURN'
     }
     const motionKey: string | undefined = motionKeyByCode[safeCode]
+    if (motionKey && typeof this.acquireMotionDispatch === 'function') {
+      await this.acquireMotionDispatch(`CUSTOM_0A:${motionKey}`)
+    }
+    try {
     if (motionKey && !this.canSendMotionCommand(motionKey, 'CUSTOM_0A')) {
       s.pushLog(`自定义控制拦截：${hexCode}，发送锁未释放`)
       return
@@ -1003,6 +1097,11 @@ export class Page1Coordinator {
     else if (safeCode === 0x05) this.previewManualActionOnMap(Page1Action.LEFT_HALF)
     else if (safeCode === 0x06) this.previewManualActionOnMap(Page1Action.RIGHT_HALF)
     else if (safeCode === 0x0E) this.previewManualActionOnMap(Page1Action.UTURN)
+    } finally {
+      if (motionKey && typeof this.leaveMotionDispatch === 'function') {
+        this.leaveMotionDispatch(`CUSTOM_0A:${motionKey}`)
+      }
+    }
   }
 
   private async sendDriveActionDirect(a: Page1Action): Promise<boolean> {
@@ -1435,6 +1534,10 @@ export class Page1Coordinator {
   private async retryGarageDepartLowcarport(startId: string): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
+    if (typeof this.acquireMotionDispatch === 'function') {
+      await this.acquireMotionDispatch('RETRY:GARAGE_LOWCARPORT')
+    }
+    try {
     if (this.garageDepartReady03) {
       this.clearGarageDepartAckWatch()
       return
@@ -1465,6 +1568,11 @@ export class Page1Coordinator {
     }
     s.pushLog(`GARAGE_DEPART: 2s未收到BC/03，重发0x19 count=${this.garageDepartAckRetryCount}`)
     this.armGarageDepartAckRetry(startId)
+    } finally {
+      if (typeof this.leaveMotionDispatch === 'function') {
+        this.leaveMotionDispatch('RETRY:GARAGE_LOWCARPORT')
+      }
+    }
   }
 
   private clearGarageCarportAckWatch(): void {
@@ -1508,6 +1616,10 @@ export class Page1Coordinator {
   }
 
   private async retryGarageCarportAfterAckTimeout(): Promise<void> {
+    if (typeof this.acquireMotionDispatch === 'function') {
+      await this.acquireMotionDispatch('RETRY:GARAGE_CARPORT')
+    }
+    try {
     if (!this.garageCarportAckPending) return
     const s: Page1UiStore | undefined = this.store
     const level: number = this.garageCarportAckPendingLevel
@@ -1526,6 +1638,11 @@ export class Page1Coordinator {
     }
     await this.proto.carport(level)
     this.garageCarportAckSentAtMs = Date.now()
+    } finally {
+      if (typeof this.leaveMotionDispatch === 'function') {
+        this.leaveMotionDispatch('RETRY:GARAGE_CARPORT')
+      }
+    }
   }
 
   private onPathAckReceived01(): void {
@@ -1622,7 +1739,16 @@ export class Page1Coordinator {
           hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
           return true
         }
-        await this.proto.lowcarport()
+        if (typeof this.acquireMotionDispatch === 'function') {
+          await this.acquireMotionDispatch('FLOW:GARAGE_DEPART_FIRST_0x19')
+        }
+        try {
+          await this.proto.lowcarport()
+        } finally {
+          if (typeof this.leaveMotionDispatch === 'function') {
+            this.leaveMotionDispatch('FLOW:GARAGE_DEPART_FIRST_0x19')
+          }
+        }
         this.markPathCommandSent('车库调至一层并获取当前层数')
         if (this.canRealSend()) this.armGarageLowcarportAckWait()
         {
@@ -1706,6 +1832,10 @@ export class Page1Coordinator {
   }
 
   private async sendGarageCarportAfterParkDone(level: number): Promise<void> {
+    if (typeof this.acquireMotionDispatch === 'function') {
+      await this.acquireMotionDispatch('FLOW:GARAGE_PARK_DONE')
+    }
+    try {
     const s: Page1UiStore | undefined = this.store
     const targetLevel: number = 2
     this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
@@ -1719,6 +1849,11 @@ export class Page1Coordinator {
     }
     await this.proto.carport(targetLevel)
     if (this.canRealSend()) this.armGarageCarportAckRetry(targetLevel)
+    } finally {
+      if (typeof this.leaveMotionDispatch === 'function') {
+        this.leaveMotionDispatch('FLOW:GARAGE_PARK_DONE')
+      }
+    }
   }
 
   private async maybeHandleGarageFinalArrive(toId: string): Promise<void> {
@@ -1749,13 +1884,22 @@ export class Page1Coordinator {
       const startId: string = s.pathNodes.length > 0 ? s.pathNodes[0].trim().toUpperCase() : ''
       if (startId === 'F7' && curId === 'F6') {
         if (this.canSendMotionCommand('CARPORT_2', 'F7_START_AT_F6')) {
-          this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-          s.bumpTx()
-          await this.proto.carport(2)
-          this.markPathCommandSent('车库到2层')
-          // F7->F6 升库不再占用全局 ACK 门控，避免吞掉后续路线指令。
-          this.garageF7StartRiseSent = true
-          s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 -> sent carport(2)')
+          if (typeof this.acquireMotionDispatch === 'function') {
+            await this.acquireMotionDispatch('FLOW:F7_START_CARPORT2')
+          }
+          try {
+            this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+            s.bumpTx()
+            await this.proto.carport(2)
+            this.markPathCommandSent('车库到2层')
+            // F7->F6 升库不再占用全局 ACK 门控，避免吞掉后续路线指令。
+            this.garageF7StartRiseSent = true
+            s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 -> sent carport(2)')
+          } finally {
+            if (typeof this.leaveMotionDispatch === 'function') {
+              this.leaveMotionDispatch('FLOW:F7_START_CARPORT2')
+            }
+          }
         } else {
           s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 but carport(2) blocked')
         }
@@ -1774,12 +1918,21 @@ export class Page1Coordinator {
             return
           }
           if (this.canSendMotionCommand('LOWCAR', 'F7_DEST_PRE3')) {
-            this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-            s.bumpTx()
-            await this.proto.lowcar()
-            this.markPathCommandSent('车库调至一层不会获取当前层数')
-            this.garageF7DestLowSent = true
-            s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 -> sent lowcar()')
+            if (typeof this.acquireMotionDispatch === 'function') {
+              await this.acquireMotionDispatch('FLOW:F7_DEST_LOWCAR')
+            }
+            try {
+              this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+              s.bumpTx()
+              await this.proto.lowcar()
+              this.markPathCommandSent('车库调至一层不会获取当前层数')
+              this.garageF7DestLowSent = true
+              s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 -> sent lowcar()')
+            } finally {
+              if (typeof this.leaveMotionDispatch === 'function') {
+                this.leaveMotionDispatch('FLOW:F7_DEST_LOWCAR')
+              }
+            }
           } else {
             s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 but lowcar blocked')
           }
@@ -1947,6 +2100,11 @@ export class Page1Coordinator {
       return false
     }
 
+    // ACK 超时重发属于可靠性兜底链路，不受 single-flight 发送锁限制。
+    if (sourceTag === 'PATH_ACK_RETRY') {
+      return true
+    }
+
     if (!this.isMotionCommandBlocked(nowMs)) {
       // 全局 single-flight：任何入口放行后短时间内拒绝并发第二次发送。
       this.setMotionCommandBlock(`SEND_LOCK:${sourceTag}:${commandKey}`, MOTION_SEND_SINGLE_FLIGHT_HOLD_MS)
@@ -1961,6 +2119,35 @@ export class Page1Coordinator {
       )
     }
     return false
+  }
+
+  async acquireMotionDispatch(owner: string): Promise<void> {
+    const safeOwner: string = owner.trim().length > 0 ? owner.trim() : 'UNKNOWN'
+    if (!this.motionDispatchBusy) {
+      this.motionDispatchBusy = true
+      this.motionDispatchOwner = safeOwner
+      return
+    }
+    const s: Page1UiStore | undefined = this.store
+    if (s) s.pushLog(`MOTION_DISPATCH_QUEUE: enqueue owner=${safeOwner}, active=${this.motionDispatchOwner}`)
+    await new Promise<void>((resolve) => {
+      this.motionDispatchQueue.push({ owner: safeOwner, resolve: resolve })
+    })
+  }
+
+  leaveMotionDispatch(owner: string): void {
+    void owner
+    if (this.motionDispatchQueue.length > 0) {
+      const next = this.motionDispatchQueue.shift()
+      if (next) {
+        this.motionDispatchBusy = true
+        this.motionDispatchOwner = next.owner
+        next.resolve()
+        return
+      }
+    }
+    this.motionDispatchBusy = false
+    this.motionDispatchOwner = ''
   }
 
   private async sendEmergencyAlarmBurst(reason: string, repeatCount: number = 3, intervalMs: number = 10): Promise<void> {

@@ -28,6 +28,7 @@ import hilog from '@ohos.hilog'
 
 const PAGE1_TCP_LOG_DOMAIN = 0xFF03
 const PAGE1_TCP_LOG_TAG = 'page1tcp'
+const RX_CONSECUTIVE_DUP_WINDOW_MS: number = 220
 
 function kickTcpConnectForRealSendIfNeeded(ctx: any, s: Page1UiStore): void {
   if (!s.realSendEnabled) return
@@ -57,11 +58,42 @@ function frameDedupKey(f: CarFrame55): string {
 }
 
 function isConsecutiveDuplicateFrame(ctx: any, f: CarFrame55): boolean {
+  const nowMs: number = Date.now()
   const key: string = frameDedupKey(f)
   const last: string = typeof ctx.lastRxFrameDedupKey === 'string' ? ctx.lastRxFrameDedupKey : ''
-  if (key === last) return true
+  const lastAtMs: number = Number(ctx.lastRxFrameDedupAtMs) || 0
+  if (key === last && lastAtMs > 0 && (nowMs - lastAtMs) <= RX_CONSECUTIVE_DUP_WINDOW_MS) {
+    return true
+  }
   ctx.lastRxFrameDedupKey = key
+  ctx.lastRxFrameDedupAtMs = nowMs
   return false
+}
+
+function logMergedDuplicateFrame(ctx: any, s: Page1UiStore, f: CarFrame55): void {
+  const key: string = frameDedupKey(f)
+  const prevKey: string = String(ctx.lastRxDupCountKey || '')
+  const nextCount: number = (prevKey === key)
+    ? (Math.max(1, Number(ctx.lastRxDupCount) || 1) + 1)
+    : 2
+  ctx.lastRxDupCountKey = key
+  ctx.lastRxDupCount = nextCount
+
+  if (nextCount > 3) return
+  if ((f.cmd & 0xff) === 0xBD) {
+    const status: number = f.p1 & 0xff
+    if (status === 0x01) {
+      s.pushLog(`RX 55AA cmd=0xBD 状态=01(已接收) x${nextCount}`)
+      return
+    }
+    if (status === 0x02) {
+      s.pushLog(`RX 55AA cmd=0xBD 状态=02(已完成) x${nextCount}`)
+      return
+    }
+    s.pushLog(`RX 55AA cmd=0xBD 状态=0x${byteToHex(status)} x${nextCount}`)
+    return
+  }
+  s.pushLog(`RX 55AA cmd=0x${byteToHex(f.cmd)} 重复帧 x${nextCount}`)
 }
 
 export function onTcpState(ctx: any, state: CarConnectionState, text: string): void {
@@ -155,7 +187,20 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
 
   for (let i: number = 0; i < frames.length; i++) {
     const f: CarFrame55 = frames[i]
-    if (isConsecutiveDuplicateFrame(ctx, f)) continue
+    const cmd: number = f.cmd & 0xff
+    // 0xBD(路径ACK) 常见 01/02 三连发：连续重复帧只保留第一条，避免重复触发主链逻辑。
+    // 0xBC(超声波/目的地) 保持不过滤，避免丢失业务数据。
+    if (cmd !== 0xBC && isConsecutiveDuplicateFrame(ctx, f)) {
+      const nowMs: number = Date.now()
+      const lastMergeLogAtMs: number = Number(ctx.lastRxMergeLogAtMs) || 0
+      if (nowMs - lastMergeLogAtMs >= 80) {
+        ctx.lastRxMergeLogAtMs = nowMs
+        logMergedDuplicateFrame(ctx, s, f)
+      }
+      continue
+    }
+    ctx.lastRxDupCountKey = ''
+    ctx.lastRxDupCount = 1
 
     const nextTelemetry: CarTelemetry | undefined = parseTelemetryFrom55(ctx, s.telemetry, f)
     if (nextTelemetry) {
@@ -461,18 +506,22 @@ export async function sendManualGoCommand(ctx: any, actionText: string, commandS
 export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
+  if (isMotionAction(a) && typeof ctx.acquireMotionDispatch === 'function') {
+    await ctx.acquireMotionDispatch(`MANUAL:${Page1Action[a]}`)
+  }
   const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
   // 比赛讲解上下文：
   // ControlPanel.ets 的按钮点击最终都会进入这个函数。
   // 现场可按“动作进入 -> 模式选择 -> 协议发送 -> 日志回执”顺序讲解。
 
   // 急停优先级最高：立即中断自动运行并执行统一急停流程。
-  if (a === Page1Action.SCRAM) {
-    if (typeof ctx.emergencyStopAndHold === 'function') {
-      await ctx.emergencyStopAndHold()
-      return
+  try {
+    if (a === Page1Action.SCRAM) {
+      if (typeof ctx.emergencyStopAndHold === 'function') {
+        await ctx.emergencyStopAndHold()
+        return
+      }
     }
-  }
 
   if (a !== Page1Action.GO) {
     ctx.manualGoGateToken += 1
@@ -514,7 +563,7 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     return
   }
 
-  if (a === Page1Action.GO) {
+    if (a === Page1Action.GO) {
     // GO 分支示例：包含去重、道闸/车库约束、光照前置检查，再进入真实发送
     ctx.pathAckLastCommandText = actionText
     if (await ctx.maybeHandleGarageDepartBeforeDrive(Date.now())) {
@@ -534,10 +583,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     if (!lightReadyForGo) return
     await sendManualGoCommand(ctx, actionText, commandSeq)
     ctx.previewManualActionOnMap(Page1Action.GO)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.BACK) {
+    if (a === Page1Action.BACK) {
     // BACK/LEFT/RIGHT 分支用于展示“按钮动作 -> 协议动作”的直接映射关系
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
@@ -547,10 +596,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.back()
     ctx.previewManualActionOnMap(Page1Action.BACK)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.LEFT) {
+    if (a === Page1Action.LEFT) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return
@@ -559,10 +608,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.left()
     ctx.previewManualActionOnMap(Page1Action.LEFT)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.RIGHT) {
+    if (a === Page1Action.RIGHT) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return
@@ -571,10 +620,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.right()
     ctx.previewManualActionOnMap(Page1Action.RIGHT)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.LEFT_HALF) {
+    if (a === Page1Action.LEFT_HALF) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return
@@ -583,10 +632,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.leftHalf()
     ctx.previewManualActionOnMap(Page1Action.LEFT_HALF)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.RIGHT_HALF) {
+    if (a === Page1Action.RIGHT_HALF) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return
@@ -595,10 +644,10 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.rightHalf()
     ctx.previewManualActionOnMap(Page1Action.RIGHT_HALF)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.UTURN) {
+    if (a === Page1Action.UTURN) {
     ctx.pathAckLastCommandText = actionText
     await triggerLightBaselineBeforeMotion(ctx, s)
     if (isStaleByEmergencySeq(ctx, commandSeq)) return
@@ -607,71 +656,76 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
     s.bumpTx()
     await ctx.proto.uturn()
     ctx.previewManualActionOnMap(Page1Action.UTURN)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.ALARM) {
+    if (a === Page1Action.ALARM) {
     const nextEnabled: boolean = !s.alarmEnabled
     const alarmText: string = nextEnabled ? '警报开启' : '警报关闭'
     s.alarmEnabled = nextEnabled
     s.setAction(alarmText)
     s.bumpTx()
     await ctx.proto.setAlarm(nextEnabled)
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.STOP) {
+    if (a === Page1Action.STOP) {
     s.setAction('停止')
     s.pushLog('STOP: 已忽略 stopTask 下发（该指令无法停止行动任务）')
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.LAMP) {
+    if (a === Page1Action.LAMP) {
     s.setAction('路灯调节')
     s.bumpTx()
     s.pushLog('LIGHT: 路灯调节发送已关闭')
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.LANGUAGE) {
+    if (a === Page1Action.LANGUAGE) {
     s.setAction('站台播报')
     s.bumpTx()
     s.pushLog('VOICE: 站台播报发送已关闭')
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.SCRAM) {
+    if (a === Page1Action.SCRAM) {
     s.setAction('紧急停止')
     s.bumpTx()
     s.pushLog('VOICE: 紧急语音发送已关闭')
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.TFTA) {
+    if (a === Page1Action.TFTA) {
     s.setAction('TFTA发送')
     s.bumpTx()
     await ctx.proto.sendTFTA()
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.LIGHT) {
+    if (a === Page1Action.LIGHT) {
     s.setAction('光照查询')
     s.bumpTx()
     s.pushLog('LIGHT: 已改为页面启动时自动查询一次；当前入口不再发送')
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.STROBE) {
+    if (a === Page1Action.STROBE) {
     s.setAction('道闸发送')
     s.bumpTx()
     await ctx.proto.strobe()
-    return
-  }
+      return
+    }
 
-  if (a === Page1Action.TFTB) {
+    if (a === Page1Action.TFTB) {
     s.setAction('TFTB发送')
     s.bumpTx()
     await ctx.proto.sendTFTB()
-    return
+      return
+    }
+  } finally {
+    if (isMotionAction(a) && typeof ctx.leaveMotionDispatch === 'function') {
+      ctx.leaveMotionDispatch(`MANUAL:${Page1Action[a]}`)
+    }
   }
 }

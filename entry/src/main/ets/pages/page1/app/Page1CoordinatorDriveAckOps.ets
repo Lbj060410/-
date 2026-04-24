@@ -17,7 +17,7 @@ import { P1C, PendingAckMotion } from './Page1CoordinatorDefs'
 import { RouteEdgeCodec } from './PathPlannerAStar'
 import { MotionTimingProfile } from './ActionTimingRegistry'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
-import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
+import { maybeBlockGoByTrafficGate, onTrafficGateAckStatus } from './Page1CoordinatorTrafficGateOps'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
 const PATH_ACK_RETRY_WAIT_MS: number =2000
@@ -49,6 +49,7 @@ function clearPathAckRetryTimer(ctx: any): void {
     clearTimeout(ctx.pathAckRetryTimerId)
     ctx.pathAckRetryTimerId = -1
   }
+  ctx.pathAckRetryEpoch = (Number(ctx.pathAckRetryEpoch) || 0) + 1
 }
 
 function resolvePathAckCommandKey(actionText: string): string {
@@ -90,31 +91,31 @@ async function sendPathAckCommandByKey(ctx: any, key: string, commandSeq: number
 
   s.bumpTx()
   if (key === 'GO') {
-    await ctx.proto.go()
+    await ctx.proto.go(1)
     return true
   }
   if (key === 'BACK') {
-    await ctx.proto.back()
+    await ctx.proto.back(1)
     return true
   }
   if (key === 'LEFT') {
-    await ctx.proto.left()
+    await ctx.proto.left(1)
     return true
   }
   if (key === 'RIGHT') {
-    await ctx.proto.right()
+    await ctx.proto.right(1)
     return true
   }
   if (key === 'LEFT_HALF') {
-    await ctx.proto.leftHalf()
+    await ctx.proto.leftHalf(1)
     return true
   }
   if (key === 'RIGHT_HALF') {
-    await ctx.proto.rightHalf()
+    await ctx.proto.rightHalf(1)
     return true
   }
   if (key === 'UTURN') {
-    await ctx.proto.uturn()
+    await ctx.proto.uturn(1)
     return true
   }
   if (key === 'GATE_DEPART') {
@@ -151,8 +152,11 @@ function armPathAckRetryTimer(ctx: any): void {
   if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
   if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) return
   if (!ctx.pathAckCommandKey || ctx.pathAckCommandKey.length <= 0) return
+  if (ctx.pathAckCommandKey === 'GATE_DEPART') return
+  const armEpoch: number = Number(ctx.pathAckRetryEpoch) || 0
 
   ctx.pathAckRetryTimerId = setTimeout((): void => {
+    if ((Number(ctx.pathAckRetryEpoch) || 0) !== armEpoch) return
     ctx.pathAckRetryTimerId = -1
     const latestSeq: number = Number(ctx.pathAckCommandSeq) || 0
     if (isStaleByEmergencySeq(ctx, latestSeq)) return
@@ -171,20 +175,50 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
   if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) return
   const key: string = ctx.pathAckCommandKey || ''
   if (key.length <= 0) return
-
-  const nextSendCount: number = ctx.pathAckRetrySentCount + 1
-  const sentOk: boolean = await sendPathAckCommandByKey(ctx, key, commandSeq)
-  if (!sentOk) {
-    s.pushLog(`PATH_ACK_RETRY[RETRY]: 重发失败 key=${key}`)
-    return
+  if (key === 'GATE_DEPART') return
+  const runEpoch: number = Number(ctx.pathAckRetryEpoch) || 0
+  if (typeof ctx.acquireMotionDispatch === 'function') {
+    await ctx.acquireMotionDispatch(`RETRY:${key}`)
   }
 
-  ctx.pathAckRetrySentCount = nextSendCount
-  ctx.pathAckLastSendAtMs = Date.now()
-  ctx.pathAckLastStatusCode = 0
-  s.setAction(`自动动作重发[RETRY]=${ctx.pathAckLastCommandText}`)
-  s.pushLog(`PATH_ACK_RETRY[RETRY]: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
-  armPathAckRetryTimer(ctx)
+  try {
+    // 防竞态：重发任务可能在发送队列里等待了一段时间，
+    // 出队时必须再次确认仍然处于“未收到01/02且仍在等待完成”的状态。
+    const latestSeqBeforeSend: number = Number(ctx.pathAckCommandSeq) || 0
+    if (isStaleByEmergencySeq(ctx, latestSeqBeforeSend)) return
+    if (!ctx.pathAckAwaitingComplete) return
+    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
+    if ((ctx.pathAckCommandKey || '') !== key) return
+    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) return
+    const elapsedSinceLastSendMs: number = Math.max(0, Date.now() - (Number(ctx.pathAckLastSendAtMs) || 0))
+    if (elapsedSinceLastSendMs + 20 < PATH_ACK_RETRY_WAIT_MS) {
+      // 硬约束：未满 2s 禁止重发，彻底避免“看起来没等2秒就重发”。
+      return
+    }
+
+    const nextSendCount: number = ctx.pathAckRetrySentCount + 1
+    const sentOk: boolean = await sendPathAckCommandByKey(ctx, key, commandSeq)
+    if (!sentOk) {
+      s.pushLog(`PATH_ACK_RETRY[RETRY]: 重发失败 key=${key}`)
+      return
+    }
+    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) return
+
+    // 防竞态：若发送期间已收到 0x01/0x02，则禁止覆盖状态并禁止继续挂重试。
+    if (!ctx.pathAckAwaitingComplete) return
+    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
+
+    ctx.pathAckRetrySentCount = nextSendCount
+    ctx.pathAckLastSendAtMs = Date.now()
+    ctx.pathAckLastStatusCode = 0
+    s.setAction(`自动动作重发[RETRY]=${ctx.pathAckLastCommandText}`)
+    s.pushLog(`PATH_ACK_RETRY[RETRY]: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
+    armPathAckRetryTimer(ctx)
+  } finally {
+    if (typeof ctx.leaveMotionDispatch === 'function') {
+      ctx.leaveMotionDispatch(`RETRY:${key}`)
+    }
+  }
 }
 
 async function waitLightBaselineReadyForInitialGo(ctx: any, timeoutMs: number): Promise<boolean> {
@@ -196,126 +230,135 @@ async function waitLightBaselineReadyForInitialGo(ctx: any, timeoutMs: number): 
 export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
+  if (typeof ctx.acquireMotionDispatch === 'function') {
+    await ctx.acquireMotionDispatch(`AUTO:${Page1Action[a]}`)
+  }
   const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
 
-  const isBlockedMotionAction: boolean =
-    a === Page1Action.GO ||
-    a === Page1Action.BACK ||
-    a === Page1Action.LEFT ||
-    a === Page1Action.RIGHT ||
-    a === Page1Action.LEFT_HALF ||
-    a === Page1Action.RIGHT_HALF ||
-    a === Page1Action.UTURN
-  if (isBlockedMotionAction && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'AUTO')) {
-    return false
-  }
-
-  ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-
-  if (a === Page1Action.GO) {
-    const blockedByTrafficGate: boolean = maybeBlockGoByTrafficGate(ctx, Date.now(), false)
-    if (blockedByTrafficGate) return false
-  }
-
-  let actionText: string = ''
-  if (a === Page1Action.GO) actionText = '前进'
-  else if (a === Page1Action.BACK) actionText = '后退'
-  else if (a === Page1Action.LEFT) actionText = '左转'
-  else if (a === Page1Action.RIGHT) actionText = '右转'
-  else if (a === Page1Action.LEFT_HALF) actionText = '左半转'
-  else if (a === Page1Action.RIGHT_HALF) actionText = '右半转'
-  else if (a === Page1Action.UTURN) actionText = '掉头'
-  else if (a === Page1Action.STOP) actionText = '停止'
-
-  const isPathMotion: boolean = isPathMotionAction(a)
-
-  if (!ctx.canRealSend()) {
-    kickTcpConnectForRealSendIfNeeded(ctx, s)
-    s.bumpTx()
-    s.setAction(`自动动作=${actionText} | ${s.realSendEnabled ? 'REAL_SEND(但未连接)' : 'DRY_RUN'}`)
-    replayArchiveService.onAction(actionText, 'AUTO_DRY')
-    return true
-  }
-
-  if (isPathMotion && !canSendPathCommandNow(ctx, actionText)) return false
-  if (shouldSkipDuplicateAutoAction(ctx, a, actionText)) return false
-
-  const isInitialPathGo: boolean = a === Page1Action.GO && !ctx.pathAckFirstCommandSent
-  if (isPathMotion) {
-    if (isInitialPathGo) {
-      const ready: boolean = await waitLightBaselineReadyForInitialGo(ctx, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
-      if (!ready) return false
+  try {
+    const isBlockedMotionAction: boolean =
+      a === Page1Action.GO ||
+      a === Page1Action.BACK ||
+      a === Page1Action.LEFT ||
+      a === Page1Action.RIGHT ||
+      a === Page1Action.LEFT_HALF ||
+      a === Page1Action.RIGHT_HALF ||
+      a === Page1Action.UTURN
+    if (isBlockedMotionAction && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'AUTO')) {
+      return false
     }
-  }
 
-  s.bumpTx()
-  s.setAction(`自动动作=${actionText}`)
+    ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
 
-  if (a === Page1Action.GO) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    // 异步等待后再次检查下一节点是否被阻塞（防止await窗口期内新障碍漏检）
-    if (isPathMotion && typeof ctx.isNextNodeBlocked === 'function' && ctx.isNextNodeBlocked()) return false
-    await ctx.proto.go()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.BACK) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.back()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.LEFT) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.left()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.RIGHT) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.right()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.LEFT_HALF) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.leftHalf()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.RIGHT_HALF) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.rightHalf()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.UTURN) {
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return false
-    await ctx.proto.uturn()
-    if (isPathMotion) markPathCommandSent(ctx, actionText)
-    replayArchiveService.onAction(actionText, 'AUTO')
-    return true
-  }
-  if (a === Page1Action.STOP) {
-    const s2 = ctx.store
+    if (a === Page1Action.GO) {
+      const blockedByTrafficGate: boolean = maybeBlockGoByTrafficGate(ctx, Date.now(), false)
+      if (blockedByTrafficGate) return false
+    }
+
+    let actionText: string = ''
+    if (a === Page1Action.GO) actionText = '前进'
+    else if (a === Page1Action.BACK) actionText = '后退'
+    else if (a === Page1Action.LEFT) actionText = '左转'
+    else if (a === Page1Action.RIGHT) actionText = '右转'
+    else if (a === Page1Action.LEFT_HALF) actionText = '左半转'
+    else if (a === Page1Action.RIGHT_HALF) actionText = '右半转'
+    else if (a === Page1Action.UTURN) actionText = '掉头'
+    else if (a === Page1Action.STOP) actionText = '停止'
+
+    const isPathMotion: boolean = isPathMotionAction(a)
+
     if (!ctx.canRealSend()) {
-      if (s2) s2.pushLog('AUTO_STOP: DRY_RUN，跳过发送')
+      kickTcpConnectForRealSendIfNeeded(ctx, s)
+      s.bumpTx()
+      s.setAction(`自动动作=${actionText} | ${s.realSendEnabled ? 'REAL_SEND(但未连接)' : 'DRY_RUN'}`)
+      replayArchiveService.onAction(actionText, 'AUTO_DRY')
       return true
     }
-    ctx.proto.setMode(CarSendMode.REAL_SEND)
-    if (s2) s2.bumpTx()
-    await ctx.proto.stopTask()
-    if (s2) s2.pushLog('AUTO_STOP: 已发送停止指令给真车')
-    return true
-  }
 
-  return false
+    if (isPathMotion && !canSendPathCommandNow(ctx, actionText)) return false
+    if (shouldSkipDuplicateAutoAction(ctx, a, actionText)) return false
+
+    const isInitialPathGo: boolean = a === Page1Action.GO && !ctx.pathAckFirstCommandSent
+    if (isPathMotion) {
+      if (isInitialPathGo) {
+        const ready: boolean = await waitLightBaselineReadyForInitialGo(ctx, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
+        if (!ready) return false
+      }
+    }
+
+    s.bumpTx()
+    s.setAction(`自动动作=${actionText}`)
+
+    if (a === Page1Action.GO) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      // 异步等待后再次检查下一节点是否被阻塞（防止await窗口期内新障碍漏检）
+      if (isPathMotion && typeof ctx.isNextNodeBlocked === 'function' && ctx.isNextNodeBlocked()) return false
+      await ctx.proto.go()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.BACK) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.back()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.LEFT) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.left()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.RIGHT) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.right()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.LEFT_HALF) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.leftHalf()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.RIGHT_HALF) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.rightHalf()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.UTURN) {
+      if (isStaleByEmergencySeq(ctx, commandSeq)) return false
+      await ctx.proto.uturn()
+      if (isPathMotion) markPathCommandSent(ctx, actionText)
+      replayArchiveService.onAction(actionText, 'AUTO')
+      return true
+    }
+    if (a === Page1Action.STOP) {
+      const s2 = ctx.store
+      if (!ctx.canRealSend()) {
+        if (s2) s2.pushLog('AUTO_STOP: DRY_RUN，跳过发送')
+        return true
+      }
+      ctx.proto.setMode(CarSendMode.REAL_SEND)
+      if (s2) s2.bumpTx()
+      await ctx.proto.stopTask()
+      if (s2) s2.pushLog('AUTO_STOP: 已发送停止指令给真车')
+      return true
+    }
+
+    return false
+  } finally {
+    if (typeof ctx.leaveMotionDispatch === 'function') {
+      ctx.leaveMotionDispatch(`AUTO:${Page1Action[a]}`)
+    }
+  }
 }
 
 export function buildAutoActionFingerprint(ctx: any, action: Page1Action): string {
@@ -477,6 +520,10 @@ export function onPathAckFrame(ctx: any, f: any): void {
   }
 
   if (status === 0x01) {
+    onTrafficGateAckStatus(ctx, status)
+    if (typeof ctx.clearMotionCommandBlock === 'function') {
+      ctx.clearMotionCommandBlock()
+    }
     ctx.pathAckLastStatusCode = 0x01
     clearPathAckRetryTimer(ctx)
     try {
@@ -486,6 +533,9 @@ export function onPathAckFrame(ctx: any, f: any): void {
   }
 
   if (status === 0x02) {
+    if (typeof ctx.clearMotionCommandBlock === 'function') {
+      ctx.clearMotionCommandBlock()
+    }
     const completedKey: string = String(ctx.pathAckCommandKey || '')
     clearPathAckRetryTimer(ctx)
     ctx.pathAckLastStatusCode = 0x02
@@ -493,6 +543,7 @@ export function onPathAckFrame(ctx: any, f: any): void {
     ctx.pathAckBlocked = false
     ctx.pathAckRetrySentCount = 0
     ctx.pathAckCommandKey = ''
+    onTrafficGateAckStatus(ctx, status)
 
     const reqOnAck: PendingAckMotion | undefined = ctx.pendingAckMotion
     if (reqOnAck && reqOnAck.action === Page1Action.GO) {
@@ -565,7 +616,10 @@ export function onPathAckFrame(ctx: any, f: any): void {
         void ctx.followPathOnce(Date.now(), true)
       }
     }
+    return
   }
+
+  onTrafficGateAckStatus(ctx, status)
 }
 
 export function pathDotMotionTimingMs(suggestedMs?: number): number {

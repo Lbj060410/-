@@ -247,6 +247,12 @@ export async function runHandleGateDepartOnArrival(ctx: any, arrivedId: string):
   const curId = arrivedId.trim().toUpperCase()
   const nextId = s.pathNodes[s.pathIndex + 1].trim().toUpperCase()
   if (curId.length <= 0 || nextId.length <= 0) return false
+  const snapId: string = s.currentSnapNodeId.trim().toUpperCase()
+  if (snapId === nextId) {
+    s.pushLog(`GATE_DEPART_SKIP: 已在下一节点 ${snapId}，跳过 ${curId}->${nextId} 的 0x15`)
+    s.stepNextNode()
+    return true
+  }
   let flow = ''
   if (curId === 'B2' && nextId === 'B4') flow = '出库'
   else if (curId === 'B4' && nextId === 'B2') flow = '入库'
@@ -297,39 +303,49 @@ export async function runHandleGateDepartOnArrival(ctx: any, arrivedId: string):
     if (!settleOk) return true
 
     const departKey = ctx.gateDepartSendKey(curId, nextId)
+    const flowKey = `${departKey}|plan=${Number(s.lastPlannedAtMs) || 0}|idx=${s.pathIndex}`
     const nowMs = Date.now()
-    const lastByFlowAtMs = ctx.gateDepartLastSentAtByFlowKey.get(departKey) || 0
+    const lastByFlowAtMs = ctx.gateDepartLastSentAtByFlowKey.get(flowKey) || 0
     const duplicateDepart =
       (departKey === ctx.gateDepartLastSentKey && nowMs - ctx.gateDepartLastSentAtMs < P1C.GATE_DEPART_DEDUP_MS) ||
-      (lastByFlowAtMs > 0 && nowMs - lastByFlowAtMs < P1C.GATE_DEPART_DEDUP_MS)
+      (lastByFlowAtMs > 0)
     let departSent = false
     let sentInRealMode = false
     if (duplicateDepart) {
       s.setAction(`闸口放行=${flow} | 去重`)
-      s.pushLog(`GATE_DEPART_DEDUP: ${curId}->${nextId} flow=${flow} key=${departKey}`)
+      s.pushLog(`GATE_DEPART_DEDUP: ${curId}->${nextId} flow=${flow} key=${flowKey}`)
     } else {
       if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('GATE_DEPART', 'GARAGE_FLOW')) {
         s.setAction(`闸口放行=${flow} | 熔断中`)
         return true
       }
-      sentInRealMode = ctx.canRealSend()
-      ctx.proto.setMode(sentInRealMode ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-      s.bumpTx()
-      if (sentInRealMode) {
-        await ctx.proto.depart()
-        ctx.markPathCommandSent('闸口放行')
-        departSent = true
-        s.setAction(`闸口放行=${flow}`)
-        s.pushLog(`GATE_DEPART: ${curId}->${nextId} flow=${flow} sent`)
-      } else {
-        departSent = true
-        const mode = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
-        s.setAction(`闸口放行=${flow} | ${mode}`)
-        s.pushLog(`GATE_DEPART: ${curId}->${nextId} flow=${flow} 演练模式`)
+      if (typeof ctx.acquireMotionDispatch === 'function') {
+        await ctx.acquireMotionDispatch(`FLOW:GATE_DEPART:${departKey}`)
+      }
+      try {
+        sentInRealMode = ctx.canRealSend()
+        ctx.proto.setMode(sentInRealMode ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+        s.bumpTx()
+        if (sentInRealMode) {
+          await ctx.proto.depart()
+          ctx.markPathCommandSent('闸口放行')
+          departSent = true
+          s.setAction(`闸口放行=${flow}`)
+          s.pushLog(`GATE_DEPART: ${curId}->${nextId} flow=${flow} sent`)
+        } else {
+          departSent = true
+          const mode = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
+          s.setAction(`闸口放行=${flow} | ${mode}`)
+          s.pushLog(`GATE_DEPART: ${curId}->${nextId} flow=${flow} 演练模式`)
+        }
+      } finally {
+        if (typeof ctx.leaveMotionDispatch === 'function') {
+          ctx.leaveMotionDispatch(`FLOW:GATE_DEPART:${departKey}`)
+        }
       }
       ctx.gateDepartLastSentKey = departKey
       ctx.gateDepartLastSentAtMs = nowMs
-      ctx.gateDepartLastSentAtByFlowKey.set(departKey, nowMs)
+      ctx.gateDepartLastSentAtByFlowKey.set(flowKey, nowMs)
     }
 
     if (departSent) {

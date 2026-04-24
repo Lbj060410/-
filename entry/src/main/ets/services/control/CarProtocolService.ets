@@ -144,11 +144,12 @@ export class CarProtocolService {
 
   // ===== 小车控制 0x0A =====
     // 0x0A: 车辆控制类命令（运动、灯光、超声波触发等）
-  private async sendControl0A(code: number, text: string): Promise<void> {
+  private async sendControl0A(code: number, text: string, sendTimes: number = 2): Promise<void> {
+    const safeSendTimes: number = Math.max(1, Math.trunc(sendTimes))
     const payload8: Uint8Array = new Uint8Array(8)
     payload8[0] = code & 0xff
     const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
-    const actionTextWithBurst: string = `${text} x2`
+    const actionTextWithBurst: string = `${text} x${safeSendTimes}`
     commStore.appendDiagKeyTxFrame({
       tsMs: Date.now(),
       cmdHex: `0x${(code & 0xff).toString(16).toUpperCase().padStart(2, '0')}`,
@@ -156,7 +157,7 @@ export class CarProtocolService {
       modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
       hex: this.frameToHex(previewFrame)
     })
-    await this.sendData12(0x0A, payload8)
+    await this.sendData12Burst(0x0A, payload8, safeSendTimes, 5)
     hilog.info(DOMAIN, TAGRUN, '%{public}s', actionTextWithBurst)
   }
 
@@ -167,28 +168,28 @@ export class CarProtocolService {
   }
 
   // 基础运动控制：前进/后退/转向/半转/掉头/停止
-  async go(): Promise<void> {
-    await this.sendControl0A(0x01, '前进')
+  async go(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x01, '前进', sendTimes)
   }
 
-  async back(): Promise<void> {
-    await this.sendControl0A(0x02, '后退')
+  async back(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x02, '后退', sendTimes)
   }
 
-  async left(): Promise<void> {
-    await this.sendControl0A(0x03, '左转')
+  async left(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x03, '左转', sendTimes)
   }
 
-  async right(): Promise<void> {
-    await this.sendControl0A(0x04, '右转')
+  async right(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x04, '右转', sendTimes)
   }
 
-  async leftHalf(): Promise<void> {
-    await this.sendControl0A(0x05, '左半转')
+  async leftHalf(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x05, '左半转', sendTimes)
   }
 
-  async rightHalf(): Promise<void> {
-    await this.sendControl0A(0x06, '右半转')
+  async rightHalf(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x06, '右半转', sendTimes)
   }
 
   async setAlarm(enabled: boolean): Promise<void> {
@@ -215,8 +216,8 @@ export class CarProtocolService {
     await this.sendControl0A(0x0D, '光照值获取')
   }
 
-  async uturn(): Promise<void> {
-    await this.sendControl0A(0x0E, '掉头')
+  async uturn(sendTimes: number = 2): Promise<void> {
+    await this.sendControl0A(0x0E, '掉头', sendTimes)
   }
 
   async sendTFTA(): Promise<void> {
@@ -299,10 +300,10 @@ export class CarProtocolService {
   }
 
   async red(): Promise<void>{
-    await this.sendControl0A(0x20,"红灯")
+    await this.sendControl0A(0x20, "红灯")
   }
   async green(): Promise<void>{
-    await this.sendControl0A(0x21,"绿灯")
+    await this.sendControl0A(0x21, "绿灯")
   }
 
   // 注意：

@@ -134,13 +134,12 @@ export struct ControlPanel {
 
         // 第1行：比赛演示核心四按钮（建议现场优先展示这一行）
         // 讲解口径：UI按钮 -> onClick -> page1Coordinator.onAction -> 协议下发
-        Row({ space: 10 }) {
-          this.controlBtn('前进', Page1Action.GO, 'basic')
-          this.controlBtn('后退', Page1Action.BACK, 'basic')
-          this.controlBtn('左转', Page1Action.LEFT, 'basic')
-          this.controlBtn('右转', Page1Action.RIGHT, 'basic')
-        }
-        .width('100%')
+       Row({space:10}){
+         this.controlBtn('前进',Page1Action.GO,'basic')
+         this.controlBtn('后退',Page1Action.BACK,'basic')
+         this.controlBtn('左转',Page1Action.LEFT,'basic')
+         this.controlBtn('右转',Page1Action.RIGHT,'basic')
+       }
 
         // 第2行：高级动作
         Row({ space: 10 }) {

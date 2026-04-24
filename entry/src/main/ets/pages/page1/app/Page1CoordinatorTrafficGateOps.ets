@@ -15,8 +15,9 @@ Page1 coordination/scheduling helper logic.
 import { recogStore } from '../../../state/RecogStore'
 import { videoStore } from '../../../state/VideoStore'
 import { Page1Action } from '../types/Page1Types'
+import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { RecognitionResultViewHelper } from '../../../services/recognition/RecognitionResultViewHelper'
-import { RecognitionSubtype, RecognitionTaskSource } from '../../../services/recognition/RecognitionTask'
+import { RecognitionSubtype } from '../../../services/recognition/RecognitionTask'
 import { RecognitionResult } from '../../../services/recognition/RecognitionResult'
 
 type TrafficSignal = 'RED' | 'GREEN' | 'YELLOW' | 'UNKNOWN'
@@ -28,6 +29,7 @@ const TRAFFIC_GATE_RETRY_INTERVAL_MS: number = 800
 const TRAFFIC_SIGNAL_FRESH_MAX_AGE_MS: number = 5000
 const TRAFFIC_GATE_GREEN_CONFIRM_COUNT: number = 2
 const TRAFFIC_GATE_PASS_BYPASS_MS: number = 2200
+const TRAFFIC_SIGNAL_RESEND_WINDOW_MS: number = 15000
 
 function logShibie(text: string): void {
   console.info(`[shibie] ${text}`)
@@ -173,6 +175,11 @@ function clearGateWaiting(ctx: any, restoreDefaultModel: boolean = false): void 
   ctx.trafficGateWaiting = false
   ctx.trafficGateEdgeKey = ''
   ctx.trafficGateResumeManual = false
+  ctx.trafficGateAwaitGreenAck02 = false
+  ctx.trafficGateGreenAckEdgeKey = ''
+  ctx.trafficGateGreenAckResumeManual = false
+  ctx.trafficGateGreenAckInFlight = false
+  ctx.trafficGateGreenAckSeen01 = false
   ctx.trafficGateGreenStreak = 0
   ctx.trafficGateLastSignalKey = ''
   ctx.trafficGateLastSignal = 'UNKNOWN'
@@ -185,6 +192,20 @@ function clearGateWaiting(ctx: any, restoreDefaultModel: boolean = false): void 
     videoStore.setPage2Yolov26BarrierEnabled(true)
     logShibie('gate-restore-default-model yolov26barrier=ON')
   }
+}
+
+function hasRecentGreenAck(ctx: any, nowMs: number): boolean {
+  const lastAckAtMs: number = Number(ctx.trafficGateLastGreenAckAtMs) || 0
+  return lastAckAtMs > 0 && (nowMs - lastAckAtMs) <= TRAFFIC_SIGNAL_RESEND_WINDOW_MS
+}
+
+function shouldSendTrafficSignal(ctx: any, signal: 'RED' | 'GREEN', nowMs: number): boolean {
+  const lastColor: string = String(ctx.trafficGateLastSentSignal || '')
+  const lastAtMs: number = Number(ctx.trafficGateLastSentSignalAtMs) || 0
+  if (lastColor !== signal) return true
+  if (lastAtMs <= 0) return true
+  if (nowMs - lastAtMs >= TRAFFIC_SIGNAL_RESEND_WINDOW_MS) return true
+  return false
 }
 
 function canLogGate(ctx: any, nowMs: number): boolean {
@@ -206,6 +227,42 @@ function isGateBypassActive(ctx: any, edgeKey: string, nowMs: number): boolean {
   return key === edgeKey && nowMs < untilMs
 }
 
+function hasPendingGreenAckForEdge(ctx: any, edgeKey: string): boolean {
+  if (!ctx.trafficGateAwaitGreenAck02) return false
+  return String(ctx.trafficGateGreenAckEdgeKey || '') === edgeKey
+}
+
+async function armGreenAckGate(ctx: any, edgeKey: string, fromManual: boolean): Promise<void> {
+  const s = ctx.store
+  if (!s) return
+  if (ctx.trafficGateGreenAckInFlight) return
+  if (hasPendingGreenAckForEdge(ctx, edgeKey)) return
+
+  const nowMs: number = Date.now()
+  if (!shouldSendTrafficSignal(ctx, 'GREEN', nowMs)) {
+    s.pushLog(`TRAFFIC_GATE GREEN_SKIP ${edgeKey}: same color within ${TRAFFIC_SIGNAL_RESEND_WINDOW_MS}ms`)
+    return
+  }
+
+  ctx.trafficGateGreenAckInFlight = true
+  try {
+    ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    await ctx.proto.green()
+    ctx.trafficGateLastSentSignal = 'GREEN'
+    ctx.trafficGateLastSentSignalAtMs = nowMs
+    ctx.trafficGateAwaitGreenAck02 = true
+    ctx.trafficGateGreenAckEdgeKey = edgeKey
+    ctx.trafficGateGreenAckResumeManual = fromManual
+    ctx.trafficGateGreenAckSeen01 = false
+    s.pushLog(`TRAFFIC_GATE GREEN_SENT ${edgeKey}: wait BD=02 then GO`)
+  } catch (e) {
+    const msg: string = e instanceof Error ? e.message : String(e)
+    s.pushLog(`TRAFFIC_GATE GREEN_SEND_FAIL ${edgeKey}: ${msg}`)
+  } finally {
+    ctx.trafficGateGreenAckInFlight = false
+  }
+}
+
 export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: boolean): boolean {
   const s = ctx.store
   if (!s) return false
@@ -222,6 +279,14 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
     return false
   }
 
+  if (hasPendingGreenAckForEdge(ctx, key)) {
+    s.setAction(`traffic gate waiting green-ack (${key})`)
+    if (canLogGate(ctx, nowMs)) {
+      s.pushLog(`TRAFFIC_GATE HOLD ${key}: waiting GREEN_ACK_02`)
+    }
+    return true
+  }
+
   // 仅在门控阶段临时切换到 traffic 模型，放行后由 clearGateWaiting 自动恢复默认模型。
   const trafficEnabledBeforeGate: boolean = !!videoStore.page2TrafficEnabled
   if (!videoStore.recognitionEnabled) {
@@ -234,14 +299,43 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
   }
 
   const signal: TrafficSignal = readTrafficSignal(ctx, nowMs)
-  if (signal === 'GREEN') {
-    markGatePassed(ctx, key, nowMs)
-    logShibie(`gate-pass edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'}`)
-    if (ctx.trafficGateWaiting && ctx.trafficGateEdgeKey === key && canLogGate(ctx, nowMs)) {
-      s.pushLog(`TRAFFIC_GATE PASS ${key}: GREEN`)
+  if (signal === 'RED') {
+    if (!ctx.trafficGateRedSendInFlight && shouldSendTrafficSignal(ctx, 'RED', nowMs)) {
+      ctx.trafficGateRedSendInFlight = true
+      void (async (): Promise<void> => {
+        try {
+          ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+          await ctx.proto.red()
+          ctx.trafficGateLastSentSignal = 'RED'
+          ctx.trafficGateLastSentSignalAtMs = nowMs
+          s.pushLog(`TRAFFIC_GATE RED_SENT ${key}: x2`)
+        } catch (e) {
+          const msg: string = e instanceof Error ? e.message : String(e)
+          s.pushLog(`TRAFFIC_GATE RED_SEND_FAIL ${key}: ${msg}`)
+        } finally {
+          ctx.trafficGateRedSendInFlight = false
+        }
+      })()
     }
-    clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
-    return false
+  }
+  if (signal === 'GREEN') {
+    if (!ctx.canRealSend()) {
+      markGatePassed(ctx, key, nowMs)
+      logShibie(`gate-pass-dry edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'}`)
+      clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
+      return false
+    }
+    ctx.trafficGateWaiting = true
+    ctx.trafficGateEdgeKey = key
+    ctx.trafficGateResumeManual = fromManual
+    logShibie(`gate-green edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'} wait-ack=02`)
+    if (canLogGate(ctx, nowMs)) {
+      s.pushLog(`TRAFFIC_GATE GREEN ${key}: send green then wait BD=02`)
+    }
+    void armGreenAckGate(ctx, key, fromManual)
+    s.setAction(`traffic gate waiting green-ack (${key})`)
+    armTrafficGateRetryIfNeeded(ctx)
+    return true
   }
 
   ctx.trafficGateWaiting = true
@@ -296,19 +390,8 @@ function armTrafficGateRetryIfNeeded(ctx: any): void {
 
       const resumeManual: boolean = !!ctx.trafficGateResumeManual
       const passedEdge: string = String(ctx.trafficGateEdgeKey || '')
-      markGatePassed(ctx, passedEdge, Date.now())
-      logShibie(`gate-retry-pass edge=${String(ctx.trafficGateEdgeKey || '')} mode=${resumeManual ? 'MANUAL' : 'AUTO'}`)
-      clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
-
-      if (resumeManual) {
-        if (typeof ctx.onAction === 'function') {
-          await ctx.onAction(Page1Action.GO)
-        }
-        return
-      }
-      if (typeof ctx.followPathOnce === 'function') {
-        await ctx.followPathOnce(Date.now(), true)
-      }
+      logShibie(`gate-retry-green edge=${passedEdge} mode=${resumeManual ? 'MANUAL' : 'AUTO'} wait-ack=02`)
+      await armGreenAckGate(ctx, passedEdge, resumeManual)
     } catch (e) {
       const msg: string = (e instanceof Error) ? e.message : String(e)
       logShibie(`gate-retry-error edge=${String(ctx.trafficGateEdgeKey || '')} msg=${msg}`)
@@ -321,4 +404,54 @@ function armTrafficGateRetryIfNeeded(ctx: any): void {
   }
 
   scheduleNext()
+}
+
+export function onTrafficGateAckStatus(ctx: any, status: number): void {
+  if (!ctx.trafficGateAwaitGreenAck02) return
+  const st: number = status & 0xff
+
+  if (st === 0x01) {
+    ctx.trafficGateGreenAckSeen01 = true
+    const s01 = ctx.store
+    const edge01: string = String(ctx.trafficGateGreenAckEdgeKey || '')
+    if (s01 && edge01.length > 0 && typeof s01.pushLog === 'function') {
+      s01.pushLog(`TRAFFIC_GATE GREEN_ACK_01 ${edge01}: waiting BD=02`)
+    }
+    return
+  }
+
+  if (st !== 0x02) return
+  if (!ctx.trafficGateGreenAckSeen01) {
+    const sIgnore = ctx.store
+    const edgeIgnore: string = String(ctx.trafficGateGreenAckEdgeKey || '')
+    if (sIgnore && edgeIgnore.length > 0 && typeof sIgnore.pushLog === 'function') {
+      sIgnore.pushLog(`TRAFFIC_GATE IGNORE_ACK_02 ${edgeIgnore}: missing BD=01 for GREEN`)
+    }
+    return
+  }
+
+  const edgeKey: string = String(ctx.trafficGateGreenAckEdgeKey || '')
+  const resumeManual: boolean = !!ctx.trafficGateGreenAckResumeManual
+  if (edgeKey.length <= 0) {
+    clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
+    return
+  }
+
+  markGatePassed(ctx, edgeKey, Date.now())
+  ctx.trafficGateLastGreenAckAtMs = Date.now()
+  const s = ctx.store
+  if (s && typeof s.pushLog === 'function') {
+    s.pushLog(`TRAFFIC_GATE GREEN_ACK_02 ${edgeKey}: allow GO`)
+  }
+  clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
+
+  if (resumeManual) {
+    if (typeof ctx.onAction === 'function') {
+      void ctx.onAction(Page1Action.GO)
+    }
+    return
+  }
+  if (typeof ctx.followPathOnce === 'function') {
+    void ctx.followPathOnce(Date.now(), true)
+  }
 }

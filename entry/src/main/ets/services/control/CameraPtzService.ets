@@ -66,8 +66,8 @@ export class CameraPtzService {
   }
 
   async rotate180(cameraHost: string, user: string, pass: string): Promise<PtzResult> {
-    // ʹ��Ԥ��λ38��ʵ��180����ת���밲׿�˵�Y4��ť��Ӧ��
-    // �������ͷ֧��Ԥ��λ�������ȷ�ķ�ʽ
+    // 使用预留位 38 实现 180 度旋转及翻转功能的 Y4 按键响应
+    // 头部支持预留位功能的正确方式
     return await this.moveOnce(cameraHost, user, pass, 38, 0)
   }
 }

@@ -43,12 +43,8 @@ export class RecognitionReportService {
     if (!result.ok) return
 
     if (result.subtype === RecognitionSubtype.TRAFFIC_LIGHT) {
-      try {
-        await this.maybeSendTrafficSignalCommand(result)
-      } catch (e) {
-        const msg: string = e instanceof Error ? e.message : String(e)
-        console.warn(`[shibie] traffic-auto-report-error msg=${msg}`)
-      }
+      // 交通灯指令发送统一收敛到 Page1 主链路门禁逻辑，
+      // 这里不再直接下发 red/green，避免与主链路叠加导致多发。
       return
     }
 
