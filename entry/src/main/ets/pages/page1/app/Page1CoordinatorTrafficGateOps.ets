@@ -350,12 +350,6 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
     }
   }
   if (signal === 'GREEN') {
-    if (!shouldSendTrafficSignal(ctx, 'GREEN', nowMs) && hasRecentGreenAck(ctx, nowMs)) {
-      markGatePassed(ctx, key, nowMs)
-      pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_REUSE_ACK ${key}: allow GO`)
-      clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
-      return false
-    }
     if (!ctx.canRealSend()) {
       markGatePassed(ctx, key, nowMs)
       logShibie(`gate-pass-dry edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'}`)
@@ -458,14 +452,7 @@ export function onTrafficGateAckStatus(ctx: any, status: number): void {
   }
 
   if (st !== 0x02) return
-  if (!ctx.trafficGateGreenAckSeen01) {
-    const sIgnore = ctx.store
-    const edgeIgnore: string = String(ctx.trafficGateGreenAckEdgeKey || '')
-    if (sIgnore && edgeIgnore.length > 0 && typeof sIgnore.pushLog === 'function') {
-      pushMergedGateLog(ctx, `TRAFFIC_GATE IGNORE_ACK_02 ${edgeIgnore}: missing BD=01 for GREEN`)
-    }
-    return
-  }
+  // 现场设备存在 02 先到或仅到 02 的情况；GREEN 发送成功后收到 02 即视为 ACK 到位并放行。
 
   const edgeKey: string = String(ctx.trafficGateGreenAckEdgeKey || '')
   const resumeManual: boolean = !!ctx.trafficGateGreenAckResumeManual
