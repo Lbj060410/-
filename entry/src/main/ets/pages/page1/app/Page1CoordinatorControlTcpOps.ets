@@ -93,6 +93,27 @@ function logMergedDuplicateFrame(ctx: any, s: Page1UiStore, f: CarFrame55): void
     s.pushLog(`RX 55AA cmd=0xBD 状态=0x${byteToHex(status)} x${nextCount}`)
     return
   }
+  if ((f.cmd & 0xff) === 0xBC) {
+    const p1: number = f.p1 & 0xff
+    if (p1 === 0x00 || p1 === 0x01 || p1 === 0x02) {
+      s.pushLog(`RX 55AA cmd=0xBC 超声波结果 p1=0x${byteToHex(p1)} x${nextCount}`)
+      return
+    }
+    if (p1 === 0x03) {
+      s.pushLog(`RX 55AA cmd=0xBC garage-ready p1=0x03 x${nextCount}`)
+      return
+    }
+    if (p1 === 0x04) {
+      s.pushLog(`RX 55AA cmd=0xBC garage-park-done p1=0x04 x${nextCount}`)
+      return
+    }
+    if (p1 === 0x05) {
+      s.pushLog(`RX 55AA cmd=0xBC lowcar-done p1=0x05 x${nextCount}`)
+      return
+    }
+    s.pushLog(`RX 55AA cmd=0xBC 重复帧 x${nextCount}`)
+    return
+  }
   s.pushLog(`RX 55AA cmd=0x${byteToHex(f.cmd)} 重复帧 x${nextCount}`)
 }
 
@@ -188,9 +209,9 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
   for (let i: number = 0; i < frames.length; i++) {
     const f: CarFrame55 = frames[i]
     const cmd: number = f.cmd & 0xff
-    // 0xBD(路径ACK) 常见 01/02 三连发：连续重复帧只保留第一条，避免重复触发主链逻辑。
-    // 0xBC(超声波/目的地) 保持不过滤，避免丢失业务数据。
-    if (cmd !== 0xBC && isConsecutiveDuplicateFrame(ctx, f)) {
+    // 0xBD(路径ACK) 仍不过滤：需要逐帧进入 ACK 状态机。
+    // 其他帧（含 0xBC）按“首帧生效，后续短窗重复帧过滤+合并日志”处理。
+    if (cmd !== 0xBD && isConsecutiveDuplicateFrame(ctx, f)) {
       const nowMs: number = Date.now()
       const lastMergeLogAtMs: number = Number(ctx.lastRxMergeLogAtMs) || 0
       if (nowMs - lastMergeLogAtMs >= 80) {
@@ -419,6 +440,31 @@ export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
     }
   } else if (f.cmd === 0xBD) {
     const status: number = f.p1 & 0xff
+    const prevStatus: number = Number(ctx.lastBdLogStatus) || -1
+    const prevAtMs: number = Number(ctx.lastBdLogAtMs) || 0
+    const nowMs: number = Date.now()
+    const sameBurst: boolean = prevStatus === status && prevAtMs > 0 && (nowMs - prevAtMs) <= 900
+    if (sameBurst) {
+      // 小车 ACK 常见 3 连发：日志可合并，但 ACK 状态机必须逐帧处理，避免误触发/漏触发重发。
+      ctx.onPathAckFrame(f)
+      const n: number = Math.max(1, Number(ctx.lastBdLogCount) || 1) + 1
+      ctx.lastBdLogCount = n
+      ctx.lastBdLogAtMs = nowMs
+      if (status === 0x01) {
+        msg = `RX 55AA cmd=0xBD 状态=01(已接收) x${n}`
+      } else if (status === 0x02) {
+        msg = `RX 55AA cmd=0xBD 状态=02(已完成) x${n}`
+      } else {
+        msg = `RX 55AA cmd=0xBD 状态=0x${byteToHex(status)} x${n}`
+      }
+      if (n <= 3) {
+        s.pushLog(msg)
+      }
+      return
+    }
+    ctx.lastBdLogStatus = status
+    ctx.lastBdLogAtMs = nowMs
+    ctx.lastBdLogCount = 1
     ctx.onPathAckFrame(f)
 
     if (status === 0x01) {

@@ -627,9 +627,9 @@ export class Page2Coordinator {
       recogStore.setRecogEngineType(RecogEngineType.OFFLINE_NCNN)
     }
     // Page2 阈值策略：
-    // - 障碍物模型（yolov26barrier）：75%
+    // - 障碍物模型（yolov26barrier）：87%
     // - 红绿灯模型（traffic_light）：50%
-    const wantedConf: number = videoStore.page2TrafficEnabled ? 0.5 : 0.75
+    const wantedConf: number = videoStore.page2TrafficEnabled ? 0.5 : 0.87
     if (Math.abs(recogStore.recogOfflineConfThresh - wantedConf) > 0.001) {
       recogStore.setRecogOfflineConfThresh(wantedConf)
     }

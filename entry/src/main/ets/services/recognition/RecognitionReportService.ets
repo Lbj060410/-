@@ -6,6 +6,7 @@
  * 相关文件： state/RecogStore.ets、services/source/*、展示识别输出结果的页面。
  */
 import { CarProtocolService, CarSendMode } from '../control/CarProtocolService'
+import { trafficSignalArbiter } from '../control/TrafficSignalArbiter'
 import { RecogStore } from '../../state/RecogStore'
 import { videoStore } from '../../state/VideoStore'
 import { RecognitionResult } from './RecognitionResult'
@@ -20,7 +21,7 @@ export class RecognitionReportService {
   private lastTrafficSignalTaskId: string = ''
   private lastTrafficSignalToken: string = ''
   private lastTrafficSignalSentAtMs: number = 0
-  private readonly trafficSignalSendMinIntervalMs: number = 1200
+  private readonly trafficSignalSendMinIntervalMs: number = 15000
   private trafficSignalSendBusy: boolean = false
 
   constructor(store: RecogStore) {
@@ -43,8 +44,8 @@ export class RecognitionReportService {
     if (!result.ok) return
 
     if (result.subtype === RecognitionSubtype.TRAFFIC_LIGHT) {
-      // 交通灯指令发送统一收敛到 Page1 主链路门禁逻辑，
-      // 这里不再直接下发 red/green，避免与主链路叠加导致多发。
+      // 旁路红绿灯识别发送：仅用于实时识别链路，内部有 taskId/最小间隔去重。
+      await this.maybeSendTrafficSignalCommand(result)
       return
     }
 
@@ -78,10 +79,10 @@ export class RecognitionReportService {
     this.trafficSignalSendBusy = true
     try {
       const p: CarProtocolService = this.currentProto()
-      if (token === 'R') {
-        await p.red()
-      } else {
-        await p.green()
+      const rs = await trafficSignalArbiter.send(p, token, 'BYPASS', this.trafficSignalSendMinIntervalMs)
+      if (!rs.sent) {
+        console.info(`[shibie] traffic-direct-skip token=${token} task=${taskId} reason=${rs.reason}`)
+        return
       }
       this.lastTrafficSignalTaskId = taskId
       this.lastTrafficSignalToken = token

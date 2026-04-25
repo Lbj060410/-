@@ -16,6 +16,7 @@ import { recogStore } from '../../../state/RecogStore'
 import { videoStore } from '../../../state/VideoStore'
 import { Page1Action } from '../types/Page1Types'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
+import { trafficSignalArbiter } from '../../../services/control/TrafficSignalArbiter'
 import { RecognitionResultViewHelper } from '../../../services/recognition/RecognitionResultViewHelper'
 import { RecognitionSubtype } from '../../../services/recognition/RecognitionTask'
 import { RecognitionResult } from '../../../services/recognition/RecognitionResult'
@@ -30,6 +31,7 @@ const TRAFFIC_SIGNAL_FRESH_MAX_AGE_MS: number = 5000
 const TRAFFIC_GATE_GREEN_CONFIRM_COUNT: number = 2
 const TRAFFIC_GATE_PASS_BYPASS_MS: number = 2200
 const TRAFFIC_SIGNAL_RESEND_WINDOW_MS: number = 15000
+const TRAFFIC_GATE_GO_SEND_GAP_MS: number = 120
 
 function logShibie(text: string): void {
   console.info(`[shibie] ${text}`)
@@ -184,6 +186,7 @@ function clearGateWaiting(ctx: any, restoreDefaultModel: boolean = false): void 
   ctx.trafficGateLastSignalKey = ''
   ctx.trafficGateLastSignal = 'UNKNOWN'
   ctx.trafficGateResumeModelAfterPass = false
+  trafficSignalArbiter.endGateSession()
   if (ctx.timerManager && typeof ctx.timerManager.clear === 'function') {
     ctx.timerManager.clear(TRAFFIC_GATE_RETRY_TIMER)
   }
@@ -216,6 +219,25 @@ function canLogGate(ctx: any, nowMs: number): boolean {
   return false
 }
 
+function pushMergedGateLog(ctx: any, text: string): void {
+  const s = ctx.store
+  if (!s || typeof s.pushLog !== 'function') return
+  const nowMs: number = Date.now()
+  const prevKey: string = String(ctx.trafficGateMergeLogKey || '')
+  const prevAtMs: number = Number(ctx.trafficGateMergeLogAtMs) || 0
+  const nextCount: number = (prevKey === text && (nowMs - prevAtMs) <= 900)
+    ? (Math.max(1, Number(ctx.trafficGateMergeLogCount) || 1) + 1)
+    : 1
+  ctx.trafficGateMergeLogKey = text
+  ctx.trafficGateMergeLogAtMs = nowMs
+  ctx.trafficGateMergeLogCount = nextCount
+  if (nextCount === 1) {
+    s.pushLog(text)
+  } else if (nextCount <= 3) {
+    s.pushLog(`${text} x${nextCount}`)
+  }
+}
+
 function markGatePassed(ctx: any, edgeKey: string, nowMs: number): void {
   ctx.trafficGateBypassEdgeKey = edgeKey
   ctx.trafficGateBypassUntilMs = nowMs + TRAFFIC_GATE_PASS_BYPASS_MS
@@ -240,21 +262,25 @@ async function armGreenAckGate(ctx: any, edgeKey: string, fromManual: boolean): 
 
   const nowMs: number = Date.now()
   if (!shouldSendTrafficSignal(ctx, 'GREEN', nowMs)) {
-    s.pushLog(`TRAFFIC_GATE GREEN_SKIP ${edgeKey}: same color within ${TRAFFIC_SIGNAL_RESEND_WINDOW_MS}ms`)
+    pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_SKIP ${edgeKey}: same color within ${TRAFFIC_SIGNAL_RESEND_WINDOW_MS}ms`)
     return
   }
 
   ctx.trafficGateGreenAckInFlight = true
   try {
     ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-    await ctx.proto.green()
+    const rs = await trafficSignalArbiter.send(ctx.proto, 'G', 'GATE', 0)
+    if (!rs.sent) {
+      pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_ARB_SKIP ${edgeKey}: ${rs.reason}`)
+      return
+    }
     ctx.trafficGateLastSentSignal = 'GREEN'
     ctx.trafficGateLastSentSignalAtMs = nowMs
     ctx.trafficGateAwaitGreenAck02 = true
     ctx.trafficGateGreenAckEdgeKey = edgeKey
     ctx.trafficGateGreenAckResumeManual = fromManual
     ctx.trafficGateGreenAckSeen01 = false
-    s.pushLog(`TRAFFIC_GATE GREEN_SENT ${edgeKey}: wait BD=02 then GO`)
+    pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_SENT ${edgeKey}: wait BD=02 then GO`)
   } catch (e) {
     const msg: string = e instanceof Error ? e.message : String(e)
     s.pushLog(`TRAFFIC_GATE GREEN_SEND_FAIL ${edgeKey}: ${msg}`)
@@ -272,6 +298,7 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
     clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
     return false
   }
+  trafficSignalArbiter.beginGateSession(key)
 
   if (isGateBypassActive(ctx, key, nowMs)) {
     const leftMs: number = Math.max(0, Number(ctx.trafficGateBypassUntilMs || 0) - nowMs)
@@ -282,7 +309,7 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
   if (hasPendingGreenAckForEdge(ctx, key)) {
     s.setAction(`traffic gate waiting green-ack (${key})`)
     if (canLogGate(ctx, nowMs)) {
-      s.pushLog(`TRAFFIC_GATE HOLD ${key}: waiting GREEN_ACK_02`)
+      pushMergedGateLog(ctx, `TRAFFIC_GATE HOLD ${key}: waiting GREEN_ACK_02`)
     }
     return true
   }
@@ -305,10 +332,14 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
       void (async (): Promise<void> => {
         try {
           ctx.proto.setMode(ctx.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-          await ctx.proto.red()
+          const rs = await trafficSignalArbiter.send(ctx.proto, 'R', 'GATE', 0)
+          if (!rs.sent) {
+            pushMergedGateLog(ctx, `TRAFFIC_GATE RED_ARB_SKIP ${key}: ${rs.reason}`)
+            return
+          }
           ctx.trafficGateLastSentSignal = 'RED'
           ctx.trafficGateLastSentSignalAtMs = nowMs
-          s.pushLog(`TRAFFIC_GATE RED_SENT ${key}: x2`)
+          pushMergedGateLog(ctx, `TRAFFIC_GATE RED_SENT ${key}: x2`)
         } catch (e) {
           const msg: string = e instanceof Error ? e.message : String(e)
           s.pushLog(`TRAFFIC_GATE RED_SEND_FAIL ${key}: ${msg}`)
@@ -319,6 +350,12 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
     }
   }
   if (signal === 'GREEN') {
+    if (!shouldSendTrafficSignal(ctx, 'GREEN', nowMs) && hasRecentGreenAck(ctx, nowMs)) {
+      markGatePassed(ctx, key, nowMs)
+      pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_REUSE_ACK ${key}: allow GO`)
+      clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
+      return false
+    }
     if (!ctx.canRealSend()) {
       markGatePassed(ctx, key, nowMs)
       logShibie(`gate-pass-dry edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'}`)
@@ -330,7 +367,7 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
     ctx.trafficGateResumeManual = fromManual
     logShibie(`gate-green edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'} wait-ack=02`)
     if (canLogGate(ctx, nowMs)) {
-      s.pushLog(`TRAFFIC_GATE GREEN ${key}: send green then wait BD=02`)
+      pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN ${key}: send green then wait BD=02`)
     }
     void armGreenAckGate(ctx, key, fromManual)
     s.setAction(`traffic gate waiting green-ack (${key})`)
@@ -347,7 +384,7 @@ export function maybeBlockGoByTrafficGate(ctx: any, nowMs: number, fromManual: b
   logShibie(`gate-hold edge=${key} mode=${fromManual ? 'MANUAL' : 'AUTO'} signal=${signal}`)
   if (canLogGate(ctx, nowMs)) {
     const modeText: string = fromManual ? 'MANUAL' : 'AUTO'
-    s.pushLog(`TRAFFIC_GATE HOLD ${key}: signal=${signal} mode=${modeText}`)
+    pushMergedGateLog(ctx, `TRAFFIC_GATE HOLD ${key}: signal=${signal} mode=${modeText}`)
   }
   s.setAction(`traffic gate waiting (${key})`)
   armTrafficGateRetryIfNeeded(ctx)
@@ -415,7 +452,7 @@ export function onTrafficGateAckStatus(ctx: any, status: number): void {
     const s01 = ctx.store
     const edge01: string = String(ctx.trafficGateGreenAckEdgeKey || '')
     if (s01 && edge01.length > 0 && typeof s01.pushLog === 'function') {
-      s01.pushLog(`TRAFFIC_GATE GREEN_ACK_01 ${edge01}: waiting BD=02`)
+      pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_ACK_01 ${edge01}: waiting BD=02`)
     }
     return
   }
@@ -425,7 +462,7 @@ export function onTrafficGateAckStatus(ctx: any, status: number): void {
     const sIgnore = ctx.store
     const edgeIgnore: string = String(ctx.trafficGateGreenAckEdgeKey || '')
     if (sIgnore && edgeIgnore.length > 0 && typeof sIgnore.pushLog === 'function') {
-      sIgnore.pushLog(`TRAFFIC_GATE IGNORE_ACK_02 ${edgeIgnore}: missing BD=01 for GREEN`)
+      pushMergedGateLog(ctx, `TRAFFIC_GATE IGNORE_ACK_02 ${edgeIgnore}: missing BD=01 for GREEN`)
     }
     return
   }
@@ -441,17 +478,25 @@ export function onTrafficGateAckStatus(ctx: any, status: number): void {
   ctx.trafficGateLastGreenAckAtMs = Date.now()
   const s = ctx.store
   if (s && typeof s.pushLog === 'function') {
-    s.pushLog(`TRAFFIC_GATE GREEN_ACK_02 ${edgeKey}: allow GO`)
+    pushMergedGateLog(ctx, `TRAFFIC_GATE GREEN_ACK_02 ${edgeKey}: allow GO`)
   }
   clearGateWaiting(ctx, !!ctx.trafficGateResumeModelAfterPass)
 
   if (resumeManual) {
     if (typeof ctx.onAction === 'function') {
-      void ctx.onAction(Page1Action.GO)
+      setTimeout((): void => {
+        if (typeof ctx.onAction === 'function') {
+          void ctx.onAction(Page1Action.GO)
+        }
+      }, TRAFFIC_GATE_GO_SEND_GAP_MS)
     }
     return
   }
   if (typeof ctx.followPathOnce === 'function') {
-    void ctx.followPathOnce(Date.now(), true)
+    setTimeout((): void => {
+      if (typeof ctx.followPathOnce === 'function') {
+        void ctx.followPathOnce(Date.now(), true)
+      }
+    }, TRAFFIC_GATE_GO_SEND_GAP_MS)
   }
 }

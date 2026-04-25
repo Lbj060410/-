@@ -37,6 +37,9 @@ export class CarProtocolService {
   // - DRY_RUN: 只记日志，不触发真实车辆动作
   // - REAL_SEND: 真实写 socket
   private mode: CarSendMode = CarSendMode.REAL_SEND
+  // 全局串行发送链路：同一进程内所有 CarProtocolService 实例共享一个发送队列。
+  private static serialSendTail: Promise<void> = Promise.resolve()
+  private static readonly SERIAL_SEND_GAP_MS: number = 25
 
   // 十进制字符串主要用于对照旧日志/教学日志
   private frameToDecimal(frame: Uint8Array): string {
@@ -83,29 +86,49 @@ export class CarProtocolService {
     return t
   }
 
+  private async runInSerialSendQueue(task: () => Promise<void>): Promise<void> {
+    const prev: Promise<void> = CarProtocolService.serialSendTail
+    let release!: () => void
+    const gate: Promise<void> = new Promise<void>((resolve): void => {
+      release = resolve
+    })
+    CarProtocolService.serialSendTail = gate
+    await prev
+    try {
+      await task()
+    } finally {
+      if (CarProtocolService.SERIAL_SEND_GAP_MS > 0) {
+        await this.sleepMs(CarProtocolService.SERIAL_SEND_GAP_MS)
+      }
+      release()
+    }
+  }
+
   // ===== 唯一发送出口（支持 DRY/REAL）=====
   private async sendRawBurst(frame: Uint8Array, tag: string, sendTimes: number, intervalMs: number): Promise<void> {
-    const safeTimes: number = Math.max(1, Math.trunc(sendTimes))
-    const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
-    for (let i: number = 0; i < safeTimes; i++) {
-      const sendTag: string = `${tag}#${i + 1}/${safeTimes}`
-      // 统一在这里做 TX 统计 + 帧日志（即使 DRY_RUN 也记录“发送意图”）
-      commStore.bumpTxPacket()
-      if (i === 0) {
-        const mergedTag: string = safeTimes > 1 ? `${tag}#x${safeTimes}(merged)` : sendTag
-        FrameLogService.appendTx(frame, mergedTag)
-      }
-      this.logConnectFrame(frame)
+    await this.runInSerialSendQueue(async (): Promise<void> => {
+      const safeTimes: number = Math.max(1, Math.trunc(sendTimes))
+      const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
+      for (let i: number = 0; i < safeTimes; i++) {
+        const sendTag: string = `${tag}#${i + 1}/${safeTimes}`
+        // 统一在这里做 TX 统计 + 帧日志（即使 DRY_RUN 也记录“发送意图”）
+        commStore.bumpTxPacket()
+        if (i === 0) {
+          const mergedTag: string = safeTimes > 1 ? `${tag}#x${safeTimes}(merged)` : sendTag
+          FrameLogService.appendTx(frame, mergedTag)
+        }
+        this.logConnectFrame(frame)
 
-      if (this.mode !== CarSendMode.DRY_RUN) {
-        const t: CarTcpService | undefined = this.getTcpOrLog()
-        if (!t) return
-        await t.sendOrLog(frame, sendTag)
+        if (this.mode !== CarSendMode.DRY_RUN) {
+          const t: CarTcpService | undefined = this.getTcpOrLog()
+          if (!t) return
+          await t.sendOrLog(frame, sendTag)
+        }
+        if (i + 1 < safeTimes && safeIntervalMs > 0) {
+          await this.sleepMs(safeIntervalMs)
+        }
       }
-      if (i + 1 < safeTimes && safeIntervalMs > 0) {
-        await this.sleepMs(safeIntervalMs)
-      }
-    }
+    })
   }
 
   async sendRaw(frame: Uint8Array, tag: string): Promise<void> {

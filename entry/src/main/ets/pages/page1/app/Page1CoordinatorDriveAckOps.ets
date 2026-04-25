@@ -17,11 +17,18 @@ import { P1C, PendingAckMotion } from './Page1CoordinatorDefs'
 import { RouteEdgeCodec } from './PathPlannerAStar'
 import { MotionTimingProfile } from './ActionTimingRegistry'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
+import { trafficSignalArbiter } from '../../../services/control/TrafficSignalArbiter'
 import { maybeBlockGoByTrafficGate, onTrafficGateAckStatus } from './Page1CoordinatorTrafficGateOps'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 
-const PATH_ACK_RETRY_WAIT_MS: number =2000
+const PATH_ACK_RETRY_WAIT_MS: number =5000
+const PATH_ACK_RETRY_GRACE_MS: number = 500
+const PATH_ACK_STASH02_HOLD_MS: number = 1800
+const PATH_ACK_STASH02_PROMOTE_MS: number = 1200
 const PATH_ACK_RETRY_MAX_SENDS: number = 3
+const PATH_ACK_RETRY_DIAG_COOLDOWN_MS: number = 300
+const PATH_ACK_RETRY_DIAG_TAG: string = 'cnmdc'
+const PATH_ACK_RX_DIAG_COOLDOWN_MS: number = 120
 
 function kickTcpConnectForRealSendIfNeeded(ctx: any, s: any): void {
   if (!s || !s.realSendEnabled) return
@@ -50,6 +57,13 @@ function clearPathAckRetryTimer(ctx: any): void {
     ctx.pathAckRetryTimerId = -1
   }
   ctx.pathAckRetryEpoch = (Number(ctx.pathAckRetryEpoch) || 0) + 1
+}
+
+function clearStashed02PromoteTimer(ctx: any): void {
+  if (Number(ctx.pathAckSeen02PromoteTimerId) >= 0) {
+    clearTimeout(ctx.pathAckSeen02PromoteTimerId)
+    ctx.pathAckSeen02PromoteTimerId = -1
+  }
 }
 
 function resolvePathAckCommandKey(actionText: string): string {
@@ -167,15 +181,37 @@ function armPathAckRetryTimer(ctx: any): void {
 async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
   const s = ctx.store
   if (!s) return
-  if (!ctx.canRealSend()) return
-  if (!ctx.pathAckAwaitingComplete) return
+  const diag = (reason: string): void => {
+    if (!s || typeof s.pushLog !== 'function') return
+    const nowMs: number = Date.now()
+    const lastAtMs: number = Number(ctx.pathAckRetryDiagAtMs) || 0
+    const forceLog: boolean =
+      reason.indexOf('fire:') === 0 ||
+      reason.indexOf('defer:') === 0 ||
+      reason.indexOf('accept:') === 0 ||
+      reason.indexOf('promote:') === 0 ||
+      reason.indexOf('stash:') === 0
+    if (!forceLog && (nowMs - lastAtMs < PATH_ACK_RETRY_DIAG_COOLDOWN_MS)) return
+    ctx.pathAckRetryDiagAtMs = nowMs
+    const keyShown: string = String(ctx.pathAckCommandKey || '-')
+    const token: number = Number(ctx.pathAckCommandToken) || 0
+    const status: number = Number(ctx.pathAckLastStatusCode) || 0
+    const sent: number = Number(ctx.pathAckRetrySentCount) || 0
+    const elapsedMs: number = Math.max(0, nowMs - (Number(ctx.pathAckLastSendAtMs) || 0))
+    s.pushLog(
+      `[${PATH_ACK_RETRY_DIAG_TAG}] PATH_ACK_RETRY_DIAG: ${reason} key=${keyShown} token=${token} status=0x${status.toString(16)} sent=${sent}/${PATH_ACK_RETRY_MAX_SENDS} elapsed=${elapsedMs}ms awaiting=${ctx.pathAckAwaitingComplete ? 1 : 0}`
+    )
+  }
+
+  if (!ctx.canRealSend()) { diag('skip:not-real-send'); return }
+  if (!ctx.pathAckAwaitingComplete) { diag('skip:not-awaiting'); return }
   const commandSeq: number = Number(ctx.pathAckCommandSeq) || 0
-  if (isStaleByEmergencySeq(ctx, commandSeq)) return
-  if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
-  if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) return
+  if (isStaleByEmergencySeq(ctx, commandSeq)) { diag('skip:stale-seq'); return }
+  if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) { diag('skip:already-ack'); return }
+  if (ctx.pathAckRetrySentCount >= PATH_ACK_RETRY_MAX_SENDS) { diag('skip:max-retries'); return }
   const key: string = ctx.pathAckCommandKey || ''
-  if (key.length <= 0) return
-  if (key === 'GATE_DEPART') return
+  if (key.length <= 0) { diag('skip:empty-key'); return }
+  if (key === 'GATE_DEPART') { diag('skip:gate-depart-no-retry'); return }
   const runEpoch: number = Number(ctx.pathAckRetryEpoch) || 0
   if (typeof ctx.acquireMotionDispatch === 'function') {
     await ctx.acquireMotionDispatch(`RETRY:${key}`)
@@ -185,34 +221,80 @@ async function retryPathAckCommandIfNeeded(ctx: any): Promise<void> {
     // 防竞态：重发任务可能在发送队列里等待了一段时间，
     // 出队时必须再次确认仍然处于“未收到01/02且仍在等待完成”的状态。
     const latestSeqBeforeSend: number = Number(ctx.pathAckCommandSeq) || 0
-    if (isStaleByEmergencySeq(ctx, latestSeqBeforeSend)) return
-    if (!ctx.pathAckAwaitingComplete) return
-    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
-    if ((ctx.pathAckCommandKey || '') !== key) return
-    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) return
+    if (isStaleByEmergencySeq(ctx, latestSeqBeforeSend)) { diag('skip:stale-seq-before-send'); return }
+    if (!ctx.pathAckAwaitingComplete) { diag('skip:not-awaiting-before-send'); return }
+    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) { diag('skip:already-ack-before-send'); return }
+    if ((ctx.pathAckCommandKey || '') !== key) { diag('skip:key-changed-before-send'); return }
+    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) { diag('skip:epoch-changed-before-send'); return }
+    const activeTokenNow: number = Number(ctx.pathAckCommandToken) || 0
+    const seen01TokenNow: number = Number(ctx.pathAckSeen01Token) || 0
+    const seen02TokenNow: number = Number(ctx.pathAckSeen02Token) || 0
+    if (activeTokenNow > 0 && seen02TokenNow === activeTokenNow && seen01TokenNow !== activeTokenNow) {
+      const seen02AtMs: number = Number(ctx.pathAckSeen02AtMs) || 0
+      const seen02ElapsedMs: number = seen02AtMs > 0 ? Math.max(0, Date.now() - seen02AtMs) : 0
+      if (seen02ElapsedMs < PATH_ACK_STASH02_HOLD_MS) {
+        const remainMs: number = Math.max(80, PATH_ACK_STASH02_HOLD_MS - seen02ElapsedMs)
+        diag(`defer:wait-01-after-02-${remainMs}ms`)
+        ctx.pathAckRetryTimerId = setTimeout((): void => {
+          if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) return
+          ctx.pathAckRetryTimerId = -1
+          void retryPathAckCommandIfNeeded(ctx)
+        }, remainMs) as number
+        return
+      }
+      // 根因修复：已收到同 token 的 02，说明小车大概率已完成该动作；超时后直接补完成，禁止再次重发导致重复动作。
+      diag('promote:wait-01-after-02-expired-complete')
+      completePathAckBy02(ctx, activeTokenNow, (reason: string, status: number): void => {
+        const s2 = ctx.store
+        if (!s2 || typeof s2.pushLog !== 'function') return
+        s2.pushLog(
+          `[${PATH_ACK_RETRY_DIAG_TAG}] PATH_ACK_RX_DIAG: ${reason} status=0x${status.toString(16)} awaiting=${ctx.pathAckAwaitingComplete ? 1 : 0} key=${String(ctx.pathAckCommandKey || '-')} token=${Number(ctx.pathAckCommandToken) || 0} seen01=${Number(ctx.pathAckSeen01Token) || 0} seen02=${Number(ctx.pathAckSeen02Token) || 0}`
+        )
+      })
+      return
+    }
     const elapsedSinceLastSendMs: number = Math.max(0, Date.now() - (Number(ctx.pathAckLastSendAtMs) || 0))
     if (elapsedSinceLastSendMs + 20 < PATH_ACK_RETRY_WAIT_MS) {
       // 硬约束：未满 2s 禁止重发，彻底避免“看起来没等2秒就重发”。
+      diag('skip:wait-not-enough-2s')
       return
     }
+    const activeToken: number = Number(ctx.pathAckCommandToken) || 0
+    const graceToken: number = Number(ctx.pathAckRetryGraceToken) || 0
+    if (activeToken > 0 &&
+      elapsedSinceLastSendMs < (PATH_ACK_RETRY_WAIT_MS + PATH_ACK_RETRY_GRACE_MS) &&
+      graceToken !== activeToken) {
+      ctx.pathAckRetryGraceToken = activeToken
+      ctx.pathAckRetryGraceAtMs = Date.now()
+      diag(`defer:grace-${PATH_ACK_RETRY_GRACE_MS}ms`)
+      const runEpoch2: number = Number(ctx.pathAckRetryEpoch) || 0
+      ctx.pathAckRetryTimerId = setTimeout((): void => {
+        if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch2) return
+        ctx.pathAckRetryTimerId = -1
+        void retryPathAckCommandIfNeeded(ctx)
+      }, PATH_ACK_RETRY_GRACE_MS) as number
+      return
+    }
+    diag('fire:retry-send')
 
     const nextSendCount: number = ctx.pathAckRetrySentCount + 1
     const sentOk: boolean = await sendPathAckCommandByKey(ctx, key, commandSeq)
     if (!sentOk) {
       s.pushLog(`PATH_ACK_RETRY[RETRY]: 重发失败 key=${key}`)
+      diag('fail:send-command')
       return
     }
-    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) return
+    if ((Number(ctx.pathAckRetryEpoch) || 0) !== runEpoch) { diag('skip:epoch-changed-after-send'); return }
 
     // 防竞态：若发送期间已收到 0x01/0x02，则禁止覆盖状态并禁止继续挂重试。
-    if (!ctx.pathAckAwaitingComplete) return
-    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) return
+    if (!ctx.pathAckAwaitingComplete) { diag('skip:not-awaiting-after-send'); return }
+    if (ctx.pathAckLastStatusCode === 0x01 || ctx.pathAckLastStatusCode === 0x02) { diag('skip:already-ack-after-send'); return }
 
     ctx.pathAckRetrySentCount = nextSendCount
     ctx.pathAckLastSendAtMs = Date.now()
     ctx.pathAckLastStatusCode = 0
     s.setAction(`自动动作重发[RETRY]=${ctx.pathAckLastCommandText}`)
-    s.pushLog(`PATH_ACK_RETRY[RETRY]: 2000ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
+    s.pushLog(`PATH_ACK_RETRY[RETRY]: ${PATH_ACK_RETRY_WAIT_MS}ms未收到0x01，重发第${nextSendCount}次/${PATH_ACK_RETRY_MAX_SENDS} cmd=${ctx.pathAckLastCommandText}`)
     armPathAckRetryTimer(ctx)
   } finally {
     if (typeof ctx.leaveMotionDispatch === 'function') {
@@ -422,6 +504,7 @@ export function resetAutoActionDedupState(ctx: any): void {
 
 export function resetPathAckState(ctx: any): void {
   clearPathAckRetryTimer(ctx)
+  clearStashed02PromoteTimer(ctx)
   ctx.pathAckFirstCommandSent = false
   ctx.pathAckAwaitingComplete = false
   ctx.pathAckBlocked = false
@@ -433,11 +516,19 @@ export function resetPathAckState(ctx: any): void {
   ctx.pathAckRetrySentCount = 0
   ctx.pathAckCommandKey = ''
   ctx.pathAckCommandSeq = Number(ctx.emergencyCommandSeq) || 0
+  ctx.pathAckCommandToken = 0
+  ctx.pathAckSeen01Token = 0
+  ctx.pathAckSeen02Token = 0
+  ctx.pathAckSeen02AtMs = 0
+  ctx.pathAckSeen02PromoteTimerId = -1
+  ctx.pathAckRetryGraceToken = 0
+  ctx.pathAckRetryGraceAtMs = 0
   ctx.pendingAckMotion = undefined
   ctx.suppressNextAckCompleteMotion = false
   ctx.suppressAckCompleteEdgeId = ''
   ctx.pendingDrivingUltrasonicObstacleEdgeId = ''
   ctx.pendingDrivingUltrasonicObstacleAtMs = 0
+  trafficSignalArbiter.setBypassPaused(false, '')
 }
 
 export function isPathMotionAction(action: Page1Action): boolean {
@@ -455,6 +546,48 @@ function formatActionWithBurstX2(actionText: string): string {
   if (t.length <= 0) return t
   if (t.indexOf('x2') >= 0 || t.indexOf('X2') >= 0) return t
   return `${t} x2`
+}
+
+function actionFromCompletedKey(key: string): Page1Action | undefined {
+  if (key === 'GO') return Page1Action.GO
+  if (key === 'BACK') return Page1Action.BACK
+  if (key === 'LEFT') return Page1Action.LEFT
+  if (key === 'RIGHT') return Page1Action.RIGHT
+  if (key === 'LEFT_HALF') return Page1Action.LEFT_HALF
+  if (key === 'RIGHT_HALF') return Page1Action.RIGHT_HALF
+  if (key === 'UTURN') return Page1Action.UTURN
+  return undefined
+}
+
+function tryRebuildPendingAckMotionAfterComplete(ctx: any, completedKey: string): PendingAckMotion | undefined {
+  const s = ctx.store
+  if (!s) return undefined
+  const action: Page1Action | undefined = actionFromCompletedKey(completedKey)
+  if (action === undefined) return undefined
+  if (s.pathNodes.length <= 1) return undefined
+  if (s.pathIndex < 0 || s.pathIndex >= s.pathNodes.length - 1) return undefined
+
+  const fromId: string = s.pathNodes[s.pathIndex].trim().toUpperCase()
+  const toId: string = s.pathNodes[s.pathIndex + 1].trim().toUpperCase()
+  if (fromId.length <= 0 || toId.length <= 0) return undefined
+
+  let nextAction: Page1Action | undefined = undefined
+  if (typeof ctx.peekNextActionAfterCurrentStep === 'function') {
+    try {
+      nextAction = ctx.peekNextActionAfterCurrentStep()
+    } catch (_) {}
+  }
+
+  return {
+    action: action,
+    fromId: fromId,
+    toId: toId,
+    nextAction: nextAction,
+    motionMs: pathDotMotionTimingMs(),
+    advancePathOnFinish: true,
+    useReverseSpeed: false,
+    customLogTag: 'PATH_DOT_MOVE_FALLBACK'
+  }
 }
 
 export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean {
@@ -498,7 +631,9 @@ export function canSendPathCommandNow(ctx: any, nextActionText: string): boolean
 }
 
 export function markPathCommandSent(ctx: any, actionText: string): void {
+  clearStashed02PromoteTimer(ctx)
   const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
+  const token: number = (Number(ctx.pathAckCommandToken) || 0) + 1
   ctx.pathAckFirstCommandSent = true
   ctx.pathAckAwaitingComplete = true
   ctx.pathAckBlocked = false
@@ -508,11 +643,193 @@ export function markPathCommandSent(ctx: any, actionText: string): void {
   ctx.pathAckRetrySentCount = 1
   ctx.pathAckCommandKey = resolvePathAckCommandKey(actionText)
   ctx.pathAckCommandSeq = commandSeq
+  ctx.pathAckCommandToken = token
+  ctx.pathAckSeen01Token = 0
+  ctx.pathAckSeen02Token = 0
+  ctx.pathAckSeen02AtMs = 0
+  ctx.pathAckRetryGraceToken = 0
+  ctx.pathAckRetryGraceAtMs = 0
+  trafficSignalArbiter.setBypassPaused(true, `path-ack-await:${ctx.pathAckCommandKey}`)
   armPathAckRetryTimer(ctx)
 }
 
+function completePathAckBy02(ctx: any, activeToken: number, ackDiag: (reason: string, status: number) => void): void {
+  clearStashed02PromoteTimer(ctx)
+  if (activeToken > 0) ctx.pathAckSeen02Token = activeToken
+  ctx.pathAckSeen02AtMs = Date.now()
+  if (typeof ctx.clearMotionCommandBlock === 'function') {
+    ctx.clearMotionCommandBlock()
+  }
+  const completedKey: string = String(ctx.pathAckCommandKey || '')
+  clearPathAckRetryTimer(ctx)
+  ctx.pathAckLastStatusCode = 0x02
+  ctx.pathAckRetryGraceToken = 0
+  ctx.pathAckRetryGraceAtMs = 0
+  ctx.pathAckAwaitingComplete = false
+  ctx.pathAckBlocked = false
+  ctx.pathAckRetrySentCount = 0
+  ctx.pathAckCommandKey = ''
+  trafficSignalArbiter.setBypassPaused(false, '')
+  ackDiag('accept:02', 0x02)
+
+  const reqOnAck: PendingAckMotion | undefined = ctx.pendingAckMotion
+  if (reqOnAck && reqOnAck.action === Page1Action.GO) {
+    const fromId: string = reqOnAck.fromId.trim().toUpperCase()
+    const toId: string = reqOnAck.toId.trim().toUpperCase()
+    if (fromId === 'B4' && toId === 'B2') {
+      try {
+        void ctx.onGateEnterAckCompleted(fromId, toId)
+      } catch (_) {}
+    }
+  }
+
+  if (ctx.suppressNextAckCompleteMotion) {
+    const s = ctx.store
+    const req: PendingAckMotion | undefined = ctx.pendingAckMotion
+    let suppressed: boolean = false
+
+    if (!req) {
+      suppressed = true
+    } else {
+      const reqEdgeId: string = RouteEdgeCodec.normalize(req.fromId, req.toId)
+      if (ctx.suppressAckCompleteEdgeId.length <= 0 || reqEdgeId === ctx.suppressAckCompleteEdgeId) {
+        suppressed = true
+      }
+    }
+
+    if (suppressed) {
+      ctx.pendingAckMotion = undefined
+      ctx.suppressNextAckCompleteMotion = false
+      ctx.suppressAckCompleteEdgeId = ''
+      if (s) s.pushLog('PATH_DOT_MOVE: 抑制本次 BD=02 红点前移（路段障碍重规划）')
+      flushDrivingUltrasonicObstacleAfterAck(ctx)
+      return
+    }
+  }
+
+  const req2: PendingAckMotion | undefined = ctx.pendingAckMotion
+  if (req2) {
+    const s2 = ctx.store
+    const toId2: string = req2.toId.trim().toUpperCase()
+    const fromId2: string = req2.fromId.trim().toUpperCase()
+    if (s2 && (s2.isBlocked(toId2) || s2.isBlockedEdge(fromId2, toId2))) {
+      ctx.pendingAckMotion = undefined
+      s2.pushLog(`PATH_ACK_BLOCK: BD=02后发现目标节点/边已被阻塞 ${fromId2}->${toId2}，跳过动画并重规划`)
+      if (s2.destApplied.length > 0) {
+        ctx.stopActiveMotion()
+        void ctx.sendDriveActionDirect(Page1Action.STOP)
+        ctx.planPath(s2.destApplied)
+      }
+      return
+    }
+  }
+  if (!ctx.pendingAckMotion) {
+    const rebuiltReq: PendingAckMotion | undefined = tryRebuildPendingAckMotionAfterComplete(ctx, completedKey)
+    if (rebuiltReq) {
+      ctx.pendingAckMotion = rebuiltReq
+      const s4 = ctx.store
+      if (s4 && typeof s4.pushLog === 'function') {
+        s4.pushLog(
+          `[${PATH_ACK_RETRY_DIAG_TAG}] PATH_ACK_MOVE_FALLBACK: key=${completedKey} ${rebuiltReq.fromId}->${rebuiltReq.toId}`
+        )
+      }
+    }
+  }
+  startPendingAckMotionOnComplete(ctx)
+
+  const isGarageSpecialAck: boolean =
+    completedKey === 'LOWCARPORT' ||
+    completedKey === 'CARPORT_2' ||
+    completedKey === 'LOWCAR'
+  if (completedKey === 'LOWCAR' && typeof ctx.armLowcarBc05Wait === 'function') {
+    ctx.armLowcarBc05Wait()
+    const sWait = ctx.store
+    if (sWait) sWait.pushLog('LOWCAR_BC05: LOWCAR 已完成，等待 BC/05 后再续发')
+  }
+  if (isGarageSpecialAck && !ctx.pendingAckMotion) {
+    if (completedKey === 'LOWCAR' && ctx.lowcarAwaitingBc05) return
+    const s3 = ctx.store
+    if (s3) s3.pushLog(`PATH_ACK_CONTINUE: ${completedKey} 完成，继续尝试下发下一段动作`)
+    if (typeof ctx.followPathOnce === 'function') {
+      void ctx.followPathOnce(Date.now(), true)
+    }
+  }
+}
+
 export function onPathAckFrame(ctx: any, f: any): void {
+  const ackDiag = (reason: string, status: number): void => {
+    const s = ctx.store
+    if (!s || typeof s.pushLog !== 'function') return
+    const nowMs: number = Date.now()
+    const lastAtMs: number = Number(ctx.pathAckRxDiagAtMs) || 0
+    const forceLog: boolean =
+      reason.indexOf('accept:') === 0 ||
+      reason.indexOf('promote:') === 0 ||
+      reason.indexOf('stash:') === 0
+    if (!forceLog && (nowMs - lastAtMs < PATH_ACK_RX_DIAG_COOLDOWN_MS)) return
+    ctx.pathAckRxDiagAtMs = nowMs
+    const token: number = Number(ctx.pathAckCommandToken) || 0
+    const seen01: number = Number(ctx.pathAckSeen01Token) || 0
+    const seen02: number = Number(ctx.pathAckSeen02Token) || 0
+    const keyShown: string = String(ctx.pathAckCommandKey || '-')
+    s.pushLog(
+      `[${PATH_ACK_RETRY_DIAG_TAG}] PATH_ACK_RX_DIAG: ${reason} status=0x${status.toString(16)} awaiting=${ctx.pathAckAwaitingComplete ? 1 : 0} key=${keyShown} token=${token} seen01=${seen01} seen02=${seen02}`
+    )
+  }
+
   const status: number = f.p1 & 0xff
+  ackDiag('rx', status)
+  // 门禁 green 的 ACK 也走 0xBD/01,02；即使当前不在路径 ACK 等待态，也要先让门禁状态机处理。
+  onTrafficGateAckStatus(ctx, status)
+  if (!ctx.pathAckAwaitingComplete && (status === 0x01 || status === 0x02)) {
+    // 即使不在 path-ack 等待态，收到 01 也可视为链路已受理，释放 single-flight 发送锁，
+    // 避免后续 carport(0x18) 等动作被“残留发送锁”短暂卡住。
+    if (status === 0x01 && typeof ctx.clearMotionCommandBlock === 'function') {
+      ctx.clearMotionCommandBlock()
+      ackDiag('clear-block-on-01-noawait', status)
+    }
+    ackDiag('skip:not-awaiting', status)
+    return
+  }
+  const activeToken: number = Number(ctx.pathAckCommandToken) || 0
+  const seen01Token: number = Number(ctx.pathAckSeen01Token) || 0
+  if (activeToken > 0) {
+    if (status === 0x01 && Number(ctx.pathAckSeen01Token) === activeToken) {
+      ackDiag('skip:dup-01-token', status)
+      return
+    }
+    if (status === 0x02 && Number(ctx.pathAckSeen02Token) === activeToken) {
+      ackDiag('skip:dup-02-token', status)
+      return
+    }
+    if (status === 0x02 && seen01Token !== activeToken) {
+      const keyNow: string = String(ctx.pathAckCommandKey || '')
+      if (keyNow === 'GATE_DEPART') {
+        // 闸口放行在现场存在仅回 02 的设备行为；若强制等待 01 会卡住点位推进与后续动作。
+        ackDiag('accept:02-no01-gate-depart', status)
+        completePathAckBy02(ctx, activeToken, ackDiag)
+        return
+      }
+      // 乱序容忍：先到的 02 先暂存 token；后续若收到同 token 的 01，立即补完成。
+      ctx.pathAckSeen02Token = activeToken
+      if ((Number(ctx.pathAckSeen02AtMs) || 0) <= 0) {
+        ctx.pathAckSeen02AtMs = Date.now()
+      }
+      ackDiag('stash:02-before-01-token', status)
+      clearStashed02PromoteTimer(ctx)
+      const tokenForPromote: number = activeToken
+      ctx.pathAckSeen02PromoteTimerId = setTimeout((): void => {
+        ctx.pathAckSeen02PromoteTimerId = -1
+        if (!ctx.pathAckAwaitingComplete) return
+        if ((Number(ctx.pathAckCommandToken) || 0) !== tokenForPromote) return
+        if ((Number(ctx.pathAckSeen02Token) || 0) !== tokenForPromote) return
+        if ((Number(ctx.pathAckSeen01Token) || 0) === tokenForPromote) return
+        ackDiag(`promote:stashed-02-timer-${PATH_ACK_STASH02_PROMOTE_MS}ms`, 0x02)
+        completePathAckBy02(ctx, tokenForPromote, ackDiag)
+      }, PATH_ACK_STASH02_PROMOTE_MS) as number
+      return
+    }
+  }
   replayArchiveService.onAck(status)
   ctx.pathAckLastStatusAtMs = Date.now()
   if (typeof ctx.onPathAckStatusForDashboard === 'function') {
@@ -520,12 +837,20 @@ export function onPathAckFrame(ctx: any, f: any): void {
   }
 
   if (status === 0x01) {
-    onTrafficGateAckStatus(ctx, status)
+    if (activeToken > 0) ctx.pathAckSeen01Token = activeToken
     if (typeof ctx.clearMotionCommandBlock === 'function') {
       ctx.clearMotionCommandBlock()
     }
     ctx.pathAckLastStatusCode = 0x01
+    ctx.pathAckRetryGraceToken = 0
+    ctx.pathAckRetryGraceAtMs = 0
     clearPathAckRetryTimer(ctx)
+    ackDiag('accept:01', status)
+    if (activeToken > 0 && Number(ctx.pathAckSeen02Token) === activeToken) {
+      ackDiag('promote:complete-by-stashed-02', status)
+      completePathAckBy02(ctx, activeToken, ackDiag)
+      return
+    }
     try {
       ctx.onPathAckReceived01()
     } catch (_) {}
@@ -533,92 +858,11 @@ export function onPathAckFrame(ctx: any, f: any): void {
   }
 
   if (status === 0x02) {
-    if (typeof ctx.clearMotionCommandBlock === 'function') {
-      ctx.clearMotionCommandBlock()
-    }
-    const completedKey: string = String(ctx.pathAckCommandKey || '')
-    clearPathAckRetryTimer(ctx)
-    ctx.pathAckLastStatusCode = 0x02
-    ctx.pathAckAwaitingComplete = false
-    ctx.pathAckBlocked = false
-    ctx.pathAckRetrySentCount = 0
-    ctx.pathAckCommandKey = ''
-    onTrafficGateAckStatus(ctx, status)
-
-    const reqOnAck: PendingAckMotion | undefined = ctx.pendingAckMotion
-    if (reqOnAck && reqOnAck.action === Page1Action.GO) {
-      const fromId: string = reqOnAck.fromId.trim().toUpperCase()
-      const toId: string = reqOnAck.toId.trim().toUpperCase()
-      if (fromId === 'B4' && toId === 'B2') {
-        try {
-          void ctx.onGateEnterAckCompleted(fromId, toId)
-        } catch (_) {}
-      }
-    }
-
-    if (ctx.suppressNextAckCompleteMotion) {
-      const s = ctx.store
-      const req: PendingAckMotion | undefined = ctx.pendingAckMotion
-      let suppressed: boolean = false
-
-      if (!req) {
-        suppressed = true
-      } else {
-        const reqEdgeId: string = RouteEdgeCodec.normalize(req.fromId, req.toId)
-        if (ctx.suppressAckCompleteEdgeId.length <= 0 || reqEdgeId === ctx.suppressAckCompleteEdgeId) {
-          suppressed = true
-        }
-      }
-
-      if (suppressed) {
-        ctx.pendingAckMotion = undefined
-        ctx.suppressNextAckCompleteMotion = false
-        ctx.suppressAckCompleteEdgeId = ''
-        if (s) s.pushLog('PATH_DOT_MOVE: 抑制本次 BD=02 红点前移（路段障碍重规划）')
-        flushDrivingUltrasonicObstacleAfterAck(ctx)
-        return
-      }
-    }
-
-    // 在启动动画前再检查一次目标节点/边是否在 ACK 等待窗口期被新标记为阻塞
-    const req2: PendingAckMotion | undefined = ctx.pendingAckMotion
-    if (req2) {
-      const s2 = ctx.store
-      const toId2: string = req2.toId.trim().toUpperCase()
-      const fromId2: string = req2.fromId.trim().toUpperCase()
-      if (s2 && (s2.isBlocked(toId2) || s2.isBlockedEdge(fromId2, toId2))) {
-        ctx.pendingAckMotion = undefined
-        s2.pushLog(`PATH_ACK_BLOCK: BD=02后发现目标节点/边已被阻塞 ${fromId2}->${toId2}，跳过动画并重规划`)
-        if (s2.destApplied.length > 0) {
-          ctx.stopActiveMotion()
-          void ctx.sendDriveActionDirect(Page1Action.STOP)
-          ctx.planPath(s2.destApplied)
-        }
-        return
-      }
-    }
-    startPendingAckMotionOnComplete(ctx)
-
-    const isGarageSpecialAck: boolean =
-      completedKey === 'LOWCARPORT' ||
-      completedKey === 'CARPORT_2' ||
-      completedKey === 'LOWCAR'
-    if (completedKey === 'LOWCAR' && typeof ctx.armLowcarBc05Wait === 'function') {
-      ctx.armLowcarBc05Wait()
-      const sWait = ctx.store
-      if (sWait) sWait.pushLog('LOWCAR_BC05: LOWCAR 已完成，等待 BC/05 后再续发')
-    }
-    if (isGarageSpecialAck && !ctx.pendingAckMotion) {
-      if (completedKey === 'LOWCAR' && ctx.lowcarAwaitingBc05) return
-      const s3 = ctx.store
-      if (s3) s3.pushLog(`PATH_ACK_CONTINUE: ${completedKey} 完成，继续尝试下发下一段动作`)
-      if (typeof ctx.followPathOnce === 'function') {
-        void ctx.followPathOnce(Date.now(), true)
-      }
-    }
+    completePathAckBy02(ctx, activeToken, ackDiag)
     return
   }
 
+  ackDiag('ignore:non-0102', status)
   onTrafficGateAckStatus(ctx, status)
 }
 
@@ -657,6 +901,7 @@ export async function waitForCurrentPathAckComplete(ctx: any, maxWaitMs: number,
 
 export function stageMotionWaitAckComplete(ctx: any, req: PendingAckMotion): void {
   ctx.pendingAckMotion = req
+  ctx.pendingAckMotionToken = Number(ctx.pathAckCommandToken) || 0
 }
 
 export function startMotionNow(ctx: any, req: PendingAckMotion): void {

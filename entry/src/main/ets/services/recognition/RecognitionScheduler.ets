@@ -781,9 +781,9 @@ export class RecognitionScheduler {
 
   private confForTask(task: RecognitionTask, defaultConf: number): number {
     // Per-model confidence policy:
-    // - yolov26barrier: 75%
+    // - yolov26barrier: 87%
     // - traffic_light: 50%
-    if (task.subtype === RecognitionSubtype.YOLOV26BARRIER) return 0.75
+    if (task.subtype === RecognitionSubtype.YOLOV26BARRIER) return 0.87
     if (task.subtype === RecognitionSubtype.TRAFFIC_LIGHT) return 0.5
     return defaultConf
   }

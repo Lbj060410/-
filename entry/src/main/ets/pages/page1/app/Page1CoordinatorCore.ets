@@ -253,6 +253,10 @@ export class Page1Coordinator {
   private pathAckRetryEpoch: number = 0
   private pathAckCommandKey: string = ''
   private pathAckCommandSeq: number = 0
+  private pathAckCommandToken: number = 0
+  private pathAckSeen01Token: number = 0
+  private pathAckSeen02Token: number = 0
+  private pathAckSeen02PromoteTimerId: number = -1
   private pendingAckMotion?: PendingAckMotion = undefined
   private suppressNextAckCompleteMotion: boolean = false
   private suppressAckCompleteEdgeId: string = ''
@@ -297,6 +301,9 @@ export class Page1Coordinator {
   private trafficGateLastSentSignal: string = ''
   private trafficGateLastSentSignalAtMs: number = 0
   private trafficGateLastGreenAckAtMs: number = 0
+  private trafficGateMergeLogKey: string = ''
+  private trafficGateMergeLogAtMs: number = 0
+  private trafficGateMergeLogCount: number = 0
   private gateBillingRunning: boolean = false
   private gateBillingStartAtMs: number = 0
   private gateBillingElapsedMs: number = 0
@@ -336,6 +343,9 @@ export class Page1Coordinator {
   private lastRxDupCountKey: string = ''
   private lastRxDupCount: number = 1
   private lastRxMergeLogAtMs: number = 0
+  private lastBdLogStatus: number = -1
+  private lastBdLogAtMs: number = 0
+  private lastBdLogCount: number = 0
   private lightMetricQueryEnabled: boolean = false
   private lightMetricReady: boolean = false
   private lightMetricLastQueryAtMs: number = 0
@@ -683,6 +693,9 @@ export class Page1Coordinator {
     this.lastRxDupCountKey = ''
     this.lastRxDupCount = 1
     this.lastRxMergeLogAtMs = 0
+    this.lastBdLogStatus = -1
+    this.lastBdLogAtMs = 0
+    this.lastBdLogCount = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     store.setMetricSpeedCms(0)
@@ -764,6 +777,9 @@ export class Page1Coordinator {
     this.trafficGateLastSentSignal = ''
     this.trafficGateLastSentSignalAtMs = 0
     this.trafficGateLastGreenAckAtMs = 0
+    this.trafficGateMergeLogKey = ''
+    this.trafficGateMergeLogAtMs = 0
+    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -773,6 +789,9 @@ export class Page1Coordinator {
     this.lastRxDupCountKey = ''
     this.lastRxDupCount = 1
     this.lastRxMergeLogAtMs = 0
+    this.lastBdLogStatus = -1
+    this.lastBdLogAtMs = 0
+    this.lastBdLogCount = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     this.realSendConnectKickAtMs = 0
@@ -829,6 +848,9 @@ export class Page1Coordinator {
     this.trafficGateLastSentSignal = ''
     this.trafficGateLastSentSignalAtMs = 0
     this.trafficGateLastGreenAckAtMs = 0
+    this.trafficGateMergeLogKey = ''
+    this.trafficGateMergeLogAtMs = 0
+    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -838,6 +860,9 @@ export class Page1Coordinator {
     this.lastRxDupCountKey = ''
     this.lastRxDupCount = 1
     this.lastRxMergeLogAtMs = 0
+    this.lastBdLogStatus = -1
+    this.lastBdLogAtMs = 0
+    this.lastBdLogCount = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     this.simLightBaseLux = 0
@@ -909,6 +934,9 @@ export class Page1Coordinator {
     this.trafficGateLastSentSignal = ''
     this.trafficGateLastSentSignalAtMs = 0
     this.trafficGateLastGreenAckAtMs = 0
+    this.trafficGateMergeLogKey = ''
+    this.trafficGateMergeLogAtMs = 0
+    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -1844,10 +1872,16 @@ export class Page1Coordinator {
       s.setAction(`garage carport level=${targetLevel}`)
       s.bumpTx()
     }
-    if (!this.canSendMotionCommand(`CARPORT_${targetLevel}`, 'GARAGE_PARK_DONE')) {
-      return
+    // 根因修复：BC/04 后的 carport(0x18) 是车库收尾关键动作，不应被全局发送锁延后到其它 ACK 之后。
+    if (this.isMotionCommandBlocked() && s) {
+      const nowMs: number = Date.now()
+      const remainMs: number = Math.max(0, this.motionCommandBlockUntilMs - nowMs)
+      s.pushLog(
+        `[cnmdc] CARPORT_BYPASS_SEND_LOCK: key=CARPORT_${targetLevel} remain=${remainMs}ms reason=${this.motionCommandBlockReason}`
+      )
     }
     await this.proto.carport(targetLevel)
+    if (s) s.pushLog(`[cnmdc] CARPORT_SENT: key=CARPORT_${targetLevel} cmd=0x18`)
     if (this.canRealSend()) this.armGarageCarportAckRetry(targetLevel)
     } finally {
       if (typeof this.leaveMotionDispatch === 'function') {
