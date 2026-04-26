@@ -11,6 +11,7 @@ import { page1Store, Page1UiStore, XYPos, RouteObstaclePoint } from '../app/Page
 import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
+import hilog from '@ohos.hilog'
 
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
@@ -93,6 +94,8 @@ interface MapBlockCellRect extends MapRoadRect {
 
 @Component
 export struct SandboxMap {
+  private static readonly BENGKUI_LOG_DOMAIN: number = 0xFF0B
+  private static readonly BENGKUI_LOG_TAG: string = 'bengkui'
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
   private readonly parkingMapStyle: ParkingMapStyle = PARKING_MAP_STYLE
@@ -136,20 +139,22 @@ export struct SandboxMap {
     // 每次进入页面都回到 ROUTE 级缩放（1.2 <= zoom < 2.2）。
     this.zoomScale = this.DEFAULT_ROUTE_ZOOM
     this.pinchStartZoomScale = this.DEFAULT_ROUTE_ZOOM
+    this.capturePlaceConfiguredSnapshot()
+    this.logBengkui(`SandboxMap.aboutToAppear homeConfigured=${this.homePlaceConfigured} companyConfigured=${this.companyPlaceConfigured}`)
+    this.logBengkui(`SandboxMap.images company=${this.companyPlaceConfigured ? '公司仓库设置.jpg' : '公司仓库未设置.jpg'} home=${this.homePlaceConfigured ? '物流中心设置.jpg' : '物流中心未设置.jpg'}`)
     this.clampAll()
     this.syncCameraFollow()
     this.probeTishixianRenderInput()
-    this.syncPlaceConfiguredFromStore()
 
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
       this.syncCameraFollow()
       this.probeTishixianRenderInput()
-      this.syncPlaceConfiguredFromStore()
     }, this.FOLLOW_TICK_MS) as number
   }
 
   aboutToDisappear(): void {
+    this.logBengkui('SandboxMap.aboutToDisappear')
     this.stopFollowTimer()
   }
 
@@ -160,11 +165,13 @@ export struct SandboxMap {
     }
   }
 
-  private syncPlaceConfiguredFromStore(): void {
-    const home: boolean = this.store.homePlaceConfigured
-    const company: boolean = this.store.companyPlaceConfigured
-    if (home !== this.homePlaceConfigured) this.homePlaceConfigured = home
-    if (company !== this.companyPlaceConfigured) this.companyPlaceConfigured = company
+  private capturePlaceConfiguredSnapshot(): void {
+    this.homePlaceConfigured = this.store.homePlaceConfigured
+    this.companyPlaceConfigured = this.store.companyPlaceConfigured
+  }
+
+  private logBengkui(msg: string): void {
+    hilog.info(SandboxMap.BENGKUI_LOG_DOMAIN, SandboxMap.BENGKUI_LOG_TAG, '%{public}s', msg)
   }
 
   build() {
@@ -951,7 +958,6 @@ export struct SandboxMap {
         .backgroundColor(this.parkingMapStyle.routeHighlight.color)
         .border({ width: 1, color: '#000000AA' })
         .position({ x: r.x, y: r.y })
-        .opacity(1)
         .zIndex(1)
     }, (r: MapRoadRect): string => `hl-${r.id}`)
   }
@@ -1800,6 +1806,14 @@ export struct SandboxMap {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .opacity(1)
+        if (this.isDynamicPlaceBlock(rowIndex, blockIndex)) {
+          Image(this.parkingBlockActiveImagePath(rowIndex, blockIndex))
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .opacity(this.dynamicPlaceActiveOpacity(rowIndex, blockIndex))
+        }
       }
     }
     .layoutWeight(1)
@@ -1868,6 +1882,14 @@ export struct SandboxMap {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .opacity(1)
+        if (this.isDynamicPlaceBlock(rowIndex, blockIndex)) {
+          Image(this.parkingBlockActiveImagePath(rowIndex, blockIndex))
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .opacity(this.dynamicPlaceActiveOpacity(rowIndex, blockIndex))
+        }
       }
     }
     .width(style.sidePaddingWidth)
@@ -1911,7 +1933,6 @@ export struct SandboxMap {
     // rowIndex:   从上到下 0..3
     if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/海昏侯.jpg')
     if (rowIndex === 0 && blockIndex === 1) {
-      if (this.companyPlaceConfigured) return $rawfile('map/公司仓库设置.jpg')
       return $rawfile('map/公司仓库未设置.jpg')
     }
     if (rowIndex === 0 && blockIndex === 2) return $rawfile('map/省博物馆.jpg')
@@ -1927,11 +1948,28 @@ export struct SandboxMap {
     if (rowIndex === 3 && blockIndex === 0) return $rawfile('map/秋水广场.jpg')
     if (rowIndex === 3 && blockIndex === 1) return $rawfile('map/八大山人纪念馆.jpg')
     if (rowIndex === 3 && blockIndex === 2) {
-      if (this.homePlaceConfigured) return $rawfile('map/物流中心设置.jpg')
       return $rawfile('map/物流中心未设置.jpg')
     }
     if (rowIndex === 3 && blockIndex === 3) return $rawfile('map/小兰工业园.jpg')
     return $rawfile('map/海昏侯.jpg')
+  }
+
+  private parkingBlockActiveImagePath(rowIndex?: number, blockIndex?: number): any {
+    if (rowIndex === 0 && blockIndex === 1) return $rawfile('map/公司仓库设置.jpg')
+    if (rowIndex === 3 && blockIndex === 2) return $rawfile('map/物流中心设置.jpg')
+    return this.parkingBlockImagePath(rowIndex, blockIndex)
+  }
+
+  private isDynamicPlaceBlock(rowIndex?: number, blockIndex?: number): boolean {
+    if (rowIndex === 0 && blockIndex === 1) return true
+    if (rowIndex === 3 && blockIndex === 2) return true
+    return false
+  }
+
+  private dynamicPlaceActiveOpacity(rowIndex?: number, blockIndex?: number): number {
+    if (rowIndex === 0 && blockIndex === 1) return this.companyPlaceConfigured ? 1 : 0
+    if (rowIndex === 3 && blockIndex === 2) return this.homePlaceConfigured ? 1 : 0
+    return 0
   }
 
   private hasOceanBandImage(band?: 'top' | 'bottom', blockIndex?: number): boolean {

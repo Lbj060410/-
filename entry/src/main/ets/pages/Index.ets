@@ -14,8 +14,12 @@ import { page2Coordinator } from './page2/Page2Coordinator'
 import { page1Store } from './page1/app/Page1UiStore'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
+import hilog from '@ohos.hilog'
 
 const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
+const BENGKUI_LOG_DOMAIN: number = 0xFF0B
+const BENGKUI_LOG_TAG: string = 'bengkui'
+const SPLASH_SLOGAN: string = '为让物流运输更高效，更安全，更智能，让每一次物流运输都智行无忧'
 interface Page4PlaceBindingPayload {
   homeNodeId?: string
   companyNodeId?: string
@@ -26,12 +30,80 @@ interface Page4PlaceBindingPayload {
 struct Index {
   @State private currentIndex: number = 0
   @State private showFloatingNav: boolean = false
+  @State private showSplash: boolean = true
+  @State private splashScale: number = 0.86
+  @State private splashTextLen: number = 0
+  private splashTimerId: number = -1
+  private splashAnimTimerId: number = -1
+  private splashTextTimerId: number = -1
+  private splashHardTimeoutId: number = -1
 
   aboutToAppear(): void {
-    this.restorePlaceConfiguredOnAppEnter()
+    this.logBengkui('Index.aboutToAppear begin')
+    try {
+      this.restorePlaceConfiguredOnAppEnter()
+      this.logBengkui('restorePlaceConfiguredOnAppEnter done')
+    } catch (e) {
+      this.logBengkui(`restorePlaceConfiguredOnAppEnter throw: ${this.errText(e)}`)
+    }
     // Page2 识别链路需要在非 Page2 页面也持续工作；入口页先以后台低频模式拉起。
-    page2Coordinator.enterBackgroundMode()
+    try {
+      page2Coordinator.enterBackgroundMode()
+      this.logBengkui('page2Coordinator.enterBackgroundMode done')
+    } catch (e) {
+      this.logBengkui(`page2Coordinator.enterBackgroundMode throw: ${this.errText(e)}`)
+    }
     void page2Coordinator.start()
+      .then((): void => {
+        this.logBengkui('page2Coordinator.start resolved')
+      })
+      .catch((e: Object): void => {
+        this.logBengkui(`page2Coordinator.start rejected: ${this.errText(e)}`)
+      })
+    this.clearSplashTimer()
+    this.clearSplashAnimTimer()
+    this.clearSplashTextTimer()
+    this.clearSplashHardTimeout()
+    this.showSplash = true
+    this.splashScale = 0.86
+    this.splashTextLen = 0
+    this.splashAnimTimerId = setTimeout((): void => {
+      this.logBengkui('splash anim timer fired')
+      this.splashAnimTimerId = -1
+      this.splashScale = 1
+    }, 30) as number
+    this.splashTextTimerId = setInterval((): void => {
+      if (this.splashTextLen >= SPLASH_SLOGAN.length) {
+        this.clearSplashTextTimer()
+        this.armSplashExit(1000)
+        return
+      }
+      this.splashTextLen += 1
+      if (this.splashTextLen >= SPLASH_SLOGAN.length) {
+        this.clearSplashTextTimer()
+        this.armSplashExit(1000)
+      }
+    }, 40) as number
+    // 兜底：避免极低概率定时器未触发导致开屏长时间停留。
+    this.splashHardTimeoutId = setTimeout((): void => {
+      this.splashHardTimeoutId = -1
+      if (!this.showSplash) return
+      this.logBengkui('splash hard-timeout fired -> force hide')
+      this.clearSplashTimer()
+      this.clearSplashTextTimer()
+      this.clearSplashAnimTimer()
+      this.showSplash = false
+    }, 6500) as number
+    this.logBengkui('splash wait text complete then +1000ms')
+    this.logBengkui('Index.aboutToAppear end')
+  }
+
+  aboutToDisappear(): void {
+    this.logBengkui('Index.aboutToDisappear')
+    this.clearSplashTimer()
+    this.clearSplashAnimTimer()
+    this.clearSplashTextTimer()
+    this.clearSplashHardTimeout()
   }
 
   private restorePlaceConfiguredOnAppEnter(): void {
@@ -39,45 +111,165 @@ struct Index {
     let company: string = ''
     let f: fs.File | undefined = undefined
     try {
+      this.logBengkui(`restore begin path=${PAGE4_PLACE_BINDING_PATH}`)
       f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
+      this.logBengkui('restore openSync ok')
       const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
       const size: number = Number(st.size)
+      this.logBengkui(`restore stat size=${size}`)
       if (Number.isFinite(size) && size > 0 && size <= 4096) {
         const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
         const readLen: number = fs.readSync(f.fd, buf)
+        this.logBengkui(`restore readLen=${readLen}`)
         if (readLen > 0) {
           const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
           const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
           const parsed: Page4PlaceBindingPayload = JSON.parse(txt) as Page4PlaceBindingPayload
           home = String(parsed.homeNodeId ?? '').trim().toUpperCase()
           company = String(parsed.companyNodeId ?? '').trim().toUpperCase()
+          this.logBengkui(`restore parsed home=${home} company=${company}`)
         }
       }
     } catch (_) {
       home = ''
       company = ''
+      this.logBengkui('restore catch -> reset empty')
     } finally {
       if (f) {
         try { fs.closeSync(f.fd) } catch (_) {}
+        this.logBengkui('restore closeSync done')
       }
     }
     page1Store.setPlaceConfigured(home, company)
+    this.logBengkui(`setPlaceConfigured home=${home} company=${company}`)
   }
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      this.buildCurrentPage()
+      if (!this.showSplash) {
+        this.buildCurrentPage()
 
-      if (this.showFloatingNav) {
-        this.buildNavPanel()
+        if (this.showFloatingNav) {
+          this.buildNavPanel()
+        }
+      }
+
+      if (this.showSplash) {
+        Stack() {
+          Column({ space: 18 }) {
+            Image($rawfile('开屏画面.png'))
+              .width('68%')
+              .height('58%')
+              .objectFit(ImageFit.Contain)
+              .scale({ x: this.splashScale, y: this.splashScale })
+              .animation({ duration: 2000, curve: Curve.EaseOut })
+
+            Text(this.splashSloganPreview())
+              .width('90%')
+              .fontSize(18)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#1F2937')
+              .textAlign(TextAlign.Center)
+              .maxLines(2)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .translate({ x: 0, y: -56 })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#FFFFFF')
+        .zIndex(999)
+        .onClick((): void => {
+          this.skipSplashNow()
+        })
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(Page1Theme.BG)
     .onClick((): void => {
+      if (this.showSplash) return
       this.showFloatingNav = !this.showFloatingNav
     })
+  }
+
+  private armSplashExit(delayMs: number): void {
+    if (!this.showSplash) return
+    this.clearSplashTimer()
+    this.logBengkui(`splash timer arm ${delayMs}ms`)
+    this.splashTimerId = setTimeout((): void => {
+      this.logBengkui('splash timer fired')
+      this.splashTimerId = -1
+      this.showSplash = false
+      this.logBengkui('showSplash=false')
+    }, Math.max(0, Math.trunc(delayMs))) as number
+  }
+
+  private skipSplashNow(): void {
+    if (!this.showSplash) return
+    this.logBengkui('skipSplashNow by click')
+    this.clearSplashTimer()
+    this.clearSplashTextTimer()
+    this.clearSplashAnimTimer()
+    this.clearSplashHardTimeout()
+    this.showSplash = false
+  }
+
+  private clearSplashTimer(): void {
+    if (this.splashTimerId >= 0) {
+      this.logBengkui(`clearSplashTimer id=${this.splashTimerId}`)
+      clearTimeout(this.splashTimerId)
+      this.splashTimerId = -1
+    }
+  }
+
+  private clearSplashAnimTimer(): void {
+    if (this.splashAnimTimerId >= 0) {
+      this.logBengkui(`clearSplashAnimTimer id=${this.splashAnimTimerId}`)
+      clearTimeout(this.splashAnimTimerId)
+      this.splashAnimTimerId = -1
+    }
+  }
+
+  private clearSplashTextTimer(): void {
+    if (this.splashTextTimerId >= 0) {
+      this.logBengkui(`clearSplashTextTimer id=${this.splashTextTimerId}`)
+      clearInterval(this.splashTextTimerId)
+      this.splashTextTimerId = -1
+    }
+  }
+
+  private clearSplashHardTimeout(): void {
+    if (this.splashHardTimeoutId >= 0) {
+      this.logBengkui(`clearSplashHardTimeout id=${this.splashHardTimeoutId}`)
+      clearTimeout(this.splashHardTimeoutId)
+      this.splashHardTimeoutId = -1
+    }
+  }
+
+  private splashSloganPreview(): string {
+    const len: number = this.splashTextLen
+    if (len <= 0) return ''
+    if (len >= SPLASH_SLOGAN.length) return SPLASH_SLOGAN
+    return SPLASH_SLOGAN.substring(0, len)
+  }
+
+  private logBengkui(msg: string): void {
+    hilog.info(BENGKUI_LOG_DOMAIN, BENGKUI_LOG_TAG, '%{public}s', msg)
+  }
+
+  private errText(e: Object): string {
+    if (e instanceof Error) {
+      const m: string = e.message.trim()
+      return m.length > 0 ? m : 'Error(no-message)'
+    }
+    try {
+      const s: string = JSON.stringify(e)
+      if (s.length > 0 && s !== '{}') return s
+    } catch (_) {}
+    return String(e)
   }
 
   @Builder

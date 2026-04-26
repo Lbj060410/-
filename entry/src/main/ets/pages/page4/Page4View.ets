@@ -117,18 +117,14 @@ interface Page4PlaceBindingPlan {
   placeText: string
 }
 
-interface MaintenanceOrder {
-  id: string
-  type: string
-  plateNo: string
-  contact: string
-  appointDate: string
-  appointTime: string
-  mileageKm: number
-  repairStatus: string
-  payStatus: string
-  storeName: string
-  createdAt: string
+interface OutboundOrder {
+  orderId: string
+  skuCode: string
+  productName: string
+  quantity: number
+  zone: string
+  status: string
+  createTime: string
 }
 
 @Component
@@ -198,45 +194,51 @@ export struct Page4View {
   private companyNodeId: string = ''
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
-  private readonly maintenanceOrders: Array<MaintenanceOrder> = [
+  private readonly outboundOrders: Array<OutboundOrder> = [
     {
-      id: 'MR202604200004',
-      type: '常规保养',
-      plateNo: '浙B88888',
-      contact: "q'q'q - 2443544656",
-      appointDate: '2026-05-02',
-      appointTime: '17:32:00',
-      mileageKm: 8.72,
-      repairStatus: '待维修',
-      payStatus: '未支付',
-      storeName: '滨江江南大道店',
-      createdAt: '2026-04-20 17:32:54'
+      orderId: 'OUT-20240418-001',
+      skuCode: 'MZ-8820',
+      productName: '高端运动水壶',
+      quantity: 120,
+      zone: 'A-03 货架',
+      status: '待拣货',
+      createTime: '2024-04-18 09:30:22'
     },
     {
-      id: 'MR202604200003',
-      type: '常规保养',
-      plateNo: '浙B88888',
-      contact: 'uuu - 133454656',
-      appointDate: '2026-04-20',
-      appointTime: '17:30:00',
-      mileageKm: 8.12,
-      repairStatus: '待维修',
-      payStatus: '未支付',
-      storeName: '白云大道服务站',
-      createdAt: '2026-04-20 17:30:24'
+      orderId: 'OUT-20240418-002',
+      skuCode: 'PL-4560',
+      productName: '智能体重秤',
+      quantity: 45,
+      zone: 'B-12 货架',
+      status: '拣货中',
+      createTime: '2024-04-18 10:15:07'
     },
     {
-      id: 'MR202604130001',
-      type: '常规保养',
-      plateNo: '浙A88888',
-      contact: '张三 - 13800138000',
-      appointDate: '2026-04-20',
-      appointTime: '10:00:00',
-      mileageKm: 9.32,
-      repairStatus: '待确认',
-      payStatus: '未支付',
-      storeName: '杭州西湖4S服务中心',
-      createdAt: '2026-04-13 17:02:01'
+      orderId: 'OUT-20240418-003',
+      skuCode: 'EL-3321',
+      productName: '无线蓝牙耳机',
+      quantity: 88,
+      zone: 'C-05 货架',
+      status: '待复核',
+      createTime: '2024-04-18 11:02:33'
+    },
+    {
+      orderId: 'OUT-20240417-015',
+      skuCode: 'FT-9901',
+      productName: '折叠收纳箱',
+      quantity: 200,
+      zone: 'A-08 货架',
+      status: '已出库',
+      createTime: '2024-04-17 16:20:15'
+    },
+    {
+      orderId: 'OUT-20240417-012',
+      skuCode: 'BK-2345',
+      productName: '电子书阅读器',
+      quantity: 32,
+      zone: 'B-03 货架',
+      status: '已发货',
+      createTime: '2024-04-17 14:08:42'
     }
   ]
 
@@ -2224,7 +2226,7 @@ export struct Page4View {
 
   private getPoiMappings(): Array<{ node: string, aliases: Array<string> }> {
     return [
-      { node: 'B1', aliases: ['海昏侯', '海昏侯国遗址', '海昏侯国遗址公园'] },
+      { node: 'B1', aliases: ['海昏侯', '海昏侯国遗址', '海昏侯国遗址公园','快递点'] },
       { node: 'D1', aliases: ['江西省博物馆', '省博物馆'] },
       { node: 'F1', aliases: ['青山湖风景区', '青山湖'] },
       { node: 'A2', aliases: ['梅岭风景区', '梅岭'] },
@@ -2243,7 +2245,7 @@ export struct Page4View {
       { node: 'G6', aliases: ['象湖湿地公园', '象湖新城小区', '象湖新城', '象湖'] },
       { node: 'B7', aliases: ['秋水广场', '昌南体育中心'] },
       { node: 'D7', aliases: ['八大山人纪念馆', '八大山人'] },
-      { node: 'F7', aliases: ['小蓝工业园', '莲塘住宅区', '莲塘'] },
+      { node: 'F7', aliases: ['小蓝工业园', '莲塘住宅区', '莲塘','物流中心'] },
       // crash_hilog.txt 中的黑线/道路参考，映射到代表点位
       { node: 'D1', aliases: ['英雄大道'] },
       { node: 'F1', aliases: ['扬子洲大桥'] },
@@ -2384,6 +2386,10 @@ export struct Page4View {
       return companyNode
     }
 
+    if (this.containsAny(raw, ['返回快递点'])) {
+      return companyNode
+    }
+
     if (this.containsAny(raw, ['前往仓库', '去仓库', '到仓库', '回仓库', '返回仓库'])) {
       if (companyNode.length > 0) return companyNode
       return homeNode
@@ -2425,39 +2431,45 @@ export struct Page4View {
     return `链路=${this.connStateText()} | 模式=${mode} | 自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'} | 风险=${this.store.riskText}(${this.store.riskScore}) | TX/RX=${this.store.txFrames}/${this.store.rxFrames} | Recog=${recText}`
   }
 
-  private buildMaintenanceQueryText(queryText: string, mode: 'all' | 'earliest' | 'latest' = 'all'): string {
+  private buildOrderQueryText(
+    queryText: string,
+    mode: 'all' | 'earliest' | 'latest' = 'all',
+    statusFilter: string = ''
+  ): string {
     const q: string = queryText.trim().toUpperCase()
-    const matched: Array<MaintenanceOrder> = []
-    for (let i: number = 0; i < this.maintenanceOrders.length; i++) {
-      const one: MaintenanceOrder = this.maintenanceOrders[i]
+    const statusNeed: string = statusFilter.trim()
+    const matched: Array<OutboundOrder> = []
+    for (let i: number = 0; i < this.outboundOrders.length; i++) {
+      const one: OutboundOrder = this.outboundOrders[i]
+      if (statusNeed.length > 0 && one.status !== statusNeed) continue
       if (q.length <= 0) {
         matched.push(one)
         continue
       }
-      const idUp: string = one.id.toUpperCase()
-      const plateUp: string = one.plateNo.toUpperCase()
-      if (idUp.indexOf(q) >= 0 || plateUp.indexOf(q) >= 0) {
+      const idUp: string = one.orderId.toUpperCase()
+      const skuUp: string = one.skuCode.toUpperCase()
+      const productUp: string = one.productName.toUpperCase()
+      if (idUp.indexOf(q) >= 0 || skuUp.indexOf(q) >= 0 || productUp.indexOf(q) >= 0) {
         matched.push(one)
       }
     }
     if (matched.length <= 0) {
-      return `维保查询：未找到匹配记录（关键词=${queryText}）`
+      if (statusNeed.length > 0) {
+        return `订单查询：未找到匹配记录（状态=${statusNeed}，关键词=${queryText}）`
+      }
+      return `订单查询：未找到匹配记录（关键词=${queryText}）`
     }
 
-    const parseRecordTimeMs = (x: MaintenanceOrder): number => {
-      const recordIso: string = `${x.appointDate.trim()}T${x.appointTime.trim()}`
+    const parseRecordTimeMs = (x: OutboundOrder): number => {
+      const recordIso: string = x.createTime.replace(' ', 'T')
       const recordMs: number = Date.parse(recordIso)
-      if (Number.isFinite(recordMs)) return recordMs
-
-      const createdIso: string = x.createdAt.replace(' ', 'T')
-      const createdMs: number = Date.parse(createdIso)
-      return Number.isFinite(createdMs) ? createdMs : 0
+      return Number.isFinite(recordMs) ? recordMs : 0
     }
-    const sorted: Array<MaintenanceOrder> = []
+    const sorted: Array<OutboundOrder> = []
     for (let i: number = 0; i < matched.length; i++) sorted.push(matched[i])
-    sorted.sort((a: MaintenanceOrder, b: MaintenanceOrder): number => parseRecordTimeMs(a) - parseRecordTimeMs(b))
+    sorted.sort((a: OutboundOrder, b: OutboundOrder): number => parseRecordTimeMs(a) - parseRecordTimeMs(b))
 
-    let out: Array<MaintenanceOrder> = []
+    let out: Array<OutboundOrder> = []
     if (mode === 'earliest') {
       out = [sorted[0]]
     } else if (mode === 'latest') {
@@ -2466,39 +2478,45 @@ export struct Page4View {
       out = sorted
     }
 
-    let pendingRepair: number = 0
-    let pendingConfirm: number = 0
+    let pendingPick: number = 0
+    let picking: number = 0
+    let pendingCheck: number = 0
+    let shipped: number = 0
     for (let i: number = 0; i < matched.length; i++) {
-      const s: string = matched[i].repairStatus
-      if (s === '待维修') pendingRepair += 1
-      if (s === '待确认') pendingConfirm += 1
+      const s: string = matched[i].status
+      if (s === '待拣货') pendingPick += 1
+      if (s === '拣货中') picking += 1
+      if (s === '待复核') pendingCheck += 1
+      if (s === '已出库' || s === '已发货') shipped += 1
     }
 
-    let title: string = '维保查询结果'
-    if (mode === 'earliest') title = '维保查询结果（最早）'
-    if (mode === 'latest') title = '维保查询结果（最晚）'
-    let body: string = `${title}(${out.length}条，匹配总数=${matched.length})：待维修=${pendingRepair}，待确认=${pendingConfirm}\n`
+    let title: string = '订单查询结果'
+    if (mode === 'earliest') title = '订单查询结果（最早）'
+    if (mode === 'latest') title = '订单查询结果（最新）'
+    if (statusNeed.length > 0) title = `${title}（状态=${statusNeed}）`
+    let body: string = `${title}(${out.length}条，匹配总数=${matched.length})：待拣货=${pendingPick}，拣货中=${picking}，待复核=${pendingCheck}，已出库/已发货=${shipped}\n`
     for (let i: number = 0; i < out.length; i++) {
-      const one: MaintenanceOrder = out[i]
+      const one: OutboundOrder = out[i]
       const idx: number = i + 1
-      body += `${idx}. ${one.id} | ${one.type} | ${one.plateNo} | ${one.contact} | 预约=${one.appointDate} ${one.appointTime} | 里程=${one.mileageKm.toFixed(2)}km | 维修=${one.repairStatus} | 支付=${one.payStatus} | 门店=${one.storeName} | 创建=${one.createdAt}`
+      body += `${idx}. ${one.orderId} | SKU=${one.skuCode} | ${one.productName} | 数量=${one.quantity} | 区域=${one.zone} | 状态=${one.status} | 创建=${one.createTime}`
       if (i < out.length - 1) body += '\n'
     }
     return body
   }
 
-  private looksLikeMaintenanceQueryIntent(text: string, lower: string): boolean {
+  private looksLikeOrderQueryIntent(text: string, lower: string): boolean {
     const hasDomain: boolean = this.containsAny(lower, [
-      '维保', '维修', '保养', '工单', '维保记录', '维修记录', '保养记录'
+      '订单', '出库单', '订单记录', '拣货', '复核', '发货', '出库'
     ])
     if (!hasDomain) return false
     const hasVerb: boolean = this.containsAny(lower, [
       '查', '查询', '查找', '查看', '看看', '给我', '列出', '统计', '记录'
     ])
     if (hasVerb) return true
+    if (this.containsAny(lower, ['已发货'])) return true
     if (this.containsAny(lower, ['最早', '最晚', '最新', '全部', '所有'])) return true
-    if (text.match(/MR\d{12,}/i)) return true
-    if (text.match(/[浙][A-Z][A-Z0-9]{5}/i)) return true
+    if (text.match(/OUT-\d{8}-\d{3}/i)) return true
+    if (text.match(/[A-Z]{2}-\d{4}/i)) return true
     return false
   }
 
@@ -2745,7 +2763,7 @@ export struct Page4View {
   }
 
   //方法调用
-  private async RaprouteWith(dest: string): Promise<boolean> {
+  private async RaprouteWith(dest: string, inputText: string = ''): Promise<boolean> {
     if (dest.length <= 0) return false
     if (!GridIdCodec.isValidId(dest)) {
       this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
@@ -2756,8 +2774,50 @@ export struct Page4View {
     const routedOk: boolean = routeReceipts.length > 0 && routeReceipts[0].sent
     if (routedOk) this.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
     else this.logError('sendRoutePlanFail', `dest=${dest}, reason=${this.lastRouteFailureReason}`)
-    this.pushAssistant(`执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+    const targetText: string = this.routeTargetDisplayText(dest, inputText)
+    if (routedOk) {
+      this.pushAssistant(`已成功导航到 ${targetText}。执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+    } else {
+      this.pushAssistant(`导航失败。执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+    }
     return true
+  }
+
+  private async quickRouteToPlaceShortcut(text: string): Promise<boolean> {
+    const quickDest: string = this.resolveFastDestShortcut(text)
+    if (!GridIdCodec.isValidId(quickDest)) return false
+
+    this.logInfo('quickRouteShortcut', `dest=${quickDest}`)
+    const routed = await this.routeWithReplan(quickDest)
+    const targetText: string = this.routeTargetDisplayText(quickDest, text)
+    if (routed.ok) {
+      this.pushAssistant(`已成功导航到 ${targetText}。执行回执：${this.renderReceiptsSummary([routed.receipt])}`)
+    } else {
+      this.pushAssistant(`导航失败。执行回执：${this.renderReceiptsSummary([routed.receipt])}`)
+    }
+    return true
+  }
+
+  private routeTargetDisplayText(destNodeId: string, inputText: string): string {
+    const raw: string = inputText.trim()
+    const lower: string = raw.toLowerCase()
+    if (this.containsAny(raw, ['物流中心', '回仓', '返仓', '返航', '回基地', '回中心']) || this.containsAny(lower, ['go home', 'to home'])) {
+      return '物流中心'
+    }
+    if (this.containsAny(raw, ['快递点', '公司仓库', '回快递点', '返回快递点']) || this.containsAny(lower, ['go company', 'to company'])) {
+      return '快递点'
+    }
+    const x: string = destNodeId.trim().toUpperCase()
+    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
+    for (let i: number = 0; i < mappings.length; i++) {
+      const one = mappings[i]
+      if (one.node.trim().toUpperCase() !== x) continue
+      for (let j: number = 0; j < one.aliases.length; j++) {
+        const alias: string = one.aliases[j].trim()
+        if (alias.length > 0) return alias
+      }
+    }
+    return x
   }
 
   private async submitPrompt(raw: string, fromQueue: boolean = false, _source: string = 'text'): Promise<void> {
@@ -2775,6 +2835,10 @@ export struct Page4View {
 
     const lower: string = text.toLowerCase()
     if (await this.handlePlaceBindingPrompt(text, lower)) {
+      return
+    }
+
+    if (await this.quickRouteToPlaceShortcut(text)) {
       return
     }
 
@@ -2847,17 +2911,19 @@ export struct Page4View {
       return
     }
 
-    if (this.looksLikeMaintenanceQueryIntent(text, lower)) {
+    if (this.looksLikeOrderQueryIntent(text, lower)) {
       let query: string = ''
-      const idMatch: RegExpMatchArray | null = text.match(/MR\d{12,}/i)
-      const plateMatch: RegExpMatchArray | null = text.match(/[浙][A-Z][A-Z0-9]{5}/i)
+      const idMatch: RegExpMatchArray | null = text.match(/OUT-\d{8}-\d{3}/i)
+      const skuMatch: RegExpMatchArray | null = text.match(/[A-Z]{2}-\d{4}/i)
       if (idMatch && idMatch.length > 0) query = idMatch[0]
-      else if (plateMatch && plateMatch.length > 0) query = plateMatch[0]
+      else if (skuMatch && skuMatch.length > 0) query = skuMatch[0]
       let mode: 'all' | 'earliest' | 'latest' = 'all'
       if (this.containsAny(lower, ['最早'])) mode = 'earliest'
       if (this.containsAny(lower, ['最晚', '最新'])) mode = 'latest'
       if (this.containsAny(lower, ['全部', '所有'])) mode = 'all'
-      this.pushAssistant(this.buildMaintenanceQueryText(query, mode))
+      let statusFilter: string = ''
+      if (this.containsAny(lower, ['已发货'])) statusFilter = '已发货'
+      this.pushAssistant(this.buildOrderQueryText(query, mode, statusFilter))
       return
     }
 
@@ -2889,7 +2955,7 @@ export struct Page4View {
     /*1.先尝试解析用户是否在下发“导航目标”*/
     const dest: string = this.extractDestNode(text)
     /*2.命中导航意图就直接走导航链路，优先保证控制实时性*/
-    if (await this.RaprouteWith(dest))return
+    if (await this.RaprouteWith(dest, text))return
     /*3.如果不是导航，再识别是否是前进/停止等动作控制指令*/
     const action: Page1Action | undefined = this.resolveActionByText(lower)
     if (action !== undefined) {
@@ -2942,13 +3008,11 @@ export struct Page4View {
       const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
       const size: number = Number(st.size)
       if (!Number.isFinite(size) || size <= 0 || size > 4096) {
-        this.syncPlaceAliases()
         return
       }
       const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
       const readLen: number = fs.readSync(f.fd, buf)
       if (readLen <= 0) {
-        this.syncPlaceAliases()
         return
       }
       const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
@@ -2967,7 +3031,6 @@ export struct Page4View {
       }
     }
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
-    this.syncPlaceAliases()
   }
 
   private persistPlaceBindings(): boolean {
@@ -2991,31 +3054,6 @@ export struct Page4View {
     }
   }
 
-  private syncPlaceAliases(): void {
-    this.upsertSpecialAlias('物流中心', this.homeNodeId)
-    this.upsertSpecialAlias('快递点', this.companyNodeId)
-    // 兼容旧语义：公司仓库仍可识别到 company 点位
-    this.upsertSpecialAlias('公司仓库', this.companyNodeId)
-    // 删除旧口令别名，避免与物流语义冲突
-    this.upsertSpecialAlias('家', '')
-    this.upsertSpecialAlias('公司', '')
-  }
-
-  private upsertSpecialAlias(name: string, destNodeId: string): void {
-    const out: Array<Page4AliasItem> = []
-    for (let i: number = 0; i < this.aliasDict.length; i++) {
-      const one: Page4AliasItem = this.aliasDict[i]
-      if (one.name !== name) out.push(one)
-    }
-    if (GridIdCodec.isValidId(destNodeId)) {
-      out.push({
-        name: name,
-        destNodeId: destNodeId,
-        tsMs: Date.now()
-      })
-    }
-    this.aliasDict = out
-  }
 
   private parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
     const token: string = raw.trim()
@@ -3105,7 +3143,6 @@ export struct Page4View {
     if (req.role === 'home') this.homeNodeId = node
     else this.companyNodeId = node
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
-    this.syncPlaceAliases()
     const ok: boolean = this.persistPlaceBindings()
     if (ok) {
       this.pushAssistant(`已设置：${roleText}=${node}（来源“${req.placeText}”）。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
