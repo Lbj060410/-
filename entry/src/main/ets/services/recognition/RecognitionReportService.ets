@@ -44,7 +44,6 @@ export class RecognitionReportService {
     if (!result.ok) return
 
     if (result.subtype === RecognitionSubtype.TRAFFIC_LIGHT) {
-      // 旁路红绿灯识别发送：仅用于实时识别链路，内部有 taskId/最小间隔去重。
       await this.maybeSendTrafficSignalCommand(result)
       return
     }
@@ -52,7 +51,8 @@ export class RecognitionReportService {
     const encoded: EncodedPayload12B | null = this.tryEncode(result)
     if (!encoded) return
 
-    await this.currentProto().sendData12(encoded.headerH, encoded.payload8)
+    // 旧 12B 上报接口已下线；当前保留本地识别结果，不再向小车发送该类旧协议上报帧。
+    void encoded
   }
 
   private currentProto(): CarProtocolService {
@@ -60,7 +60,6 @@ export class RecognitionReportService {
   }
 
   private async maybeSendTrafficSignalCommand(result: RecognitionResult): Promise<void> {
-    // 仅 Page2 实时识别触发灯色指令；其他来源不发送，避免指令风暴。
     if (result.kind !== RecognitionTaskKind.LIVE) return
     if (result.source !== RecognitionTaskSource.PAGE2_BUTTON) return
     if (!videoStore.recognitionEnabled || !videoStore.page2TrafficEnabled) return
@@ -79,18 +78,11 @@ export class RecognitionReportService {
     this.trafficSignalSendBusy = true
     try {
       const p: CarProtocolService = this.currentProto()
-      const rs = await trafficSignalArbiter.send(p, token, 'BYPASS', this.trafficSignalSendMinIntervalMs)
-      if (!rs.sent) {
-        console.info(`[shibie] traffic-direct-skip token=${token} task=${taskId} reason=${rs.reason}`)
-        return
-      }
+      const rs = await trafficSignalArbiter.send(p, token as 'R' | 'G', 'BYPASS', this.trafficSignalSendMinIntervalMs)
+      if (!rs.sent) return
       this.lastTrafficSignalTaskId = taskId
       this.lastTrafficSignalToken = token
       this.lastTrafficSignalSentAtMs = nowMs
-      console.info(`[shibie] traffic-direct-send token=${token} task=${taskId}`)
-    } catch (e) {
-      const msg: string = e instanceof Error ? e.message : String(e)
-      console.warn(`[shibie] traffic-direct-send-error token=${token} task=${taskId} msg=${msg}`)
     } finally {
       this.trafficSignalSendBusy = false
     }

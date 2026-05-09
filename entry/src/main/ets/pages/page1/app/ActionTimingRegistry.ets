@@ -36,12 +36,5 @@ export class ActionTimingRegistry {
     }
     return { preMs: 0, activeMs: 0, postMs: 0, sendGapMs: 2000 }
   }
-
-  gateDepartTiming(): MotionTimingProfile {
-    // 离开后，车辆侧闸门+前进比正常前进需要更长时间。
-    // 保持更大间隔以避免下一个前进命令被立即忽略。
-    return { preMs: 3000, activeMs: 1500, postMs: 500, sendGapMs: 7000 }
-  }
 }
-
 

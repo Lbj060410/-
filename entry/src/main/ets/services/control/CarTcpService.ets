@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 代码指南：
  * 文件：services/control/CarTcpService.ets
  * 用途：TCP 连接/重连/读写服务和回调。
@@ -117,8 +117,13 @@ export class CarTcpService {
     return s
   }
 
+  private isCcf5Frame(data: Uint8Array): boolean {
+    return data.length >= 2 && (data[0] & 0xff) === 0xCC && (data[1] & 0xff) === 0xF5
+  }
+
   // 接收帧日志（HEX）用于定位协议层解析问题
   private logRxFrame(data: Uint8Array): void {
+    if (!this.isCcf5Frame(data)) return
     const hex: string = this.toHex(data)
     this.logInfo(TAG_SENDAMSTER, `收到数据帧 HEX: ${hex}`)
     this.logInfo(TAG_SENDAMSTER, `读取到数据，长度：${data.length}字节`)
@@ -418,8 +423,10 @@ export class CarTcpService {
     }
 
     try {
-      this.logInfo(TAG_SENDAMSTER, `发送16进制：${this.toHex(data)}`)
-      this.logInfo(TAG_SENDAMSTER, `发送数据长度：${data.length}字节`)
+      if (this.isCcf5Frame(data)) {
+        this.logInfo(TAG_SENDAMSTER, `发送16进制：${this.toHex(data)}`)
+        this.logInfo(TAG_SENDAMSTER, `发送数据长度：${data.length}字节`)
+      }
       await this.tcp.send(opt)
     } catch (e) {
       this.lastErrorText = this.formatSocketError(e, '发送失败')
@@ -432,8 +439,10 @@ export class CarTcpService {
   // send 的容错包装：失败仅打日志，不把异常抛给上层流程
   async sendOrLog(data: Uint8Array, tag: string): Promise<void> {
     if (!this.tcp || this.state !== CarConnectionState.CONNECTED) {
-      const hex: string = this.toHex(data)
-      this.logInfo(TAG_SENDAMSTER, `[DRYRUN][${tag}] ${hex}`)
+      if (this.isCcf5Frame(data)) {
+        const hex: string = this.toHex(data)
+        this.logInfo(TAG_SENDAMSTER, `[DRYRUN][${tag}] ${hex}`)
+      }
       return
     }
     await this.send(data)
@@ -632,3 +641,4 @@ export class CarTcpService {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
   }
 }
+

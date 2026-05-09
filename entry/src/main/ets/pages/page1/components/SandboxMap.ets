@@ -8,6 +8,7 @@
 // entry/src/main/ets/pages/page1/components/SandboxMap.ets
 
 import { page1Store, Page1UiStore, XYPos, RouteObstaclePoint } from '../app/Page1UiStore'
+import { page1Coordinator } from '../app/Page1Coordinator'
 import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
@@ -96,6 +97,8 @@ interface MapBlockCellRect extends MapRoadRect {
 export struct SandboxMap {
   private static readonly BENGKUI_LOG_DOMAIN: number = 0xFF0B
   private static readonly BENGKUI_LOG_TAG: string = 'bengkui'
+  private static readonly SHANTUI_LOG_DOMAIN: number = 0xFF0C
+  private static readonly SHANTUI_LOG_TAG: string = 'shantui'
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
   private readonly parkingMapStyle: ParkingMapStyle = PARKING_MAP_STYLE
@@ -119,6 +122,14 @@ export struct SandboxMap {
   private lastTishixianDebugSig: string = ''
   @State private homePlaceConfigured: boolean = false
   @State private companyPlaceConfigured: boolean = false
+  @State private directionPickerVisible: boolean = false
+  @State private directionPickerCenterX: number = 0
+  @State private directionPickerCenterY: number = 0
+  @State private directionPickerNodeId: string = ''
+  @State private directionPickerEdgeId: string = ''
+  @State private directionPickerSelected: string = 'N'
+  @State private directionPickerCloseTimerId: number = -1
+  @State private directionPickerMode: 'CAR' | 'TRAFFIC' = 'CAR'
 
   // 手动操作后允许自动跟随恢复的等待时间（毫秒）
   private readonly MANUAL_OVERRIDE_MS: number = 2800
@@ -172,6 +183,10 @@ export struct SandboxMap {
 
   private logBengkui(msg: string): void {
     hilog.info(SandboxMap.BENGKUI_LOG_DOMAIN, SandboxMap.BENGKUI_LOG_TAG, '%{public}s', msg)
+  }
+
+  private logShantui(msg: string): void {
+    hilog.info(SandboxMap.SHANTUI_LOG_DOMAIN, SandboxMap.SHANTUI_LOG_TAG, '%{public}s', msg)
   }
 
   build() {
@@ -246,6 +261,9 @@ export struct SandboxMap {
           // 图层3：点位/障碍/目的地标志（路线上方）
           if (!this.isOverviewLevel()) {
             this.buildGridOverlay()
+            this.buildTrafficLightMarkers()
+            this.buildGateMarkers()
+            this.buildSpecialRoadMarkers()
             this.buildBlockedNodeMarkers()
             this.buildRouteObstaclePointMarkers()
             this.buildBlockedEdgeMarkers()
@@ -263,6 +281,9 @@ export struct SandboxMap {
         .height('100%')
         .scale({ x: this.zoomScale, y: this.zoomScale })
         .translate({ x: this.offsetX, y: this.offsetY })
+        if (this.directionPickerVisible) {
+          this.buildDirectionPicker()
+        }
       }
       .width('100%')
       .height(this.fullHeightMap ? '100%' : 480)
@@ -283,12 +304,57 @@ export struct SandboxMap {
         const y: number = this.screenToMapY(evt.y)
 
         if (this.store.obstacleEditEnabled) {
-          if (this.store.toggleRouteObstaclePointByPixel(x, y)) {
+          const nodeId: string = this.store.nearestNodeIdByPixelForObstacle(x, y)
+          if (nodeId.length > 0) {
+            const wasBlockedNode: boolean = this.store.isBlocked(nodeId)
+            this.store.toggleBlockedNode(nodeId)
+            const nowBlockedNode: boolean = this.store.isBlocked(nodeId)
+            if (!wasBlockedNode && nowBlockedNode) {
+              void page1Coordinator.sendObstaclePointByMapClick(nodeId)
+            }
             return
           }
-          const id: string = this.store.nearestNodeIdByPixel(x, y)
-          if (id.length > 0) {
-            this.store.toggleBlockedNode(id)
+
+          const edgeId: string = this.store.nearestEdgeIdByPixel(x, y).trim().toUpperCase()
+          if (edgeId.length > 0) {
+            const wasBlocked: boolean = this.store.isBlockedEdgeById(edgeId)
+            this.store.toggleBlockedEdge(edgeId)
+            const nowBlocked: boolean = this.store.isBlockedEdgeById(edgeId)
+            if (!wasBlocked && nowBlocked) {
+              const seg = RouteEdgeCodec.parse(edgeId)
+              if (seg) {
+                void page1Coordinator.sendObstacleEdgeByMapClick(seg.a, seg.b)
+              }
+            }
+            return
+          }
+          return
+        }
+
+        if (this.store.trafficLightEditEnabled) {
+          const edgeId: string = this.store.nearestEdgeIdByPixel(x, y).trim().toUpperCase()
+          if (edgeId.length > 0) {
+            this.openDirectionPickerForTrafficLightEdge(edgeId)
+          }
+          return
+        }
+
+        if (this.store.gateEditEnabled) {
+          const edgeId: string = this.store.nearestEdgeIdByPixel(x, y).trim().toUpperCase()
+          if (edgeId.length > 0) {
+            this.store.upsertGatePoint(edgeId)
+            void page1Coordinator.sendBarrierByMapEdge(edgeId)
+            this.store.gateEditEnabled = false
+          }
+          return
+        }
+
+        if (this.store.specialRoadEditEnabled) {
+          const edgeId: string = this.store.nearestEdgeIdByPixel(x, y).trim().toUpperCase()
+          if (edgeId.length > 0) {
+            this.store.upsertSpecialRoadPoint(edgeId)
+            void page1Coordinator.sendSpecialSegmentByMapEdge(edgeId)
+            this.store.specialRoadEditEnabled = false
           }
           return
         }
@@ -307,6 +373,10 @@ export struct SandboxMap {
 
         // 点选移动红点后立即跟随
         this.store.moveCarByClick(x, y)
+        const snapId: string = this.store.currentSnapNodeId.trim().toUpperCase()
+        if (snapId.length === 2) {
+          this.openDirectionPicker(snapId)
+        }
       })
       .gesture(
         GestureGroup(GestureMode.Parallel,
@@ -343,6 +413,245 @@ export struct SandboxMap {
     .height('100%')
     .margin({ top: this.fullHeightMap ? 0 : 12 })
   }
+
+  // --- 逻辑处理部分 ---
+
+  private openDirectionPicker(nodeId: string): void {
+    const n: GridNode | undefined = this.store.gridNodes.find((x: GridNode): boolean => x.id === nodeId)
+    if (!n) return
+    this.directionPickerNodeId = nodeId
+    // 这里的 CenterX/Y 仅用于放置 Picker 的位置
+    this.directionPickerCenterX = n.xNorm * this.store.mapW
+    this.directionPickerCenterY = n.yNorm * this.store.mapH
+    this.directionPickerSelected = 'N'
+    this.directionPickerMode = 'CAR'
+    this.directionPickerVisible = true
+    this.logShantui(`open picker node=${nodeId} center=(${this.directionPickerCenterX.toFixed(1)},${this.directionPickerCenterY.toFixed(1)})`)
+  }
+
+  private openDirectionPickerForTrafficLightEdge(edgeId: string): void {
+    const pos = this.store.edgeMidPosById(edgeId)
+    if (!pos) return
+    this.directionPickerNodeId = ''
+    this.directionPickerEdgeId = edgeId
+    this.directionPickerCenterX = pos.x * this.store.mapW
+    this.directionPickerCenterY = pos.y * this.store.mapH
+    this.directionPickerSelected = 'N'
+    this.directionPickerMode = 'TRAFFIC'
+    this.directionPickerVisible = true
+    this.logShantui(`open traffic picker edge=${edgeId}`)
+  }
+
+  private closeDirectionPicker(): void {
+    this.clearDirectionPickerCloseTimer()
+    this.logShantui(`close picker node=${this.directionPickerNodeId} selected=${this.directionPickerSelected}`)
+    this.directionPickerVisible = false
+    this.directionPickerNodeId = ''
+    this.directionPickerEdgeId = ''
+  }
+
+  private clearDirectionPickerCloseTimer(): void {
+    if (this.directionPickerCloseTimerId !== -1) {
+      clearTimeout(this.directionPickerCloseTimerId)
+      this.directionPickerCloseTimerId = -1
+    }
+  }
+
+  /**
+   * 核心修复：基于组件内部坐标判定扇区
+   * lx, ly 为相对于 Picker 左上角的像素坐标
+   */
+  private selectDirectionByLocalPoint(lx: number, ly: number): string {
+    const center = this.directionPickerSize() / 2 // 66
+    const dx = lx - center
+    const dy = ly - center
+
+    // 点击中心极小范围（死区）不触发，防止误触
+    if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return this.directionPickerSelected
+
+    // 对角分割逻辑 (X形判断)
+    if (dy <= -Math.abs(dx)) return 'N' // 上方扇区
+    if (dy >= Math.abs(dx)) return 'S'  // 下方扇区
+    if (dx >= Math.abs(dy)) return 'E'  // 右侧扇区
+    return 'W'                         // 左侧扇区
+  }
+
+  private headingDegFromDir(dir: string): number {
+    const d: string = (dir || 'N').trim().toUpperCase()
+    if (d === 'E') return 0
+    if (d === 'S') return 90
+    if (d === 'W') return 180
+    return 270 // N
+  }
+
+  private syncLocalHeadingByDir(dir: string): void {
+    const nextHeadingDeg: number = this.headingDegFromDir(dir)
+    this.store.setPose({
+      ...this.store.pose,
+      tsMs: Date.now(),
+      headingDeg: nextHeadingDeg
+    })
+  }
+
+  private onDirectionSectorClick(localX: number, localY: number): void {
+    // 1. 获取点击方向
+    const dir: string = this.selectDirectionByLocalPoint(localX, localY)
+    this.logShantui(`sector click local=(${localX.toFixed(1)},${localY.toFixed(1)}) dir=${dir}`)
+    this.directionPickerSelected = dir
+
+    // 2. 立即同步本地状态（视觉反馈）
+    this.syncLocalHeadingByDir(dir)
+    this.logShantui(`sync heading dir=${dir} headingDeg=${this.headingDegFromDir(dir)}`)
+
+    // 3. 延迟发送指令并关闭，增加用户确认感
+    this.clearDirectionPickerCloseTimer()
+    this.directionPickerCloseTimerId = setTimeout((): void => {
+      const nodeId: string = this.directionPickerNodeId
+      const edgeId: string = this.directionPickerEdgeId
+      const finalDir: string = this.directionPickerSelected
+      const mode: 'CAR' | 'TRAFFIC' = this.directionPickerMode
+      this.logShantui(`picker commit node=${nodeId} dir=${finalDir}`)
+      this.closeDirectionPicker()
+      if (nodeId.length === 2) {
+        if (mode === 'TRAFFIC') {
+          const deg: number = this.headingDegFromDir(finalDir)
+          if (edgeId.length > 0) {
+            this.store.upsertTrafficLightPoint(edgeId, deg)
+            void page1Coordinator.sendTrafficLightByMapEdge(edgeId, finalDir)
+          }
+          this.store.trafficLightEditEnabled = false
+          return
+        }
+        this.logShantui(`sendCurrentNodeByMapClick node=${nodeId} dir=${finalDir}`)
+        void page1Coordinator.sendCurrentNodeByMapClick(nodeId, finalDir)
+      } else if (mode === 'TRAFFIC' && edgeId.length > 0) {
+        const deg: number = this.headingDegFromDir(finalDir)
+        this.store.upsertTrafficLightPoint(edgeId, deg)
+        void page1Coordinator.sendTrafficLightByMapEdge(edgeId, finalDir)
+        this.store.trafficLightEditEnabled = false
+      }
+    }, 200) as number
+  }
+
+  // --- UI 辅助部分 ---
+
+  private directionPickerSize(): number { return 132 }
+  private directionPickerPosX(): number { return this.directionPickerCenterX - this.directionPickerSize() / 2 }
+  private directionPickerPosY(): number { return this.directionPickerCenterY - this.directionPickerSize() / 2 }
+
+  /**
+   * 获取高亮块的旋转角度
+   */
+  private getHighlightRotate(dir: string): number {
+    if (dir === 'E') return 90
+    if (dir === 'S') return 180
+    if (dir === 'W') return 270
+    return 0 // N
+  }
+
+  @Builder
+  private buildDirectionPicker(): void {
+    Stack() {
+      // 1. 底盘：更通透的玻璃磨砂
+      Column() {}
+      .width(this.directionPickerSize())
+      .height(this.directionPickerSize())
+      .borderRadius(this.directionPickerSize() / 2)
+      // 降低 alpha 到 0.15 (#26)，让背景地图更清晰地透过来
+      .backgroundColor('#26FFFFFF')
+      .backgroundBlurStyle(BlurStyle.Thin)
+      .backdropBlur(50) // 增加模糊半径，提升高级感
+      .shadow({ radius: 30, color: '#00000033', offsetX: 0, offsetY: 8 })
+
+      // 2. 选中扇区：高度突出
+      Column() {}
+      .width(this.directionPickerSize())
+      .height(this.directionPickerSize())
+      .borderRadius(this.directionPickerSize() / 2)
+      .sweepGradient({
+        center: [this.directionPickerSize() / 2, this.directionPickerSize() / 2],
+        start: 0,
+        end: 90,
+        // 使用更亮的渐变，从 0.6 降低到 0.2，产生边缘羽化的发光效果
+        colors: [['#99FFFFFF', 0], ['#33FFFFFF', 1]]
+      })
+      .clip(true)
+      // 旋转修正，让 90 度扇区完美对齐 N/E/S/W
+      .rotate({ z: 1, angle: this.getHighlightRotate(this.directionPickerSelected) - 135 })
+      .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+      // 扇区自带一层发光阴影，使其在视觉上“浮起来”
+      .shadow({ radius: 20, color: '#40FFFFFF', offsetX: 0, offsetY: 0 })
+
+      // 3. 装饰线：极细透明黑，仅作刻度参考
+      Column().width(0.8).height(this.directionPickerSize() - 20).backgroundColor('#0D000000').rotate({ z: 1, angle: 45 })
+      Column().width(0.8).height(this.directionPickerSize() - 20).backgroundColor('#0D000000').rotate({ z: 1, angle: -45 })
+
+      // 4. 方向文字：对比度优化
+      this.buildDirectionText('N', { x: '50%', y: 14 }, '50%', 0)
+      this.buildDirectionText('E', { x: this.directionPickerSize() - 26, y: '50%' }, 0, '50%')
+      this.buildDirectionText('S', { x: '50%', y: this.directionPickerSize() - 38 }, '50%', 0)
+      this.buildDirectionText('W', { x: 14, y: '50%' }, 0, '50%')
+    }
+    .width(this.directionPickerSize())
+    .height(this.directionPickerSize())
+    // 增加一个微小的入场/切换动画
+    .scale({ x: this.directionPickerVisible ? 1 : 0.8, y: this.directionPickerVisible ? 1 : 0.8 })
+    .opacity(this.directionPickerVisible ? 1 : 0)
+    .animation({ duration: 150 })
+    .position({ x: this.directionPickerPosX(), y: this.directionPickerPosY() })
+    .zIndex(99)
+    .onClick((evt: ClickEvent) => {
+      this.onDirectionSectorClick(evt.x, evt.y)
+    })
+  }
+
+  @Builder
+  private buildDirectionText(label: string, pos: Position, anchorX: string | number, anchorY: string | number) {
+    Text(label)
+      .fontSize(22) // 略微放大文字
+      .fontWeight(FontWeight.Bolder)
+        // 选中时使用亮蓝色（高对比度），未选中时使用深灰
+      .fontColor(this.directionPickerSelected === label ? '#0052FF' : '#555555')
+      .position(pos)
+      .markAnchor({ x: anchorX, y: anchorY })
+  }
+
+  @Builder
+  private buildTrafficLightMarkers(): void {
+    ForEach(this.store.trafficLights, (p: any): void => {
+      Image($rawfile('icon/红绿灯.png'))
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .zIndex(6)
+    }, (p: any): string => `traffic-${p.id}`)
+  }
+
+  @Builder
+  private buildGateMarkers(): void {
+    ForEach(this.store.gatePoints, (p: any): void => {
+      Image($rawfile('icon/道闸.png'))
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .zIndex(6)
+    }, (p: any): string => `gate-${p.id}`)
+  }
+
+  @Builder
+  private buildSpecialRoadMarkers(): void {
+    ForEach(this.store.specialRoadPoints, (p: any): void => {
+      Image($rawfile('icon/农作物.png'))
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .zIndex(6)
+    }, (p: any): string => `special-${p.id}`)
+  }
+
 
   private pathIndexOf(id: string): number {
     for (let i: number = 0; i < this.store.pathNodes.length; i++) {
@@ -677,9 +986,9 @@ export struct SandboxMap {
 
   private blockedNodeMarkerResource(nodeId: string): any {
     if (this.isNodeFullyBlocked(nodeId) && !this.isParkingNode(nodeId)) {
-      return $rawfile('icon/堵塞.png')
+      return $rawfile('icon/堵塞占用.png')
     }
-    return $rawfile('icon/堵塞占用.png')
+    return $rawfile('icon/堵塞.png')
   }
 
   private nodeBlockTypeOf(nodeId: string): NodeBlockType {

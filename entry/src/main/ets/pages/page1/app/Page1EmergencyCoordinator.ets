@@ -1,4 +1,4 @@
-import { Page1UiStore } from './Page1UiStore'
+﻿import { Page1UiStore } from './Page1UiStore'
 import { Page1Action } from '../types/Page1Types'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { RecognitionResult, BBoxNorm } from '../../../services/recognition/RecognitionResult'
@@ -97,17 +97,17 @@ export class Page1EmergencyCoordinator {
         s.bumpTx()
         this.ctx.emergencyAlarmBurstLastSendAtMs = Date.now()
         try {
-          await this.ctx.proto.setAlarm(true)
+          // legacy removed
         } catch (_) {}
         s.pushLog(`EMERGENCY_ALARM: ON#${i + 1}/${safeCount} reason=${reason}`)
         if (this.ctx.emergencyAlarmBurstAckAtMs >= this.ctx.emergencyAlarmBurstLastSendAtMs) {
-          s.pushLog('EMERGENCY_ALARM: received 0xBD/01, stop retries')
+          s.pushLog('EMERGENCY_ALARM: received 新协议ACK, stop retries')
           break
         }
         if (i + 1 < safeCount && safeIntervalMs > 0) {
           await this.ctx.sleep(safeIntervalMs)
           if (this.ctx.emergencyAlarmBurstAckAtMs >= this.ctx.emergencyAlarmBurstLastSendAtMs) {
-            s.pushLog('EMERGENCY_ALARM: received 0xBD/01, stop retries')
+            s.pushLog('EMERGENCY_ALARM: received 新协议ACK, stop retries')
             return
           }
         }
@@ -184,8 +184,6 @@ export class Page1EmergencyCoordinator {
     this.ctx.cancelMapPoseAnimation()
     this.ctx.cancelParkingSequence()
     this.ctx.resetGarageFlowState()
-    this.ctx.gateDepartInProgress = false
-    this.ctx.resetGateDepartDedupState()
     this.ctx.resetAutoActionDedupState()
     this.ctx.resetPathAckState()
     this.ctx.stopActiveMotion()
@@ -226,3 +224,6 @@ export class Page1EmergencyCoordinator {
     s.pushLog(`EMERGENCY RECOVER: bypass=${bypassMs}ms`)
   }
 }
+
+
+

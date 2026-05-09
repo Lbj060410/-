@@ -49,9 +49,24 @@ export interface RouteObstaclePoint {
 
 export interface MapTrafficLightPoint {
   id: string
+  edgeId: string
   xNorm: number
   yNorm: number
   directionDeg: number
+}
+
+export interface MapGatePoint {
+  id: string
+  edgeId: string
+  xNorm: number
+  yNorm: number
+}
+
+export interface MapSpecialRoadPoint {
+  id: string
+  edgeId: string
+  xNorm: number
+  yNorm: number
 }
 
 // 为与协调器交通闸门流程兼容而保留；地图侧编辑 UI 已移除。
@@ -93,15 +108,12 @@ export class Page1UiStore {
 
   // ===== B2：障碍 =====
   blockedNodes: Array<string> = []
-  // D2|D4 和 F2|F4 默认阻塞：强制上下区通行只能经过 B2-B4 道闸
-  blockedEdges: Array<string> = ['D2|D4', 'F2|F4']
-
-  isPermanentBlockedEdge(edgeId: string): boolean {
-    const x: string = edgeId.trim().toUpperCase()
-    return x === 'D2|D4' || x === 'F2|F4'
-  }
+  blockedEdges: Array<string> = []
   routeObstaclePoints: Array<RouteObstaclePoint> = []
   obstacleEditEnabled: boolean = false
+  trafficLightEditEnabled: boolean = false
+  gateEditEnabled: boolean = false
+  specialRoadEditEnabled: boolean = false
   targetPickEnabled: boolean = false
   // 地图点选目标后，等待“再次点击目标按钮”确认发送
   mapTargetPendingSend: boolean = false
@@ -115,6 +127,12 @@ export class Page1UiStore {
   obstaclePointPickThresholdNorm: number = 0.030
   obstaclePointRemoveThresholdNorm: number = 0.020
   obstaclePointTriggerThresholdNorm: number = 0.022
+  // 设障时节点吸附半径（比普通吸附更大）
+  obstacleNodePickThresholdNorm: number = 0.075
+  trafficLightNodePickThresholdNorm: number = 0.075
+  trafficLights: Array<MapTrafficLightPoint> = []
+  gatePoints: Array<MapGatePoint> = []
+  specialRoadPoints: Array<MapSpecialRoadPoint> = []
 
   /**
    * 障碍编辑模式开关：
@@ -124,19 +142,141 @@ export class Page1UiStore {
   toggleObstacleEdit(): void {
     this.obstacleEditEnabled = !this.obstacleEditEnabled
     if (this.obstacleEditEnabled) {
+      this.trafficLightEditEnabled = false
+      this.gateEditEnabled = false
+      this.specialRoadEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`障碍编辑：${this.obstacleEditEnabled ? 'ON' : 'OFF'}`)
   }
 
+  toggleTrafficLightEdit(): void {
+    this.trafficLightEditEnabled = !this.trafficLightEditEnabled
+    if (this.trafficLightEditEnabled) {
+      this.obstacleEditEnabled = false
+      this.gateEditEnabled = false
+      this.specialRoadEditEnabled = false
+      this.targetPickEnabled = false
+      this.mapTargetPendingSend = false
+    }
+    this.pushLog(`红绿灯设置：${this.trafficLightEditEnabled ? 'ON' : 'OFF'}`)
+  }
+
+  toggleGateEdit(): void {
+    this.gateEditEnabled = !this.gateEditEnabled
+    if (this.gateEditEnabled) {
+      this.obstacleEditEnabled = false
+      this.trafficLightEditEnabled = false
+      this.specialRoadEditEnabled = false
+      this.targetPickEnabled = false
+      this.mapTargetPendingSend = false
+    }
+    this.pushLog(`道闸设置：${this.gateEditEnabled ? 'ON' : 'OFF'}`)
+  }
+
+  toggleSpecialRoadEdit(): void {
+    this.specialRoadEditEnabled = !this.specialRoadEditEnabled
+    if (this.specialRoadEditEnabled) {
+      this.obstacleEditEnabled = false
+      this.trafficLightEditEnabled = false
+      this.gateEditEnabled = false
+      this.targetPickEnabled = false
+      this.mapTargetPendingSend = false
+    }
+    this.pushLog(`特殊路段设置：${this.specialRoadEditEnabled ? 'ON' : 'OFF'}`)
+  }
+
   toggleTargetPick(): void {
     this.targetPickEnabled = !this.targetPickEnabled
     if (this.targetPickEnabled) {
       this.obstacleEditEnabled = false
+      this.trafficLightEditEnabled = false
+      this.gateEditEnabled = false
+      this.specialRoadEditEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`目标点选：${this.targetPickEnabled ? 'ON' : 'OFF'}`)
+  }
+
+  clearTrafficLightPoints(): void {
+    if (this.trafficLights.length <= 0) return
+    this.trafficLights = []
+    this.pushLog('红绿灯清空')
+  }
+
+  upsertTrafficLightPoint(edgeId: string, directionDeg: number): boolean {
+    const edge: string = edgeId.trim().toUpperCase()
+    const pos: XYPos | undefined = this.edgeMidPosById(edge)
+    if (!pos) return false
+
+    const next: Array<MapTrafficLightPoint> = []
+    let updated: boolean = false
+    for (let i: number = 0; i < this.trafficLights.length; i++) {
+      const one: MapTrafficLightPoint = this.trafficLights[i]
+      if (one.edgeId === edge) {
+        next.push({
+          id: edge,
+          edgeId: edge,
+          xNorm: pos.x,
+          yNorm: pos.y,
+          directionDeg: directionDeg
+        })
+        updated = true
+      } else {
+        next.push(one)
+      }
+    }
+
+    if (!updated) {
+      if (this.trafficLights.length >= 2) {
+        this.pushLog('红绿灯设置失败：最多2个')
+        return false
+      }
+      next.push({
+        id: edge,
+        edgeId: edge,
+        xNorm: pos.x,
+        yNorm: pos.y,
+        directionDeg: directionDeg
+      })
+    }
+
+    this.trafficLights = next
+    this.pushLog(`红绿灯设置：edge=${edge} dir=${Math.round(directionDeg)}`)
+    return true
+  }
+
+  clearGatePoints(): void {
+    if (this.gatePoints.length <= 0) return
+    this.gatePoints = []
+    this.pushLog('道闸清空')
+  }
+
+  upsertGatePoint(edgeId: string): boolean {
+    const edge: string = edgeId.trim().toUpperCase()
+    const pos: XYPos | undefined = this.edgeMidPosById(edge)
+    if (!pos) return false
+    // 道闸仅允许一个：新设置直接覆盖旧设置
+    this.gatePoints = [{ id: edge, edgeId: edge, xNorm: pos.x, yNorm: pos.y }]
+    this.pushLog(`道闸设置：edge=${edge}`)
+    return true
+  }
+
+  clearSpecialRoadPoints(): void {
+    if (this.specialRoadPoints.length <= 0) return
+    this.specialRoadPoints = []
+    this.pushLog('特殊路段清空')
+  }
+
+  upsertSpecialRoadPoint(edgeId: string): boolean {
+    const edge: string = edgeId.trim().toUpperCase()
+    const pos: XYPos | undefined = this.edgeMidPosById(edge)
+    if (!pos) return false
+    // 和道闸一致：仅允许一个
+    this.specialRoadPoints = [{ id: edge, edgeId: edge, xNorm: pos.x, yNorm: pos.y }]
+    this.pushLog(`特殊路段设置：edge=${edge}`)
+    return true
   }
 
   // ===== B3：自动避障注入 =====
@@ -426,6 +566,42 @@ export class Page1UiStore {
     return nearest.id
   }
 
+  nearestNodeIdByPixelForObstacle(x: number, y: number): string {
+    if (this.mapW <= 0 || this.mapH <= 0) return ''
+    const nx: number = this.clamp01(x / this.mapW)
+    const ny: number = this.clamp01(y / this.mapH)
+    const nearest: GridNode | undefined = this.findNearestNodeByNorm(nx, ny)
+    if (!nearest) return ''
+    const d2: number = this.dist2(nx, ny, nearest.xNorm, nearest.yNorm)
+    const th: number = this.obstacleNodePickThresholdNorm
+    if (d2 > th * th) return ''
+    return nearest.id
+  }
+
+  nearestNodeIdByPixelForTrafficLight(x: number, y: number): string {
+    if (this.mapW <= 0 || this.mapH <= 0) return ''
+    const nx: number = this.clamp01(x / this.mapW)
+    const ny: number = this.clamp01(y / this.mapH)
+    const nearest: GridNode | undefined = this.findNearestNodeByNorm(nx, ny)
+    if (!nearest) return ''
+    const d2: number = this.dist2(nx, ny, nearest.xNorm, nearest.yNorm)
+    const th: number = this.trafficLightNodePickThresholdNorm
+    if (d2 > th * th) return ''
+    return nearest.id
+  }
+
+  edgeMidPosById(edgeId: string): XYPos | undefined {
+    const p: RouteSegment | undefined = RouteEdgeCodec.parse(edgeId)
+    if (!p) return undefined
+    const a: GridNode | undefined = this.findGridNodeById(p.a)
+    const b: GridNode | undefined = this.findGridNodeById(p.b)
+    if (!a || !b) return undefined
+    return {
+      x: (a.xNorm + b.xNorm) * 0.5,
+      y: (a.yNorm + b.yNorm) * 0.5
+    }
+  }
+
   isBlocked(id: string): boolean {
     for (let i: number = 0; i < this.blockedNodes.length; i++) {
       if (this.blockedNodes[i] === id) return true
@@ -460,10 +636,6 @@ export class Page1UiStore {
 
     const parsed: RouteSegment | undefined = RouteEdgeCodec.parse(x)
     if (!parsed) return
-    if (this.isPermanentBlockedEdge(x)) {
-      this.pushLog(`路段障碍拒绝：${x}（永久分界线，不可修改）`)
-      return
-    }
     const cur: string = this.currentSnapNodeId.trim().toUpperCase()
     if (cur === parsed.a || cur === parsed.b) {
       this.pushLog(`路段障碍拒绝：${x}（与当前位置相邻）`)
@@ -700,17 +872,31 @@ export class Page1UiStore {
   }
 
   clearBlockedNodes(): void {
-    const defaultEdges: Array<string> = ['D2|D4', 'F2|F4']
     const alreadyClear: boolean =
       this.blockedNodes.length === 0 &&
       this.routeObstaclePoints.length === 0 &&
-      this.blockedEdges.length === defaultEdges.length &&
-      defaultEdges.every((e: string) => this.blockedEdges.indexOf(e) >= 0)
+      this.blockedEdges.length === 0
     if (alreadyClear) return
     this.blockedNodes = []
-    this.blockedEdges = defaultEdges
+    this.blockedEdges = []
     this.routeObstaclePoints = []
     this.pushLog('障碍清空')
+  }
+
+  clearMapSetupState(): void {
+    this.blockedNodes = []
+    this.blockedEdges = []
+    this.routeObstaclePoints = []
+    this.trafficLights = []
+    this.gatePoints = []
+    this.specialRoadPoints = []
+    this.obstacleEditEnabled = false
+    this.trafficLightEditEnabled = false
+    this.gateEditEnabled = false
+    this.specialRoadEditEnabled = false
+    this.targetPickEnabled = false
+    this.mapTargetPendingSend = false
+    this.pushLog('清图：地图配置已清空（障碍/红绿灯/道闸/特殊路段）')
   }
 
   /**
@@ -889,6 +1075,17 @@ export class Page1UiStore {
 
   setTelemetry(t: CarTelemetry): void {
     this.telemetry = t
+  }
+
+  updateCurrentNodePose(nodeId: string, headingDeg: number): void {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return
+    const n: GridNode | undefined = this.findGridNodeById(id)
+    if (!n) return
+    this.currentSnapNodeId = id
+    this.carX = n.xNorm
+    this.carY = n.yNorm
+    this.applyManualPlacementPose(n.xNorm, n.yNorm, headingDeg)
   }
 
   // ===== 状态栏显示（与底层遥测解耦）=====

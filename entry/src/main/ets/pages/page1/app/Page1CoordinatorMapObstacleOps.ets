@@ -318,7 +318,7 @@ export function yoloSuggestBlockedNodeId(ctx: any, nowMs: number): string {
 export function maybeTriggerRoutePointObstacle(ctx: any): boolean {
   const s = ctx.store
   if (!s) return false
-  if (ctx.trafficGateWaiting || ctx.aheadVisionPending || ctx.parkingInProgress) return false
+  if (ctx.aheadVisionPending || ctx.parkingInProgress) return false
   if (s.routeObstaclePoints.length <= 0) return false
   const now = Date.now()
   const th = s.obstaclePointTriggerThresholdNorm
@@ -491,7 +491,7 @@ export function maybeHandleDrivingUltrasonicObstacle(ctx: any, nowMs: number, ed
 export function maybeReplanOnObstacle(ctx: any): void {
   const s = ctx.store
   if (!s) return
-  if (ctx.trafficGateWaiting || ctx.aheadVisionPending || ctx.parkingInProgress) return
+  if (ctx.aheadVisionPending || ctx.parkingInProgress) return
   const now = Date.now()
   if (typeof ctx.maybeHandleYolov26BarrierEmergencyStop === 'function' && ctx.maybeHandleYolov26BarrierEmergencyStop(now)) return
   if (s.destApplied.length === 0) return
@@ -699,7 +699,6 @@ export function maybeStartAheadVisionReplan(ctx: any, fromId: string, toId: stri
 
 export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
   if (!ctx.aheadVisionPending) return false
-  if (ctx.trafficGateWaiting) return true
   const s = ctx.store
   if (!s) {
     ctx.clearAheadVisionReplanState()
@@ -722,4 +721,3 @@ export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
   ctx.planPath(goal)
   return true
 }
-

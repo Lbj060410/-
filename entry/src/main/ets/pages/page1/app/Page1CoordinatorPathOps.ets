@@ -31,47 +31,6 @@ export function isParkingInnerRowNode(id: string): boolean {
   return p.row === 0
 }
 
-export function isInsideGateInnerSideNode(id: string): boolean {
-  const p = GridIdCodec.parse(id)
-  if (!p) return false
-  return p.row <= 1
-}
-
-function rowLabelByIndex(rowIndex: number): number {
-  if (rowIndex === 0) return 1
-  if (rowIndex === 1) return 2
-  if (rowIndex === 2) return 4
-  if (rowIndex === 3) return 6
-  if (rowIndex === 4) return 7
-  return -1
-}
-
-function isUpperZoneById(id: string): boolean {
-  const p = GridIdCodec.parse(id)
-  if (!p) return false
-  const rowLabel: number = rowLabelByIndex(p.row)
-  return rowLabel === 1 || rowLabel === 2
-}
-
-function isLowerZoneById(id: string): boolean {
-  const p = GridIdCodec.parse(id)
-  if (!p) return false
-  const rowLabel: number = rowLabelByIndex(p.row)
-  return rowLabel === 4 || rowLabel === 6 || rowLabel === 7
-}
-
-export function gateForcedWaypoint(ctx: any, startId: string, goalId: string): string {
-  void ctx
-  const startUpper: boolean = isUpperZoneById(startId)
-  const goalUpper: boolean = isUpperZoneById(goalId)
-  const startLower: boolean = isLowerZoneById(startId)
-  const goalLower: boolean = isLowerZoneById(goalId)
-  // 仅在上下区跨区通行时强制经过道闸。
-  if (startUpper && goalLower) return 'B2'
-  if (startLower && goalUpper) return 'B4'
-  return ''
-}
-
 export function buildPathViaWaypoint(
   ctx: any,
   start: string,
@@ -208,11 +167,7 @@ export async function sendAutoActionWithTiming(
     customLogTag: customLogTag ? customLogTag : ''
   }
 
-  if (ctx.isPathMotionAction(action) && ctx.pathAckAwaitingComplete) {
-    ctx.stageMotionWaitAckComplete(req)
-  } else {
-    ctx.startMotionNow(req)
-  }
+  ctx.startMotionNow(req)
 
   return true
 }
@@ -220,21 +175,11 @@ export async function sendAutoActionWithTiming(
 export async function followPathOnce(ctx: any, nowMs: number, force: boolean = false): Promise<void> {
   const s = ctx.store
   if (!s) return
+  if (ctx.carAstarMode === true) return
 
   if (ctx.maybeHandleAheadVisionReplan(nowMs)) return
   if (nowMs < ctx.pauseUntilMs) return
-  if (ctx.parkingInProgress) return
-  if (ctx.gateDepartInProgress) return
   if (ctx.motionRunning()) return
-  if (ctx.lowcarAwaitingBc05) {
-    const lastLogAtMs: number = Number(ctx.lowcarAwaitingBc05LastLogAtMs) || 0
-    if (nowMs - lastLogAtMs >= 1200) {
-      ctx.lowcarAwaitingBc05LastLogAtMs = nowMs
-      const sWait = ctx.store
-      if (sWait) sWait.pushLog('LOWCAR_BC05: 等待 BC/05，主链暂停下发')
-    }
-    return
-  }
 
   if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
     if (!canSendNextCommand(ctx, nowMs)) return
@@ -254,37 +199,11 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
     if (s.pathIndex >= s.pathNodes.length - 1) return
   }
 
-  if (await ctx.maybeHandleGarageDepartBeforeDrive(nowMs)) {
-    s.markAutoFollow(nowMs)
-    return
-  }
-
   if (!canSendNextCommand(ctx, nowMs)) return
 
   const idx = s.pathIndex
   const fromId = s.pathNodes[idx]
   const toId = s.pathNodes[idx + 1]
-
-  // F7 特殊流兜底：
-  // 到达 F6 时若 carport(2) 因门控等原因未成功发送，主循环在 F6 段继续补发，
-  // 避免“到达瞬间一次性尝试失败后被吞指令”。
-  if (typeof ctx.maybeHandleF7GarageSpecialFlowOnArrival === 'function') {
-    await ctx.maybeHandleF7GarageSpecialFlowOnArrival(fromId)
-  }
-
-  const gateEdge: boolean =
-    (fromId.trim().toUpperCase() === 'B2' && toId.trim().toUpperCase() === 'B4') ||
-    (fromId.trim().toUpperCase() === 'B4' && toId.trim().toUpperCase() === 'B2')
-
-  // 硬保护：闸口边只允许走 depart 流程，禁止掉回普通 GO 发送。
-  if (gateEdge) {
-    const handledGateDepartBeforeGo: boolean = await ctx.maybeHandleGateDepartOnArrival(fromId)
-    if (!handledGateDepartBeforeGo) {
-      s.pushLog(`GATE_DEPART_GUARD: ${fromId}->${toId} 未进入放行流程，已阻断普通前进发送`)
-    }
-    s.markAutoFollow(nowMs)
-    return
-  }
 
   if ((s.isBlocked(toId) || s.isBlockedEdge(fromId, toId)) && s.destApplied.length > 0) {
     ctx.maybeReplanOnObstacle()
@@ -329,7 +248,7 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
     else if (turnAction === Page1Action.UTURN) turnText = '掉头'
 
     s.setAction(`自动转向=${turnText}`)
-    s.pushLog(`TURN_ONLY: ${fromId} -> ${toId} | sent, wait BD=02 before dot turn`)
+    s.pushLog(`TURN_ONLY: ${fromId} -> ${toId} | sent, wait 新协议状态回执 before dot turn`)
     return
   }
 
@@ -353,10 +272,11 @@ export async function followPathOnce(ctx: any, nowMs: number, force: boolean = f
   if (!sentGo) return
 
   s.markAutoFollow(nowMs)
-  s.pushLog(`SEGMENT_START: ${fromId} -> ${toId} | 已发送，等待BD=02后红点移动${ctx.pathDotMotionTimingMs()}ms`)
+  s.pushLog(`SEGMENT_START: ${fromId} -> ${toId} | 已发送，等待新协议状态回执后红点移动${ctx.pathDotMotionTimingMs()}ms`)
 }
 
 // 向后兼容的旧调用点别名。
 export async function driveAutoStep(ctx: any, nowMs: number, force: boolean = false): Promise<void> {
   await followPathOnce(ctx, nowMs, force)
 }
+

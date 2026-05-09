@@ -16,7 +16,11 @@ import { Page1Theme } from '../Page1Theme'
 export struct ControlPanel {
   @State private store: Page1UiStore = page1Store
   @State private custom0AInput: string = ''
+  @State private customChainBytes: Array<number> = []
   onDiag: () => void = () => {}
+  onMore: () => void = () => {}
+  onTrafficLight: () => void = () => {}
+  onGate: () => void = () => {}
 
   build() {
     Column({ space: 16 }) {
@@ -73,6 +77,19 @@ export struct ControlPanel {
                 this.clearTargetSelection()
               })
           )
+
+        Button('更多')
+          .layoutWeight(1)
+          .height(44)
+          .borderRadius(14)
+          .backgroundColor('#F1F5F9')
+          .fontColor(Page1Theme.TEXT_SECONDARY)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .border({ width: 1, color: '#E2E8F0' })
+          .onClick((): void => {
+            this.onMore()
+          })
       }
       .width('100%')
 
@@ -102,7 +119,7 @@ export struct ControlPanel {
           .textAlign(TextAlign.Start)
 
         Row({ space: 8 }) {
-          TextInput({ text: this.custom0AInput, placeholder: '输入指令码' })
+          TextInput({ text: this.custom0AInput, placeholder: '分段输入：A@ 然后 1' })
             .layoutWeight(1)
             .height(40)
             .backgroundColor('#F8FAFC')
@@ -143,10 +160,64 @@ export struct ControlPanel {
 
         // 第2行：高级动作
         Row({ space: 10 }) {
-          this.controlBtn('左半转', Page1Action.LEFT_HALF, 'advanced')
-          this.controlBtn('右半转', Page1Action.RIGHT_HALF, 'advanced')
+          Button() {
+            Text(this.store.trafficLightEditEnabled ? '交通灯：开' : '交通灯')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#0F766E')
+          }
+          .layoutWeight(1)
+          .height(48)
+          .borderRadius(6)
+          .backgroundColor('#ECFEFF')
+          .border({ width: 1, color: '#A5F3FC' })
+          .onClick((): void => { this.onTrafficLight() })
+          .gesture(
+            LongPressGesture()
+              .onAction((): void => {
+                void page1Coordinator.clearTrafficLightsByUi()
+                this.store.trafficLightEditEnabled = false
+              })
+          )
+
+          Button() {
+            Text(this.store.gateEditEnabled ? '道闸：开' : '道闸')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#7C2D12')
+          }
+          .layoutWeight(1)
+          .height(48)
+          .borderRadius(6)
+          .backgroundColor('#FFF7ED')
+          .border({ width: 1, color: '#FED7AA' })
+          .onClick((): void => {
+            this.onGate()
+          })
+          .gesture(
+            LongPressGesture()
+              .onAction((): void => {
+                void page1Coordinator.clearBarrierByUi()
+                this.store.gateEditEnabled = false
+              })
+          )
+
           this.controlBtn('掉头', Page1Action.UTURN, 'advanced')
-          this.controlBtn('急停', Page1Action.SCRAM, 'danger')
+          Button() {
+            Text('清图')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#0369A1')
+          }
+          .layoutWeight(1)
+          .height(48)
+          .borderRadius(6)
+          .backgroundColor('#E0F2FE')
+          .border({ width: 1, color: '#BAE6FD' })
+          .shadow({ radius: 0 })
+          .onClick((): void => {
+            void page1Coordinator.resetNetworkMap()
+          })
         }
         .width('100%')
       }
@@ -268,25 +339,55 @@ export struct ControlPanel {
     }
   }
 
-  private parseCustom0AInput(): number | undefined {
-    let raw: string = this.custom0AInput.trim().toUpperCase()
-    if (raw.length <= 0) return undefined
-    if (raw.startsWith('0X')) raw = raw.substring(2)
-    if (!/^[0-9A-F]{1,2}$/.test(raw)) return undefined
-    const parsed: number = Number.parseInt(raw, 16)
-    if (!Number.isFinite(parsed)) return undefined
-    if (parsed < 0 || parsed > 0xFF) return undefined
-    return parsed
+  private parseHexByte(raw: string): number | undefined {
+    let x: string = raw.trim().toUpperCase()
+    if (x.startsWith('0X')) x = x.substring(2)
+    if (!/^[0-9A-F]{1,2}$/.test(x)) return undefined
+    const v: number = Number.parseInt(x, 16)
+    if (!Number.isFinite(v) || v < 0 || v > 0xFF) return undefined
+    return v
   }
 
   private async onSendCustom0A(): Promise<void> {
-    const code: number | undefined = this.parseCustom0AInput()
-    if (code === undefined) {
-      this.store.pushLog('自定义0x0A输入非法：请输入 1~2 位十六进制（如 1 / A / 1C / 0x0A）')
-      this.store.setAction('自定义0x0A输入错误')
+    let raw: string = this.custom0AInput.trim().toUpperCase()
+    if (raw.length <= 0) return
+
+    const hasContinue: boolean = raw.endsWith('@')
+    if (hasContinue) raw = raw.substring(0, raw.length - 1).trim()
+    const tokens: Array<string> = raw.split(/[\s,]+/).filter((x: string): boolean => x.trim().length > 0)
+    if (tokens.length !== 1) {
+      this.store.pushLog('输入非法：每次只能输入1个字节（如 A / 1 / 0A），末尾@表示继续')
+      this.store.setAction('自定义指令输入错误')
       return
     }
-    await page1Coordinator.sendCustomControl0A(code)
+    const b: number | undefined = this.parseHexByte(tokens[0])
+    if (b === undefined) {
+      this.store.pushLog('输入非法：每次只能输入1个字节（如 A / 1 / 0A），末尾@表示继续')
+      this.store.setAction('自定义指令输入错误')
+      return
+    }
+    this.customChainBytes.push(b)
+    this.custom0AInput = ''
+
+    if (hasContinue) {
+      this.store.pushLog(`分段录入：+0x${b.toString(16).toUpperCase().padStart(2, '0')}（继续）`)
+      return
+    }
+
+    if (this.customChainBytes.length < 2) {
+      this.store.pushLog('发送失败：至少需要2字节（组号+子命令）')
+      this.store.setAction('自定义指令长度不足')
+      this.customChainBytes = []
+      return
+    }
+
+    const bytes: Array<number> = this.customChainBytes
+    this.customChainBytes = []
+    const group: number = bytes[0] & 0xFF
+    const sub: number = bytes[1] & 0xFF
+    const ext: Uint8Array = new Uint8Array(Math.max(0, bytes.length - 2))
+    for (let i: number = 2; i < bytes.length; i++) ext[i - 2] = bytes[i] & 0xFF
+    await page1Coordinator.sendCustomGroupCommand(group, sub, ext)
   }
 
   private alarmBtnText(): string {

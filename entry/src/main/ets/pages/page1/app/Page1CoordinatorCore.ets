@@ -9,15 +9,15 @@
  *          services/control/CarProtocolService.ets。
  */
 import { Page1UiStore, RouteObstaclePoint } from './Page1UiStore'
-import { Page1Action, CarTelemetry } from '../types/Page1Types'
+import { Page1Action } from '../types/Page1Types'
 
 import { CarTcpService } from '../../../services/control/CarTcpService'
 import { CarProtocolService, CarSendMode } from '../../../services/control/CarProtocolService'
 import { CarConnectionState } from '../../../services/control/CarConnectionState'
 
-import { CarRx55StreamDecoder, CarFrame55 } from '../net/CarRx55StreamDecoder'
+import { CarProtoStreamDecoder } from '../net/CarRx55StreamDecoder'
 
-import { AStarPlanResult, GridIdCodec } from './PathPlannerAStar'
+import { AStarPlanResult, GridIdCodec, RouteEdgeCodec } from './PathPlannerAStar'
 import { GridNode } from '../types/SandboxGridTypes'
 import { ensureRecognitionCenter } from '../../../services/recognition/RecognitionCenter'
 import { RecognitionResult, BBoxNorm } from '../../../services/recognition/RecognitionResult'
@@ -81,25 +81,10 @@ import {
   animateMapPoseTransition
 } from './Page1CoordinatorMapObstacleOps'
 import {
-  onParkingUltrasonicResult as onParkingUltrasonicResultOp,
-  runHandleGateDepartOnArrival,
-  runParkingBeforeFinalEdgeArrival,
-  simAmbientBackCm,
-  simAmbientFrontCm,
-  simAmbientIrCm,
-  simAmbientLux,
-  simulateOnceLoop,
-  sleepMs,
-  startSimulatorLoop,
-  stopSimulatorLoop
-} from './Page1CoordinatorParkingSimOps'
-import {
   actionForHeadingTransition,
   buildPathViaWaypoint,
   canSendNextCommand,
   followPathOnce,
-  gateForcedWaypoint,
-  isInsideGateInnerSideNode,
   isParkingInnerRowNode,
   normToCardinal,
   peekNextActionAfterCurrentStep,
@@ -111,7 +96,6 @@ import {
   syncLogicalHeadingWithCurrentState
 } from './Page1CoordinatorPathOps'
 import {
-  appendDiagKeyRxFrame as appendDiagKeyRxFrameOp,
   bindTcpCallbacks as bindTcpCallbacksOp,
   byteToHex as byteToHexOp,
   bytesToHex as bytesToHexOp,
@@ -119,15 +103,12 @@ import {
   clearParkingUltrasonicRequest as clearParkingUltrasonicRequestOp,
   clearPendingFrameDestApply as clearPendingFrameDestApplyOp,
   connectTcp as connectTcpOp,
-  decodeLuxFromBbFrame as decodeLuxFromBbFrameOp,
   disconnectTcp as disconnectTcpOp,
   isParkingUltrasonicResponseContext as isParkingUltrasonicResponseContextOp,
-  logFrame55 as logFrame55Op,
   markParkingUltrasonicRequest as markParkingUltrasonicRequestOp,
   onAction as onActionOp,
   onTcpData as onTcpDataOp,
   onTcpState as onTcpStateOp,
-  parseTelemetryFrom55 as parseTelemetryFrom55Op,
   scheduleFrameDestApply as scheduleFrameDestApplyOp,
   sendManualGoCommand as sendManualGoCommandOp
 } from './Page1CoordinatorControlTcpOps'
@@ -135,7 +116,6 @@ import {
   buildAutoActionFingerprint as buildAutoActionFingerprintOp,
   canSendPathCommandNow as canSendPathCommandNowOp,
   flushDrivingUltrasonicObstacleAfterAck as flushDrivingUltrasonicObstacleAfterAckOp,
-  gateDepartSendKey as gateDepartSendKeyOp,
   isMoveAction as isMoveActionOp,
   isPathMotionAction as isPathMotionActionOp,
   isTurnAction as isTurnActionOp,
@@ -145,7 +125,6 @@ import {
   pathDotMotionTimingMs as pathDotMotionTimingMsOp,
   queueDrivingUltrasonicObstacle as queueDrivingUltrasonicObstacleOp,
   resetAutoActionDedupState as resetAutoActionDedupStateOp,
-  resetGateDepartDedupState as resetGateDepartDedupStateOp,
   resetPathAckState as resetPathAckStateOp,
   resetRouteVoiceFlags as resetRouteVoiceFlagsOp,
   sendDriveActionDirect as sendDriveActionDirectOp,
@@ -165,15 +144,10 @@ import {
   isShigongYolov26BarrierLabelKey,
   normalizeYolov26BarrierLabelKey
 } from './TrafficYolov26BarrierLabelPolicy'
-import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
 import { TimerManager } from './Page1TimerManager'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 import hilog from '@ohos.hilog'
 
-const TEXTONE1_DOMAIN = 0xFF02
-const TEXTONE1_TAG = 'textone1'
-const GARAGE_CARPORT_ACK_RELEASE_TIMEOUT_MS = 7000
-const GARAGE_LOWCARPORT_ACK_RELEASE_TIMEOUT_MS = 6000
 const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 2500
 
 export class Page1Coordinator {
@@ -186,14 +160,11 @@ export class Page1Coordinator {
   private readonly actionScheduler: VehicleActionScheduler = new VehicleActionScheduler()
   private readonly timerManager: TimerManager = new TimerManager()
 
-  private simTimerId: number = -1
-  private simTick: number = 0
-  private simLoopBusy: boolean = false
   private connectDeferredTimerId: number = -1
   private frameDestApplyTimerId: number = -1
   private pendingFrameDestNodeId: string = ''
 
-  private readonly rxDecoder: CarRx55StreamDecoder = new CarRx55StreamDecoder()
+  private readonly rxDecoder: CarProtoStreamDecoder = new CarProtoStreamDecoder()
 
   private parkingInProgress: boolean = false
   private parkingSequenceToken: number = 0
@@ -208,16 +179,11 @@ export class Page1Coordinator {
   private lastVisionLogAtMs: number = 0
 
 
-  private manualGoGateToken: number = 0
-  private manualGoGateActive: boolean = false
+  private manualGoToken: number = 0
+  private manualGoActive: boolean = false
   private manualGoLastSentAtMs: number = 0
 
   private routeStartVoicePlayed: boolean = false
-
-  private gateDepartInProgress: boolean = false
-  private gateDepartLastSentKey: string = ''
-  private gateDepartLastSentAtMs: number = 0
-  private readonly gateDepartLastSentAtByFlowKey: Map<string, number> = new Map<string, number>()
 
   private logicalHeadingDeg: number = 0
   private logicalHeadingInited: boolean = false
@@ -229,10 +195,6 @@ export class Page1Coordinator {
   private parkingUltrasonicPending: boolean = false
   private parkingUltrasonicRequestAtMs: number = 0
   private parkingUltrasonicExpireAtMs: number = 0
-  private parkingAwaitingUltrasonicDecision: boolean = false
-  private parkingAwaitingArrivedId: string = ''
-  private parkingAwaitingGoalId: string = ''
-  private parkingAwaitingRequestedAtMs: number = 0
   private parkingUltrasonicDecisionBusy: boolean = false
   private lastAutoActionFingerprint: string = ''
   private lastAutoActionDedupLogAtMs: number = 0
@@ -262,51 +224,6 @@ export class Page1Coordinator {
   private suppressAckCompleteEdgeId: string = ''
   private pendingDrivingUltrasonicObstacleEdgeId: string = ''
   private pendingDrivingUltrasonicObstacleAtMs: number = 0
-  private garageDepartStopSent: boolean = false
-  private garageDepartReady03: boolean = false
-  private garageDepartAckWatchTimerId: number = -1
-  private garageDepartAckRetryCount: number = 0
-  private garageFinalCarportSent: boolean = false
-  private garageWaitingParkDone04: boolean = false
-  private garagePendingCarportLevel: number = 0
-  private garageCarportAckWatchTimerId: number = -1
-  private garageCarportAckPending: boolean = false
-  private garageCarportAckRetryDone: boolean = false
-  private garageCarportAckPendingLevel: number = 0
-  private garageCarportAckSentAtMs: number = 0
-  private garageF7StartRiseSent: boolean = false
-  private garageF7DestLowSent: boolean = false
-  private garageLowcarportAckPending: boolean = false
-  private garageLowcarportAckSentAtMs: number = 0
-  private lowcarAwaitingBc05: boolean = false
-  private lowcarAwaitingBc05SinceMs: number = 0
-  private lowcarAwaitingBc05LastLogAtMs: number = 0
-  private trafficGateWaiting: boolean = false
-  private trafficGateEdgeKey: string = ''
-  private trafficGateLastLogAtMs: number = 0
-  private trafficGateResumeManual: boolean = false
-  private trafficGateRetryBusy: boolean = false
-  private trafficGateGreenStreak: number = 0
-  private trafficGateLastSignalKey: string = ''
-  private trafficGateLastSignal: string = 'UNKNOWN'
-  private trafficGateResumeModelAfterPass: boolean = false
-  private trafficGateBypassEdgeKey: string = ''
-  private trafficGateBypassUntilMs: number = 0
-  private trafficGateAwaitGreenAck02: boolean = false
-  private trafficGateGreenAckEdgeKey: string = ''
-  private trafficGateGreenAckResumeManual: boolean = false
-  private trafficGateGreenAckInFlight: boolean = false
-  private trafficGateGreenAckSeen01: boolean = false
-  private trafficGateRedSendInFlight: boolean = false
-  private trafficGateLastSentSignal: string = ''
-  private trafficGateLastSentSignalAtMs: number = 0
-  private trafficGateLastGreenAckAtMs: number = 0
-  private trafficGateMergeLogKey: string = ''
-  private trafficGateMergeLogAtMs: number = 0
-  private trafficGateMergeLogCount: number = 0
-  private gateBillingRunning: boolean = false
-  private gateBillingStartAtMs: number = 0
-  private gateBillingElapsedMs: number = 0
   private motionCommandBlockUntilMs: number = 0
   private motionCommandBlockReason: string = ''
   private motionCommandBlockLastLogAtMs: number = 0
@@ -655,7 +572,7 @@ export class Page1Coordinator {
     this.armLightMetricQuery()
     s.bumpTx()
     try {
-      await this.proto.light()
+      // legacy removed
       s.pushLog('LIGHT: 页面启动后首次连接，已执行一次光照查询')
     } catch (_) {
       s.pushLog('LIGHT: 页面启动后光照查询发送失败（本次页面不再重试）')
@@ -718,7 +635,6 @@ export class Page1Coordinator {
 
     try {
       this.lightMetricQueriedOnPageOpen = false
-      this.startSimulator()
       this.bootstrapRecognitionCenter()
 
       const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
@@ -750,36 +666,11 @@ export class Page1Coordinator {
     this.cancelParkingSequence()
     this.clearPendingFrameDestApply()
     this.clearAheadVisionReplanState()
-    this.manualGoGateToken += 1
-    this.manualGoGateActive = false
-    this.gateDepartInProgress = false
-    this.resetGateDepartDedupState()
+    this.manualGoToken += 1
+    this.manualGoActive = false
     this.resetAutoActionDedupState()
     this.resetPathAckState()
     this.resetGarageFlowState()
-    this.trafficGateWaiting = false
-    this.trafficGateEdgeKey = ''
-    this.trafficGateLastLogAtMs = 0
-    this.trafficGateResumeManual = false
-    this.trafficGateRetryBusy = false
-    this.trafficGateGreenStreak = 0
-    this.trafficGateLastSignalKey = ''
-    this.trafficGateLastSignal = 'UNKNOWN'
-    this.trafficGateResumeModelAfterPass = false
-    this.trafficGateBypassEdgeKey = ''
-    this.trafficGateBypassUntilMs = 0
-    this.trafficGateAwaitGreenAck02 = false
-    this.trafficGateGreenAckEdgeKey = ''
-    this.trafficGateGreenAckResumeManual = false
-    this.trafficGateGreenAckInFlight = false
-    this.trafficGateGreenAckSeen01 = false
-    this.trafficGateRedSendInFlight = false
-    this.trafficGateLastSentSignal = ''
-    this.trafficGateLastSentSignalAtMs = 0
-    this.trafficGateLastGreenAckAtMs = 0
-    this.trafficGateMergeLogKey = ''
-    this.trafficGateMergeLogAtMs = 0
-    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -807,7 +698,6 @@ export class Page1Coordinator {
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
-    this.stopSimulator()
     this.rxDecoder.reset()
     await this.disconnectTcp()
   }
@@ -821,36 +711,11 @@ export class Page1Coordinator {
     this.cancelParkingSequence()
     this.clearPendingFrameDestApply()
     this.clearAheadVisionReplanState()
-    this.manualGoGateToken += 1
-    this.manualGoGateActive = false
-    this.gateDepartInProgress = false
-    this.resetGateDepartDedupState()
+    this.manualGoToken += 1
+    this.manualGoActive = false
     this.resetAutoActionDedupState()
     this.resetPathAckState()
     this.resetGarageFlowState()
-    this.trafficGateWaiting = false
-    this.trafficGateEdgeKey = ''
-    this.trafficGateLastLogAtMs = 0
-    this.trafficGateResumeManual = false
-    this.trafficGateRetryBusy = false
-    this.trafficGateGreenStreak = 0
-    this.trafficGateLastSignalKey = ''
-    this.trafficGateLastSignal = 'UNKNOWN'
-    this.trafficGateResumeModelAfterPass = false
-    this.trafficGateBypassEdgeKey = ''
-    this.trafficGateBypassUntilMs = 0
-    this.trafficGateAwaitGreenAck02 = false
-    this.trafficGateGreenAckEdgeKey = ''
-    this.trafficGateGreenAckResumeManual = false
-    this.trafficGateGreenAckInFlight = false
-    this.trafficGateGreenAckSeen01 = false
-    this.trafficGateRedSendInFlight = false
-    this.trafficGateLastSentSignal = ''
-    this.trafficGateLastSentSignalAtMs = 0
-    this.trafficGateLastGreenAckAtMs = 0
-    this.trafficGateMergeLogKey = ''
-    this.trafficGateMergeLogAtMs = 0
-    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -877,7 +742,6 @@ export class Page1Coordinator {
     this.clearMotionCommandBlock()
     this.stopActiveMotion()
     this.actionScheduler.reset()
-    this.stopSimulator()
     this.rxDecoder.reset()
     void this.disconnectTcp()
   }
@@ -907,36 +771,11 @@ export class Page1Coordinator {
     this.cancelParkingSequence()
     this.clearPendingFrameDestApply()
     this.clearAheadVisionReplanState()
-    this.manualGoGateToken += 1
-    this.manualGoGateActive = false
-    this.gateDepartInProgress = false
-    this.resetGateDepartDedupState()
+    this.manualGoToken += 1
+    this.manualGoActive = false
     this.resetAutoActionDedupState()
     this.resetPathAckState()
     this.resetGarageFlowState()
-    this.trafficGateWaiting = false
-    this.trafficGateEdgeKey = ''
-    this.trafficGateLastLogAtMs = 0
-    this.trafficGateResumeManual = false
-    this.trafficGateRetryBusy = false
-    this.trafficGateGreenStreak = 0
-    this.trafficGateLastSignalKey = ''
-    this.trafficGateLastSignal = 'UNKNOWN'
-    this.trafficGateResumeModelAfterPass = false
-    this.trafficGateBypassEdgeKey = ''
-    this.trafficGateBypassUntilMs = 0
-    this.trafficGateAwaitGreenAck02 = false
-    this.trafficGateGreenAckEdgeKey = ''
-    this.trafficGateGreenAckResumeManual = false
-    this.trafficGateGreenAckInFlight = false
-    this.trafficGateGreenAckSeen01 = false
-    this.trafficGateRedSendInFlight = false
-    this.trafficGateLastSentSignal = ''
-    this.trafficGateLastSentSignalAtMs = 0
-    this.trafficGateLastGreenAckAtMs = 0
-    this.trafficGateMergeLogKey = ''
-    this.trafficGateMergeLogAtMs = 0
-    this.trafficGateMergeLogCount = 0
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
@@ -1019,20 +858,12 @@ export class Page1Coordinator {
     onTcpDataOp(this as object, data)
   }
 
-  private parseTelemetryFrom55(prev: CarTelemetry, f: CarFrame55): CarTelemetry | undefined {
-    return parseTelemetryFrom55Op(this as object, prev, f)
-  }
-
   private clearPendingFrameDestApply(): void {
     clearPendingFrameDestApplyOp(this as object)
   }
 
   private scheduleFrameDestApply(destNodeId: string): void {
     scheduleFrameDestApplyOp(this as object, destNodeId)
-  }
-
-  private logFrame55(s: Page1UiStore, f: CarFrame55): void {
-    logFrame55Op(this as object, s, f)
   }
 
   private byteToHex(v: number): string {
@@ -1053,14 +884,6 @@ export class Page1Coordinator {
 
   private isParkingUltrasonicResponseContext(nowMs: number): boolean {
     return isParkingUltrasonicResponseContextOp(this as object, nowMs)
-  }
-
-  private decodeLuxFromBbFrame(f: CarFrame55): number {
-    return decodeLuxFromBbFrameOp(f)
-  }
-
-  private appendDiagKeyRxFrame(f: CarFrame55, summary: string): void {
-    appendDiagKeyRxFrameOp(this as object, f, summary)
   }
 
   private async connectTcp(ip: string, port: number): Promise<void> {
@@ -1106,18 +929,12 @@ export class Page1Coordinator {
       s.pushLog(`自定义控制拦截：${hexCode}，发送锁未释放`)
       return
     }
-    if (safeCode === 0x01) {
-      if (maybeBlockGoByTrafficGate(this as object, Date.now(), true)) {
-        s.setAction(`自定义0x0A=${hexCode} 被红绿灯门禁阻塞`)
-        s.pushLog(`自定义控制拦截：${hexCode}，等待绿灯放行`)
-        return
-      }
-    }
+    // 门控已下线：不再拦截前进行为。
     this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
     s.bumpTx()
     s.setAction(`自定义0x0A=${hexCode}`)
     s.pushLog(`自定义控制发送：${hexCode}`)
-    await this.proto.sendCustomControl0A(safeCode, `自定义0x0A=${hexCode}`)
+    // legacy removed
     if (safeCode === 0x01) this.previewManualActionOnMap(Page1Action.GO)
     else if (safeCode === 0x02) this.previewManualActionOnMap(Page1Action.BACK)
     else if (safeCode === 0x03) this.previewManualActionOnMap(Page1Action.LEFT)
@@ -1129,6 +946,226 @@ export class Page1Coordinator {
       if (motionKey && typeof this.leaveMotionDispatch === 'function') {
         this.leaveMotionDispatch(`CUSTOM_0A:${motionKey}`)
       }
+    }
+  }
+
+  async sendCustomGroupCommand(group: number, subCode: number, ext?: Uint8Array): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const g: number = group & 0xFF
+    const sub: number = subCode & 0xFF
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    const modeText: string = this.canRealSend() ? 'CCF5' : 'DRY_RUN'
+    let seq: number = 0
+    if (this.canRealSend()) {
+      s.bumpTx()
+      if (g === 0x0A) seq = await this.proto.Send0A(sub, ext, false, true)
+      else if (g === 0x0B) seq = await this.proto.Send0B(sub, ext, false, true)
+      else if (g === 0x0C) seq = await this.proto.Send0C(sub, ext, true, true)
+      else {
+        s.pushLog(`自定义发送失败：不支持组 0x${g.toString(16).toUpperCase().padStart(2, '0')}`)
+        return
+      }
+      s.pushLog(`自定义发送(${modeText})：group=0x${g.toString(16).toUpperCase().padStart(2, '0')} sub=0x${sub.toString(16).toUpperCase().padStart(2, '0')} extLen=${ext ? ext.length : 0} seq=${seq}`)
+    } else {
+      s.pushLog(`自定义发送(${modeText})：group=0x${g.toString(16).toUpperCase().padStart(2, '0')} sub=0x${sub.toString(16).toUpperCase().padStart(2, '0')} extLen=${ext ? ext.length : 0}`)
+    }
+  }
+
+  async sendCurrentNodeByMapClick(nodeId: string, dir: string | number = 'N'): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.sendCurrentNode(id, dir)
+      s.pushLog(`当前位置上报(CCF5)：node=${id} dir=${String(dir)} seq=${seq}`)
+    } else {
+      s.pushLog(`当前位置上报(DRY_RUN)：node=${id} dir=${String(dir)}`)
+    }
+  }
+
+  async sendObstacleEdgeByMapClick(fromNodeId: string, toNodeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const a: string = (fromNodeId || '').trim().toUpperCase()
+    const b: string = (toNodeId || '').trim().toUpperCase()
+    if (a.length !== 2 || b.length !== 2) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setObstacleEdge(a, b, true)
+      s.pushLog(`障碍上报(CCF5): edge=${a}|${b} seq=${seq}`)
+    } else {
+      s.pushLog(`障碍上报(DRY_RUN): edge=${a}|${b}`)
+    }
+  }
+
+  async sendObstaclePointByMapClick(nodeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.sendObstaclePoint(id)
+      s.pushLog(`障碍上报(CCF5): node=${id} seq=${seq}`)
+    } else {
+      s.pushLog(`障碍上报(DRY_RUN): node=${id}`)
+    }
+  }
+
+  async resetNetworkMap(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearMapSetupState()
+    s.setAction('地图配置已清空')
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    try {
+      if (this.canRealSend()) {
+        s.bumpTx()
+        const seq: number = await this.proto.resetNetworkMap()
+        s.pushLog(`清图(CCF5): seq=${seq}`)
+      } else {
+        s.pushLog('清图(DRY_RUN)')
+      }
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`清图发送失败: ${msg}`)
+    }
+  }
+
+  async sendTrafficLightByMapEdge(edgeId: string, dir: string | number): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const seg = RouteEdgeCodec.parse((edgeId || '').trim().toUpperCase())
+    if (!seg) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setTrafficLightNode(seg.a, seg.b, dir, true)
+      s.pushLog(`红绿灯上报(CCF5): edge=${seg.a}|${seg.b} dir=${String(dir)} seq=${seq}`)
+    } else {
+      s.pushLog(`红绿灯上报(DRY_RUN): edge=${seg.a}|${seg.b} dir=${String(dir)}`)
+    }
+  }
+
+  async clearTrafficLightsByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearTrafficLightPoints()
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.clearTrafficLightNode()
+      s.pushLog(`清除红绿灯(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('清除红绿灯(DRY_RUN)')
+    }
+  }
+
+  async sendBarrierByMapEdge(edgeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const seg = RouteEdgeCodec.parse((edgeId || '').trim().toUpperCase())
+    if (!seg) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setBarrierPosition(seg.a, seg.b, true)
+      s.pushLog(`道闸上报(CCF5): edge=${seg.a}|${seg.b} seq=${seq}`)
+    } else {
+      s.pushLog(`道闸上报(DRY_RUN): edge=${seg.a}|${seg.b}`)
+    }
+  }
+
+  async clearBarrierByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearGatePoints()
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.clearBarrier()
+      s.pushLog(`清除道闸(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('清除道闸(DRY_RUN)')
+    }
+  }
+
+  async sendSpecialSegmentByMapEdge(edgeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const seg = RouteEdgeCodec.parse((edgeId || '').trim().toUpperCase())
+    if (!seg) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setSpecialSegment(seg.a, seg.b, true)
+      s.pushLog(`特殊路段上报(CCF5): edge=${seg.a}|${seg.b} seq=${seq}`)
+    } else {
+      s.pushLog(`特殊路段上报(DRY_RUN): edge=${seg.a}|${seg.b}`)
+    }
+  }
+
+  async clearSpecialSegmentByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearSpecialRoadPoints()
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.clearSpecialSegment()
+      s.pushLog(`清除特殊路段(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('清除特殊路段(DRY_RUN)')
+    }
+  }
+
+  async setGarageByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const nodeId: string = (s.currentSnapNodeId || '').trim().toUpperCase()
+    if (nodeId.length !== 2) {
+      s.pushLog('设置车库失败：当前点位无效')
+      return
+    }
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setGaragePosition(nodeId)
+      s.pushLog(`设置车库(CCF5): node=${nodeId} seq=${seq}`)
+    } else {
+      s.pushLog(`设置车库(DRY_RUN): node=${nodeId}`)
+    }
+  }
+
+  async stopTaskByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.stopTask()
+      s.pushLog(`停止任务(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('停止任务(DRY_RUN)')
+    }
+  }
+
+  async resumeTaskByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.pauseTask()
+      s.pushLog(`继续任务(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('继续任务(DRY_RUN)')
     }
   }
 
@@ -1176,7 +1213,7 @@ export class Page1Coordinator {
     markPathCommandSentOp(this as object, actionText)
   }
 
-  private onPathAckFrame(f: CarFrame55): void {
+  private onPathAckFrame(f: any): void {
     onPathAckFrameOp(this as object, f)
   }
 
@@ -1212,14 +1249,6 @@ export class Page1Coordinator {
     flushDrivingUltrasonicObstacleAfterAckOp(this as object)
   }
 
-  private resetGateDepartDedupState(): void {
-    resetGateDepartDedupStateOp(this as object)
-  }
-
-  private gateDepartSendKey(curId: string, nextId: string): string {
-    return gateDepartSendKeyOp(curId, nextId)
-  }
-
   private async maybePlayRouteStartVoice(): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
@@ -1253,19 +1282,12 @@ export class Page1Coordinator {
     await maybeHandleMotionArriveOp(this as object, toId)
   }
 
-  private gateBillingIntervalMs(nowMs: number): number {
-    if (this.gateBillingRunning && this.gateBillingStartAtMs > 0) {
-      return Math.max(0, nowMs - this.gateBillingStartAtMs)
-    }
-    return Math.max(0, this.gateBillingElapsedMs)
-  }
-
   private uploadTrajectoryNode(nodeId: string): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
     const id: string = nodeId.trim().toUpperCase()
     if (id.length <= 0) return
-    const intervalMs: number = this.gateBillingIntervalMs(Date.now())
+    const intervalMs: number = 0
     void saveCarTrajectoryByNode(id, intervalMs, {
       startPoint: this.trajectoryPlanStartPoint,
       endPoint: this.trajectoryPlanEndPoint
@@ -1385,10 +1407,6 @@ export class Page1Coordinator {
   private cancelParkingSequence(): void {
     this.parkingSequenceToken += 1
     this.parkingInProgress = false
-    this.parkingAwaitingUltrasonicDecision = false
-    this.parkingAwaitingArrivedId = ''
-    this.parkingAwaitingGoalId = ''
-    this.parkingAwaitingRequestedAtMs = 0
     this.parkingUltrasonicDecisionBusy = false
   }
 
@@ -1517,493 +1535,15 @@ export class Page1Coordinator {
   }
 
   private resetGarageFlowState(): void {
-    this.clearGarageDepartAckWatch()
-    this.clearGarageCarportAckWatch()
-    this.garageDepartStopSent = false
-    this.garageDepartReady03 = false
-    this.garageFinalCarportSent = false
-    this.garageWaitingParkDone04 = false
-    this.garagePendingCarportLevel = 0
-    this.garageF7StartRiseSent = false
-    this.garageF7DestLowSent = false
-    this.clearGarageLowcarportAckWait()
-    this.lowcarAwaitingBc05 = false
-    this.lowcarAwaitingBc05SinceMs = 0
-    this.lowcarAwaitingBc05LastLogAtMs = 0
-    this.gateBillingRunning = false
-    this.gateBillingStartAtMs = 0
-    this.gateBillingElapsedMs = 0
-    this.parkingAwaitingUltrasonicDecision = false
-    this.parkingAwaitingArrivedId = ''
-    this.parkingAwaitingGoalId = ''
-    this.parkingAwaitingRequestedAtMs = 0
     this.parkingUltrasonicDecisionBusy = false
-  }
-
-  private clearGarageDepartAckWatch(): void {
-    if (this.garageDepartAckWatchTimerId >= 0) {
-      clearTimeout(this.garageDepartAckWatchTimerId)
-      this.garageDepartAckWatchTimerId = -1
-    }
-    this.garageDepartAckRetryCount = 0
-  }
-
-  private armGarageDepartAckRetry(startId: string): void {
-    if (this.garageDepartAckWatchTimerId >= 0) {
-      clearTimeout(this.garageDepartAckWatchTimerId)
-      this.garageDepartAckWatchTimerId = -1
-    }
-    this.garageDepartAckWatchTimerId = setTimeout((): void => {
-      this.garageDepartAckWatchTimerId = -1
-      void this.retryGarageDepartLowcarport(startId)
-    }, 2000) as number
-  }
-
-  private async retryGarageDepartLowcarport(startId: string): Promise<void> {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    if (typeof this.acquireMotionDispatch === 'function') {
-      await this.acquireMotionDispatch('RETRY:GARAGE_LOWCARPORT')
-    }
-    try {
-    if (this.garageDepartReady03) {
-      this.clearGarageDepartAckWatch()
-      return
-    }
-    if (!this.garageDepartStopSent) return
-    if (!s.realSendEnabled || !this.canRealSend()) {
-      this.armGarageDepartAckRetry(startId)
-      return
-    }
-    if (this.garageDepartAckRetryCount >= 3) {
-      const payloadText: string = 'textone1 GARAGE_DEPART retry_stop max=3 no_BC_03'
-      hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-      s.pushLog(`GARAGE_DEPART: 0x19重发达上限(3)，仍未收到BC/03 start=${startId}`)
-      return
-    }
-    if (!this.canSendMotionCommand('LOWCARPORT', 'GARAGE_DEPART_RETRY')) {
-      this.armGarageDepartAckRetry(startId)
-      return
-    }
-
-    this.garageDepartAckRetryCount += 1
-    s.bumpTx()
-    await this.proto.lowcarport()
-    if (this.canRealSend()) this.armGarageLowcarportAckWait()
-    {
-      const payloadText: string = `textone1 GARAGE_DEPART retry_send_0x19 count=${this.garageDepartAckRetryCount}`
-      hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-    }
-    s.pushLog(`GARAGE_DEPART: 2s未收到BC/03，重发0x19 count=${this.garageDepartAckRetryCount}`)
-    this.armGarageDepartAckRetry(startId)
-    } finally {
-      if (typeof this.leaveMotionDispatch === 'function') {
-        this.leaveMotionDispatch('RETRY:GARAGE_LOWCARPORT')
-      }
-    }
-  }
-
-  private clearGarageCarportAckWatch(): void {
-    if (this.garageCarportAckWatchTimerId >= 0) {
-      clearTimeout(this.garageCarportAckWatchTimerId)
-      this.garageCarportAckWatchTimerId = -1
-    }
-    this.garageCarportAckPending = false
-    this.garageCarportAckRetryDone = false
-    this.garageCarportAckPendingLevel = 0
-    this.garageCarportAckSentAtMs = 0
-  }
-
-  private clearGarageLowcarportAckWait(): void {
-    this.garageLowcarportAckPending = false
-    this.garageLowcarportAckSentAtMs = 0
-  }
-
-  private armGarageLowcarportAckWait(): void {
-    this.garageLowcarportAckPending = true
-    this.garageLowcarportAckSentAtMs = Date.now()
-  }
-
-  private armGarageCarportAckRetry(level: number): void {
-    this.garageCarportAckPending = true
-    this.garageCarportAckRetryDone = false
-    this.garageCarportAckPendingLevel = level
-    this.garageCarportAckSentAtMs = Date.now()
-
-    if (this.garageCarportAckWatchTimerId >= 0) {
-      clearTimeout(this.garageCarportAckWatchTimerId)
-      this.garageCarportAckWatchTimerId = -1
-    }
-
-    this.garageCarportAckWatchTimerId = setTimeout((): void => {
-      this.garageCarportAckWatchTimerId = -1
-      if (!this.garageCarportAckPending || this.garageCarportAckRetryDone) return
-      this.garageCarportAckRetryDone = true
-      void this.retryGarageCarportAfterAckTimeout()
-    }, 2000) as number
-  }
-
-  private async retryGarageCarportAfterAckTimeout(): Promise<void> {
-    if (typeof this.acquireMotionDispatch === 'function') {
-      await this.acquireMotionDispatch('RETRY:GARAGE_CARPORT')
-    }
-    try {
-    if (!this.garageCarportAckPending) return
-    const s: Page1UiStore | undefined = this.store
-    const level: number = this.garageCarportAckPendingLevel
-    if (level < 2 || level > 4) {
-      this.clearGarageCarportAckWatch()
-      return
-    }
-    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-    if (s) {
-      s.bumpTx()
-      s.pushLog(`GARAGE_CARPORT_RETRY: 2s未收到0xBD/0x01，重发 carport(${level})`)
-      s.setAction(`garage carport retry level=${level}`)
-    }
-    if (!this.canSendMotionCommand(`CARPORT_${level}`, 'GARAGE_RETRY')) {
-      return
-    }
-    await this.proto.carport(level)
-    this.garageCarportAckSentAtMs = Date.now()
-    } finally {
-      if (typeof this.leaveMotionDispatch === 'function') {
-        this.leaveMotionDispatch('RETRY:GARAGE_CARPORT')
-      }
-    }
   }
 
   private onPathAckReceived01(): void {
     if (this.emergencyAlarmBurstActive) {
       this.emergencyAlarmBurstAckAtMs = Date.now()
     }
-    if (!this.garageCarportAckPending) return
-    const s: Page1UiStore | undefined = this.store
-    const level: number = this.garageCarportAckPendingLevel
-    const elapsedMs: number = this.garageCarportAckSentAtMs > 0 ? Math.max(0, Date.now() - this.garageCarportAckSentAtMs) : 0
-    this.clearGarageCarportAckWatch()
-    if (s) s.pushLog(`GARAGE_CARPORT_ACK: 收到0xBD/0x01 level=${level} elapsed=${elapsedMs}ms`)
   }
 
-  private releaseStaleGarageAckWaitIfNeeded(nowMs: number): void {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-
-    if (this.garageCarportAckPending) {
-      const elapsedMs: number = this.garageCarportAckSentAtMs > 0 ? Math.max(0, nowMs - this.garageCarportAckSentAtMs) : 0
-      if (elapsedMs >= GARAGE_CARPORT_ACK_RELEASE_TIMEOUT_MS) {
-        const level: number = this.garageCarportAckPendingLevel
-        this.clearGarageCarportAckWatch()
-        s.pushLog(`GARAGE_CARPORT_ACK: 等待超时(${elapsedMs}ms) level=${level}，解除指令阻塞`)
-      }
-    }
-
-    if (this.garageLowcarportAckPending) {
-      const elapsedMs: number = this.garageLowcarportAckSentAtMs > 0 ? Math.max(0, nowMs - this.garageLowcarportAckSentAtMs) : 0
-      if (elapsedMs >= GARAGE_LOWCARPORT_ACK_RELEASE_TIMEOUT_MS) {
-        this.clearGarageLowcarportAckWait()
-        s.pushLog(`GARAGE_LOWCARPORT_ACK: 等待BC/03超时(${elapsedMs}ms)，解除指令阻塞`)
-      }
-    }
-  }
-
-  private async onGateEnterAckCompleted(fromId: string, toId: string): Promise<void> {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    const from: string = fromId.trim().toUpperCase()
-    const to: string = toId.trim().toUpperCase()
-    if (from !== 'B4' || to !== 'B2') return
-
-    // billing 已废弃：道闸计时改为在 B2->B4 depart 发送时开始，B4->B2 depart 发送时结束。
-    s.pushLog('GATE_BILLING: 忽略旧的 GO-ACK billing 流程，当前使用 depart 起止计时')
-  }
-
-  private isGarageTerminalNode(nodeId: string): boolean {
-    return this.isSmartParkingGoal(nodeId)
-  }
-
-  private smartParkingGoalId(): string {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return 'F7'
-    return s.smartParkingGoalId()
-  }
-
-  private isSmartParkingGoal(goalId: string): boolean {
-    const x: string = goalId.trim().toUpperCase()
-    return x.length > 0 && x === this.smartParkingGoalId()
-  }
-
-  private async maybeHandleGarageDepartBeforeDrive(_nowMs: number): Promise<boolean> {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return false
-    {
-      const payloadText: string =
-        `textone1 GARAGE_DEPART enter realSend=${s.realSendEnabled ? 1 : 0} conn=${s.connText} ` +
-        `startSent=${this.garageDepartStopSent ? 1 : 0} ready03=${this.garageDepartReady03 ? 1 : 0}`
-      hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-    }
-    if (s.pathNodes.length <= 1) return false
-
-    const startId: string = s.pathNodes[0].trim().toUpperCase()
-    if (!this.isGarageTerminalNode(startId)) return false
-    if (s.pathIndex !== 0) return false
-
-    const curId: string = s.currentSnapNodeId.trim().toUpperCase()
-    if (curId.length > 0 && curId !== startId) return false
-
-    if (this.garageDepartReady03) return false
-
-    if (!this.garageDepartStopSent) {
-      this.garageDepartStopSent = true
-      s.setAction(`garage depart wait(BC/03) from ${startId}`)
-      {
-        const payloadText: string = `textone1 GARAGE_DEPART try_send_0x19 start=${startId}`
-        hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-      }
-      if (this.canRealSend()) {
-        s.bumpTx()
-        if (!this.canSendMotionCommand('LOWCARPORT', 'GARAGE_DEPART')) {
-          const payloadText: string = 'textone1 GARAGE_DEPART blocked LOWCARPORT by motion guard'
-          hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-          return true
-        }
-        if (typeof this.acquireMotionDispatch === 'function') {
-          await this.acquireMotionDispatch('FLOW:GARAGE_DEPART_FIRST_0x19')
-        }
-        try {
-          await this.proto.lowcarport()
-        } finally {
-          if (typeof this.leaveMotionDispatch === 'function') {
-            this.leaveMotionDispatch('FLOW:GARAGE_DEPART_FIRST_0x19')
-          }
-        }
-        this.markPathCommandSent('车库调至一层并获取当前层数')
-        if (this.canRealSend()) this.armGarageLowcarportAckWait()
-        {
-          const payloadText: string = 'textone1 GARAGE_DEPART sent_0x19 lowcarport'
-          hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-        }
-        this.armGarageDepartAckRetry(startId)
-        s.pushLog(`GARAGE_DEPART: lowcarport sent at ${startId}, wait BC/03`)
-      } else {
-        if (s.realSendEnabled) {
-          // 用户已切到真车模式但链路尚未连接：不能直接 bypass，否则后续不会再发 0x19。
-          this.garageDepartStopSent = false
-          {
-            const payloadText: string = 'textone1 GARAGE_DEPART waiting_tcp_connected_for_0x19'
-            hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-          }
-          s.pushLog(`GARAGE_DEPART: wait TCP connected before lowcarport at ${startId}`)
-          return true
-        }
-        // 纯 DRY_RUN 才允许直接放行。
-        this.garageDepartReady03 = true
-        {
-          const payloadText: string = 'textone1 GARAGE_DEPART dry_run_bypass'
-          hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-        }
-        s.pushLog(`GARAGE_DEPART: DRY_RUN bypass at ${startId}`)
-        return false
-      }
-    }
-    return true
-  }
-
-  private onGarageDepartReadyAck(): void {
-    const s: Page1UiStore | undefined = this.store
-    this.clearGarageDepartAckWatch()
-    this.clearGarageLowcarportAckWait()
-    this.garageDepartReady03 = true
-    if (s) {
-      const payloadText: string = 'textone1 GARAGE_DEPART recv_BC_03'
-      hilog.info(TEXTONE1_DOMAIN, TEXTONE1_TAG, 'send payload: %{public}s', payloadText)
-      s.pushLog('GARAGE_DEPART: recv BC/03, drive enabled')
-      s.setAction('车库出库就绪')
-    }
-  }
-
-  private beginGarageWaitParkDone04(level: number): void {
-    const s: Page1UiStore | undefined = this.store
-    this.garageWaitingParkDone04 = true
-    this.garagePendingCarportLevel = 2
-    if (s) {
-      s.pushLog(`GARAGE_PARKING: wait BC/04 then carport(${this.garagePendingCarportLevel})`)
-      s.setAction('车库停车等待 BC/04')
-    }
-  }
-
-  private onGarageParkDone04(): void {
-    const s: Page1UiStore | undefined = this.store
-    if (this.garageFinalCarportSent) {
-      if (s) s.pushLog('GARAGE_PARK_DONE: BC/04 ignored (already sent)')
-      return
-    }
-
-    if (!this.garageWaitingParkDone04) {
-      const smartGoalId: string = this.smartParkingGoalId()
-      const curId: string = s ? s.currentSnapNodeId.trim().toUpperCase() : ''
-      const destId: string = s ? s.destApplied.trim().toUpperCase() : ''
-      const atSmartGoal: boolean = curId === smartGoalId || destId === smartGoalId
-      if (!atSmartGoal) {
-        if (s) s.pushLog('GARAGE_PARK_DONE: BC/04 ignored (not waiting)')
-        return
-      }
-      if (s) s.pushLog(`GARAGE_PARK_DONE: BC/04 fallback trigger at ${smartGoalId}`)
-    } else {
-      this.garageWaitingParkDone04 = false
-    }
-
-    const level: number = this.garagePendingCarportLevel > 0 ? this.garagePendingCarportLevel : 2
-    this.garagePendingCarportLevel = 0
-    this.garageFinalCarportSent = true
-    void this.sendGarageCarportAfterParkDone(level)
-  }
-
-  private async sendGarageCarportAfterParkDone(level: number): Promise<void> {
-    if (typeof this.acquireMotionDispatch === 'function') {
-      await this.acquireMotionDispatch('FLOW:GARAGE_PARK_DONE')
-    }
-    try {
-    const s: Page1UiStore | undefined = this.store
-    const targetLevel: number = 2
-    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-    if (s) {
-      s.pushLog(`GARAGE_PARK_DONE: BC/04 -> carport(${targetLevel})`)
-      s.setAction(`garage carport level=${targetLevel}`)
-      s.bumpTx()
-    }
-    // 根因修复：BC/04 后的 carport(0x18) 是车库收尾关键动作，不应被全局发送锁延后到其它 ACK 之后。
-    if (this.isMotionCommandBlocked() && s) {
-      const nowMs: number = Date.now()
-      const remainMs: number = Math.max(0, this.motionCommandBlockUntilMs - nowMs)
-      s.pushLog(
-        `[cnmdc] CARPORT_BYPASS_SEND_LOCK: key=CARPORT_${targetLevel} remain=${remainMs}ms reason=${this.motionCommandBlockReason}`
-      )
-    }
-    await this.proto.carport(targetLevel)
-    if (s) s.pushLog(`[cnmdc] CARPORT_SENT: key=CARPORT_${targetLevel} cmd=0x18`)
-    if (this.canRealSend()) this.armGarageCarportAckRetry(targetLevel)
-    } finally {
-      if (typeof this.leaveMotionDispatch === 'function') {
-        this.leaveMotionDispatch('FLOW:GARAGE_PARK_DONE')
-      }
-    }
-  }
-
-  private async maybeHandleGarageFinalArrive(toId: string): Promise<void> {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    const id: string = toId.trim().toUpperCase()
-    if (!this.isGarageTerminalNode(id)) return
-    // 车库流程现在由到达前超声波 + BC/04 握手驱动。
-    s.pushLog(`GARAGE_ARRIVE: ${id} waiting BC/04 to carport`)
-  }
-
-  private async maybeHandleF7GarageSpecialFlowOnArrival(arrivedId: string): Promise<void> {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-
-    const curId: string = arrivedId.trim().toUpperCase()
-    if (!GridIdCodec.isValidId(curId)) return
-
-    // 兜底释放：已离开起点进入路段推进，说明出库 lowcarport 阶段已过去，不再阻塞后续动作（如 F6 升库）。
-    if (this.garageLowcarportAckPending && s.pathIndex > 0) {
-      const elapsedMs: number = this.garageLowcarportAckSentAtMs > 0 ? Math.max(0, Date.now() - this.garageLowcarportAckSentAtMs) : 0
-      this.clearGarageLowcarportAckWait()
-      s.pushLog(`GARAGE_LOWCARPORT_ACK: 路径已推进(pathIndex=${s.pathIndex})，释放等待 elapsed=${elapsedMs}ms`)
-    }
-
-    // Rule 1: if route starts from F7, send carport(2) once when arriving at F6.
-    if (!this.garageF7StartRiseSent) {
-      const startId: string = s.pathNodes.length > 0 ? s.pathNodes[0].trim().toUpperCase() : ''
-      if (startId === 'F7' && curId === 'F6') {
-        if (this.canSendMotionCommand('CARPORT_2', 'F7_START_AT_F6')) {
-          if (typeof this.acquireMotionDispatch === 'function') {
-            await this.acquireMotionDispatch('FLOW:F7_START_CARPORT2')
-          }
-          try {
-            this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-            s.bumpTx()
-            await this.proto.carport(2)
-            this.markPathCommandSent('车库到2层')
-            // F7->F6 升库不再占用全局 ACK 门控，避免吞掉后续路线指令。
-            this.garageF7StartRiseSent = true
-            s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 -> sent carport(2)')
-          } finally {
-            if (typeof this.leaveMotionDispatch === 'function') {
-              this.leaveMotionDispatch('FLOW:F7_START_CARPORT2')
-            }
-          }
-        } else {
-          s.pushLog('GARAGE_F7_FLOW: start=F7, arrived F6 but carport(2) blocked')
-        }
-      }
-    }
-
-    // Rule 2: if destination is F7, when remaining 3 nodes, send lowcar() once then continue.
-    if (!this.garageF7DestLowSent) {
-      const destId: string = s.destApplied.trim().toUpperCase()
-      if (destId === 'F7' && s.pathNodes.length > 1) {
-        const remainingNodes: number = s.pathNodes.length - s.pathIndex
-        if (remainingNodes === 3) {
-          if (s.isBlockedEdge('D6', 'F6')) {
-            this.garageF7DestLowSent = true
-            s.pushLog('GARAGE_F7_FLOW: D6|F6 已阻塞，跳过 lowcar()')
-            return
-          }
-          if (this.canSendMotionCommand('LOWCAR', 'F7_DEST_PRE3')) {
-            if (typeof this.acquireMotionDispatch === 'function') {
-              await this.acquireMotionDispatch('FLOW:F7_DEST_LOWCAR')
-            }
-            try {
-              this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-              s.bumpTx()
-              await this.proto.lowcar()
-              this.markPathCommandSent('车库调至一层不会获取当前层数')
-              this.garageF7DestLowSent = true
-              s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 -> sent lowcar()')
-            } finally {
-              if (typeof this.leaveMotionDispatch === 'function') {
-                this.leaveMotionDispatch('FLOW:F7_DEST_LOWCAR')
-              }
-            }
-          } else {
-            s.pushLog('GARAGE_F7_FLOW: dest=F7, remainingNodes=3 but lowcar blocked')
-          }
-        }
-      }
-    }
-  }
-
-  private armLowcarBc05Wait(): void {
-    this.lowcarAwaitingBc05 = true
-    this.lowcarAwaitingBc05SinceMs = Date.now()
-    this.lowcarAwaitingBc05LastLogAtMs = 0
-  }
-
-  private onLowcarDone05(): void {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    const elapsedMs: number = this.lowcarAwaitingBc05SinceMs > 0
-      ? Math.max(0, Date.now() - this.lowcarAwaitingBc05SinceMs)
-      : 0
-
-    this.lowcarAwaitingBc05 = false
-    this.lowcarAwaitingBc05SinceMs = 0
-    this.lowcarAwaitingBc05LastLogAtMs = 0
-
-    const blockedEdgeId: string = 'D6|F6'
-    const added: boolean = s.addBlockedEdgeIfAbsent(blockedEdgeId, 'LOWCAR_BC05')
-    s.pushLog(
-      added
-        ? `LOWCAR_BC05: 收到BC/05，已封禁边 ${blockedEdgeId}，elapsed=${elapsedMs}ms`
-        : `LOWCAR_BC05: 收到BC/05，边已封禁 ${blockedEdgeId}，elapsed=${elapsedMs}ms`
-    )
-
-    if (s.destApplied.length > 0) {
-      void this.followPathOnce(Date.now(), true)
-    }
-  }
 
   private findPendingRouteObstacleOnEdge(edgeId: string, nowMs: number): RouteObstaclePoint | undefined {
     return findPendingRouteObstacleOnEdge(this as object, edgeId, nowMs)
@@ -2025,13 +1565,6 @@ export class Page1Coordinator {
     return isParkingInnerRowNode(id)
   }
 
-  private isInsideGateInnerSideNode(id: string): boolean {
-    return isInsideGateInnerSideNode(id)
-  }
-
-  private gateForcedWaypoint(startId: string, goalId: string): string {
-    return gateForcedWaypoint(this as object, startId, goalId)
-  }
 
   private buildPathViaWaypoint(
     start: string,
@@ -2125,7 +1658,6 @@ export class Page1Coordinator {
   canSendMotionCommand(commandKey: string, sourceTag: string): boolean {
     const nowMs: number = Date.now()
     const s: Page1UiStore | undefined = this.store
-    this.releaseStaleGarageAckWaitIfNeeded(nowMs)
     if (this.emergencyMotionCommandLocked) {
       if (s && nowMs - this.motionCommandBlockLastLogAtMs >= 500) {
         this.motionCommandBlockLastLogAtMs = nowMs
@@ -2200,17 +1732,17 @@ export class Page1Coordinator {
         s.bumpTx()
         this.emergencyAlarmBurstLastSendAtMs = Date.now()
         try {
-          await this.proto.setAlarm(true)
+          // legacy removed
         } catch (_) {}
         s.pushLog(`EMERGENCY_ALARM: ON#${i + 1}/${safeCount} reason=${reason}`)
         if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
-          s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
+          s.pushLog('EMERGENCY_ALARM: 收到新协议ACK，停止后续报警重发')
           break
         }
         if (i + 1 < safeCount && safeIntervalMs > 0) {
           await this.sleep(safeIntervalMs)
           if (this.emergencyAlarmBurstAckAtMs >= this.emergencyAlarmBurstLastSendAtMs) {
-            s.pushLog('EMERGENCY_ALARM: 收到0xBD/01，停止后续报警重发')
+            s.pushLog('EMERGENCY_ALARM: 收到新协议ACK，停止后续报警重发')
             return
           }
         }
@@ -2289,8 +1821,6 @@ export class Page1Coordinator {
     this.cancelMapPoseAnimation()
     this.cancelParkingSequence()
     this.resetGarageFlowState()
-    this.gateDepartInProgress = false
-    this.resetGateDepartDedupState()
     this.resetAutoActionDedupState()
     this.resetPathAckState()
     this.stopActiveMotion()
@@ -2384,32 +1914,10 @@ export class Page1Coordinator {
     await followPathOnce(this as object, nowMs, force)
   }
 
-  private async maybeRunParkingBeforeFinalEdgeArrival(arrivedId: string): Promise<boolean> {
-    return await runParkingBeforeFinalEdgeArrival(this as object, arrivedId)
-  }
-
-  private async onParkingUltrasonicResult(ultrasonicP1: number, recvAtMs: number): Promise<void> {
-    await onParkingUltrasonicResultOp(this as object, ultrasonicP1, recvAtMs)
-  }
-
   private edgeSideOfNode(id: string): EdgeSide {
     const s: Page1UiStore | undefined = this.store
     if (!s) return EdgeSide.NONE
     return Page1CoordinatorGridUtils.edgeSideOfNode(s.gridNodes, id)
-  }
-
-  private isReverseParkingGoal(goalId: string): boolean {
-    return Page1CoordinatorGridUtils.isReverseParkingGoal(goalId)
-  }
-
-  private fallbackParkingGoalOnObstacle(goalId: string): string {
-    const x: string = goalId.trim().toUpperCase()
-    if (x === 'B1') return 'F1'
-    return x
-  }
-
-  private async maybeRunNormalFinalParkingAfterArrival(fromId: string, toId: string): Promise<boolean> {
-    return false
   }
 
   private isLivePathPair(curId: string, nextId: string): boolean {
@@ -2422,9 +1930,6 @@ export class Page1Coordinator {
     return liveCur === curId && liveNext === nextId
   }
 
-  private async maybeHandleGateDepartOnArrival(arrivedId: string): Promise<boolean> {
-    return await runHandleGateDepartOnArrival(this as object, arrivedId)
-  }
 
   private async updateMotionTimeline(nowMs: number): Promise<void> {
     await this.motionPlayer.update(nowMs, this.motionHooks())
@@ -2446,36 +1951,27 @@ export class Page1Coordinator {
     return Page1CoordinatorGridUtils.findNode(s.gridNodes, id)
   }
 
-  private startSimulator(): void {
-    startSimulatorLoop(this as object)
-  }
-
-  private stopSimulator(): void {
-    stopSimulatorLoop(this as object)
-  }
-
   private simAmbientFrontCm(): number {
-    return simAmbientFrontCm(this as object)
+    return 0
   }
 
   private simAmbientBackCm(): number {
-    return simAmbientBackCm(this as object)
+    return 0
   }
 
   private simAmbientIrCm(): number {
-    return simAmbientIrCm(this as object)
+    return 0
   }
 
   private simAmbientLux(): number {
-    return simAmbientLux(this as object)
+    return 0
   }
 
   private async sleep(ms: number): Promise<void> {
-    await sleepMs(ms)
-  }
-
-  private async simulateOnce(): Promise<void> {
-    await simulateOnceLoop(this as object)
+    const waitMs: number = Math.max(0, Math.trunc(ms))
+    await new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => resolve(), waitMs)
+    })
   }
 
   private decodePackedNodeId(v: number): string {
@@ -2520,10 +2016,23 @@ export class Page1Coordinator {
       return false
     }
 
-    await this.proto.yuying(content)
+    // legacy removed
     s.pushLog(`VOICE: 自动播报发送(${content.length}字)`)
     return true
   }
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
+
+
+
+
+
+
+
+
+
+
+
+
+

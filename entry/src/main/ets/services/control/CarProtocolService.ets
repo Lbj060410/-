@@ -1,485 +1,508 @@
 ﻿// @ts-nocheck
-/**
- * 代码指南：
- * 文件： services/control/CarProtocolService.ets
- * 用途： 指令级协议发送器（编码并发送控制、语音、特殊指令）。
- * 何时修改： 新增车辆指令码或修改指令载荷格式时。
- * 相关文件： services/control/CarFrameCodec.ets & services/control/CarTcpService.ets & page1 协调器调用方。
- */
-// entry/src/main/ets/services/control/CarProtocolService.ets
-
-import { CarFrameCodec } from './CarFrameCodec'
 import { CarTcpService } from './CarTcpService'
-import { FrameLogService } from '../diagnostics/FrameLogService'
 import { commStore } from '../../state/CommStore'
-import hilog from '@ohos.hilog'
-import * as libentry from 'libentry.so'
-
-const TAGRUN = 'SendMasterRun';
-const DOMAIN = 0xFF01   //小车运行日志
-const TAGCONNECT="SendMaster"
-const TAGTEXTONE1 = 'textone1'
 
 export enum CarSendMode {
   DRY_RUN = 0,
   REAL_SEND = 1
 }
 
-/**
- * 小车协议发送服务（业务动作 -> 协议帧）。
- * 设计原则：
- * - 所有发送都收敛到 sendRaw，便于统一统计与日志；
- * - 通过 DRY_RUN/REAL_SEND 两种模式复用同一套上层逻辑。
- */
+export enum CarMsgType {
+  CONTROL = 0xC1,
+  STATUS = 0xBC,
+  ACK = 0xA0
+}
+
+export enum CarFlags {
+  NO_ACK_NO_STORE = 0x00,
+  STORE_ONLY = 0x01,
+  ACK_ONLY = 0x02,
+  NEED_ACK_AND_STORE = 0x03,
+  ACK_FRAME = 0x80
+}
+
 export class CarProtocolService {
+  private interfacePending?: never
   private tcp?: CarTcpService
-  // mode 直接决定 sendRaw 是否真正发包：
-  // - DRY_RUN: 只记日志，不触发真实车辆动作
-  // - REAL_SEND: 真实写 socket
-  private mode: CarSendMode = CarSendMode.REAL_SEND
-  // 全局串行发送链路：同一进程内所有 CarProtocolService 实例共享一个发送队列。
-  private static serialSendTail: Promise<void> = Promise.resolve()
-  private static readonly SERIAL_SEND_GAP_MS: number = 25
+  private mode: CarSendMode = CarSendMode.DRY_RUN
+  private seq: number = 0
+  private readonly ackTimeoutMs: number = 1000
+  private readonly ackMaxRetries: number = 3
+  private readonly pending: Map<number, {
+    seq: number
+    frame: Uint8Array
+    retries: number
+    timeoutId: number
+    tag: string
+  }> = new Map()
 
-  // 十进制字符串主要用于对照旧日志/教学日志
-  private frameToDecimal(frame: Uint8Array): string {
-    const parts: string[] = []
-    for (let i: number = 0; i < frame.length; i++) {
-      parts.push(`${frame[i] & 0xff}`)
-    }
-    return parts.join(',')
-  }
-
-  // 十六进制字符串用于协议排查，和抓包最接近
-  private frameToHex(frame: Uint8Array): string {
-    const parts: string[] = []
-    for (let i: number = 0; i < frame.length; i++) {
-      const hex: string = (frame[i] & 0xff).toString(16).toUpperCase().padStart(2, '0')
-      parts.push(hex)
-    }
-    return parts.join(' ')
-  }
-
-  // 连接链路日志，方便定位“到底发了什么帧”
-  private logConnectFrame(frame: Uint8Array): void {
-    const msg: string = this.frameToHex(frame)
-    hilog.info(DOMAIN, TAGCONNECT, '%{public}s', msg)
-  }
-
-  // 注入底层 TCP 发送器（由协调器在 bind 阶段调用）
   bindTcp(tcp: CarTcpService): void {
     this.tcp = tcp
   }
 
-  // 运行时可切换：DRY_RUN 仅记日志不下发，REAL_SEND 才真正发包
   setMode(mode: CarSendMode): void {
     this.mode = mode
+    if (mode !== CarSendMode.REAL_SEND) {
+      this.clearAllPending()
+    }
   }
 
   getMode(): CarSendMode {
     return this.mode
   }
 
-  private getTcpOrLog(): CarTcpService | undefined {
-    const t: CarTcpService | undefined = this.tcp
-    if (!t) hilog.warn(DOMAIN, TAGCONNECT, '%{public}s', '[CAR][WARN] tcp not bound, drop send')
-    return t
+  private nextSeq(): number {
+    this.seq = (this.seq + 1) & 0xFFFF
+    if (this.seq === 0) this.seq = 1
+    return this.seq
   }
 
-  private async runInSerialSendQueue(task: () => Promise<void>): Promise<void> {
-    const prev: Promise<void> = CarProtocolService.serialSendTail
-    let release!: () => void
-    const gate: Promise<void> = new Promise<void>((resolve): void => {
-      release = resolve
-    })
-    CarProtocolService.serialSendTail = gate
-    await prev
-    try {
-      await task()
-    } finally {
-      if (CarProtocolService.SERIAL_SEND_GAP_MS > 0) {
-        await this.sleepMs(CarProtocolService.SERIAL_SEND_GAP_MS)
-      }
-      release()
-    }
-  }
-
-  // ===== 唯一发送出口（支持 DRY/REAL）=====
-  private async sendRawBurst(frame: Uint8Array, tag: string, sendTimes: number, intervalMs: number): Promise<void> {
-    await this.runInSerialSendQueue(async (): Promise<void> => {
-      const safeTimes: number = Math.max(1, Math.trunc(sendTimes))
-      const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
-      for (let i: number = 0; i < safeTimes; i++) {
-        const sendTag: string = `${tag}#${i + 1}/${safeTimes}`
-        // 统一在这里做 TX 统计 + 帧日志（即使 DRY_RUN 也记录“发送意图”）
-        commStore.bumpTxPacket()
-        if (i === 0) {
-          const mergedTag: string = safeTimes > 1 ? `${tag}#x${safeTimes}(merged)` : sendTag
-          FrameLogService.appendTx(frame, mergedTag)
-        }
-        this.logConnectFrame(frame)
-
-        if (this.mode !== CarSendMode.DRY_RUN) {
-          const t: CarTcpService | undefined = this.getTcpOrLog()
-          if (!t) return
-          await t.sendOrLog(frame, sendTag)
-        }
-        if (i + 1 < safeTimes && safeIntervalMs > 0) {
-          await this.sleepMs(safeIntervalMs)
-        }
-      }
-    })
-  }
-
-  async sendRaw(frame: Uint8Array, tag: string): Promise<void> {
-    const sendTimes: number = 2
-    const intervalMs: number = 5
-    await this.sendRawBurst(frame, tag, sendTimes, intervalMs)
-  }
-
-  private async sendData12Burst(h: number, payload8: Uint8Array, sendTimes: number, intervalMs: number): Promise<void> {
-    const frame: Uint8Array = CarFrameCodec.build12(h & 0xff, payload8)
-    await this.sendRawBurst(frame, `12B h=0x${h.toString(16)}`, sendTimes, intervalMs)
-  }
-
-  private async sendControl0ABurst(code: number, text: string, sendTimes: number, intervalMs: number): Promise<void> {
-    const payload8: Uint8Array = new Uint8Array(8)
-    payload8[0] = code & 0xff
-    const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
-    commStore.appendDiagKeyTxFrame({
-      tsMs: Date.now(),
-      cmdHex: `0x${(code & 0xff).toString(16).toUpperCase().padStart(2, '0')}`,
-      actionText: `${text} x${Math.max(1, Math.trunc(sendTimes))}`,
-      modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
-      hex: this.frameToHex(previewFrame)
-    })
-    await this.sendData12Burst(0x0A, payload8, sendTimes, intervalMs)
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', `${text} x${Math.max(1, Math.trunc(sendTimes))}`)
-  }
-
-  // ===== 12B =====
-  // 12B 数据帧：h 表示主命令，payload8 承载子命令/参数
-  async sendData12(h: number, payload8: Uint8Array): Promise<void> {
-    const frame: Uint8Array = CarFrameCodec.build12(h & 0xff, payload8)
-    await this.sendRaw(frame, `12B h=0x${h.toString(16)}`)
-
-  }
-
-  // ===== 小车控制 0x0A =====
-    // 0x0A: 车辆控制类命令（运动、灯光、超声波触发等）
-  private async sendControl0A(code: number, text: string, sendTimes: number = 2): Promise<void> {
-    const safeSendTimes: number = Math.max(1, Math.trunc(sendTimes))
-    const payload8: Uint8Array = new Uint8Array(8)
-    payload8[0] = code & 0xff
-    const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
-    const actionTextWithBurst: string = `${text} x${safeSendTimes}`
-    commStore.appendDiagKeyTxFrame({
-      tsMs: Date.now(),
-      cmdHex: `0x${(code & 0xff).toString(16).toUpperCase().padStart(2, '0')}`,
-      actionText: actionTextWithBurst,
-      modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
-      hex: this.frameToHex(previewFrame)
-    })
-    await this.sendData12Burst(0x0A, payload8, safeSendTimes, 5)
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', actionTextWithBurst)
-  }
-
-  // 自定义 0x0A 子命令入口：供 UI 输入框直接发送任意 1 字节动作码
-  async sendCustomControl0A(code: number, text: string = '自定义0x0A'): Promise<void> {
-    const safeCode: number = Math.max(0, Math.min(0xFF, Math.trunc(code)))
-    await this.sendControl0A(safeCode, text)
-  }
-
-  // 基础运动控制：前进/后退/转向/半转/掉头/停止
-  async go(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x01, '前进', sendTimes)
-  }
-
-  async back(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x02, '后退', sendTimes)
-  }
-
-  async left(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x03, '左转', sendTimes)
-  }
-
-  async right(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x04, '右转', sendTimes)
-  }
-
-  async leftHalf(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x05, '左半转', sendTimes)
-  }
-
-  async rightHalf(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x06, '右半转', sendTimes)
-  }
-
-  async setAlarm(enabled: boolean): Promise<void> {
-    await this.sendControl0A(enabled ? 0x07 : 0x08, enabled ? '警报开启' : '警报关闭')
-  }
-
-  async leftlight(): Promise<void> {
-    await this.sendControl0A(0x09, '开启左灯')
-  }
-
-  async rightlight(): Promise<void> {
-    await this.sendControl0A(0x0A, '开启右灯')
-  }
-
-  async offlight(): Promise<void> {
-    await this.sendControl0A(0x0B, '关闭灯光')
-  }
-
-  async adjustLight(): Promise<void> {
-    await this.sendControl0A(0x0C, '路灯调节')
-  }
-
-  async light(): Promise<void> {
-    await this.sendControl0A(0x0D, '光照值获取')
-  }
-
-  async uturn(sendTimes: number = 2): Promise<void> {
-    await this.sendControl0A(0x0E, '掉头', sendTimes)
-  }
-
-  async sendTFTA(): Promise<void> {
-    await this.sendControl0A(0x0F, 'TFTA发送')
-  }
-
-  async sendTFTB(): Promise<void> {
-    await this.sendControl0A(0x10, 'TFTB发送')
-  }
-
-  async strobe(): Promise<void> {
-    await this.sendControl0A(0x11, '闸门发送')
-  }
-
-  async yesline(): Promise<void> {
-    await this.sendControl0A(0x12, '上下倒车')
-  }
-
-  async noline(): Promise<void> {
-    await this.sendControl0A(0x13, '左右倒车')
-  }
-
-  async ultrasonic(): Promise<void> {
-    await this.sendControl0A(0x14, '超声波')
-  }
-  //调用dapart小车开闸门的同时会自己前进
-  async depart(): Promise<void>{
-    // 与其他控制指令保持一致：2连发。
-    await this.sendControl0ABurst(0x15, "出库和入库", 2, 0)
-  }
-
-  async carport(plie: number): Promise<void> {
-    // 协议约定：车库命令使用 0x18，楼层参数紧跟其后（payload 第2位，index=1）。
-    const level: number = Math.max(1, Math.min(4, Math.trunc(plie)))
-    const payload8: Uint8Array = new Uint8Array(8)
-    payload8[0] = 0x18
-    payload8[1] = level & 0xff
-
-    const previewFrame: Uint8Array = CarFrameCodec.build12(0x0A, payload8)
-    commStore.appendDiagKeyTxFrame({
-      tsMs: Date.now(),
-      cmdHex: '0x18',
-      actionText: `车库到${level}层`,
-      modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
-      hex: this.frameToHex(previewFrame)
-    })
-
-    await this.sendData12(0x0A, payload8)
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', `车库层发送 level=${level} payload[1]`)
-  }
-
-  async lowcarport(): Promise<void>{
-    const payloadText: string = 'textone1 lowcarport() -> send 0x19'
-    hilog.info(DOMAIN, TAGTEXTONE1, 'send payload: %{public}s', payloadText)
-    await this.sendControl0A(0x19,"车库调至一层并获取当前层数")
-  }
-
-  async billing(): Promise<void>{
-    await this.sendControl0A(0x1A,"LED标志物开始计时")
-  }
-
-  async SrttleAccounts(): Promise<void>{
-    await this.sendControl0A(0x1B,"LED标志物结束计时")
-  }
-
-  async GetoffCarRun(): Promise<void>{
-    await this.sendControl0A(0x1C,"从车启动")
-  }
-
-  async lowcar(): Promise<void>{
-    await this.sendControl0A(0x1D,"车库调至一层不会获取当前层数")
-  }
-
-  async SpecialZones(): Promise<void>{
-    await this.sendControl0A(0x1E,"指定小车通过特殊路段")
-  }
-
-  async SlowProceed(): Promise<void>{
-    await this.sendControl0A(0x1F,"慢前进")
-  }
-
-  async red(): Promise<void>{
-    await this.sendControl0A(0x20, "红灯")
-  }
-  async green(): Promise<void>{
-    await this.sendControl0A(0x21, "绿灯")
-  }
-
-  // 注意：
-  // stopTask(0xBB) 只会终止小车端部分任务（如警报/播报等非运动任务），
-  // 不能可靠停止小车行动任务（行驶/转向）。业务层应尽量不要用它做“停车”。
-  async stopTask(): Promise<void> {
-    await this.sendControl0A(0xBB, '终止非行动任务（不保证停止运动）')
-  }
-
-  //=====0x0B 特定语音发送=====
-    // 0x0B: 预置语音码播放（由小车端固定语音表解释）
-  private async sendControl0B(code: number, text: string): Promise<void> {
-    const payload8: Uint8Array = new Uint8Array(8)
-    payload8[0] = code & 0xff
-    await this.sendData12(0x0B, payload8)
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', text)
-  }
-  // async voiceone(): Promise<void> {
-  //   await this.sendControl0B(0x2B, '发送已为您重新规划路线')
-  // }
-  //
-  // async voicetow(): Promise<void> {
-  //   await this.sendControl0B(0x2C, '发送已找到停车位，正在为您停车')
-  // }
-  //
-  // async voicethree(): Promise<void> {
-  //   await this.sendControl0B(0x2D, '发送达目的地，祝您旅途愉快')
-  // }
-  // async voicefour(): Promise<void> {
-  //   await this.sendControl0B(0x2E, '发送以为你规划最优路径，小创')
-  // }
-  // async voicefive(): Promise<void> {
-  //   await this.sendControl0B(0x2F, '发送紧急避险')
-  // }
-  //
-  // async voicesex(): Promise<void> {
-  //   await this.sendControl0B(0x30, '当前车位已被占用，正在为您寻找其他车位')
-  // }
-
-
-
-  //===== 0x0C =====
-  // 文本语音播报（文本会被切分为 8 字节帧发送）
-  async yuying(shu: string): Promise<void> {
-    const payloads: Uint8Array[] = this.packBroadcastPayloads(shu)
-    if (payloads.length <= 0) {
-      hilog.warn(DOMAIN, TAGRUN, '%{public}s', '站台播报内容为空，未发送')
-      return
-    }
-    for (let i: number = 0; i < payloads.length; i++) {
-      const payload8: Uint8Array = new Uint8Array(8)
-      payload8.set(payloads[i], 0)
-      await this.sendData12(0x07, payload8)
-    }
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', `语音发送完成 frames=${payloads.length} text=${shu}`)
-  }
-  // 公交站台播报（与 yuying 类似，但使用不同业务 h 码）
-  async zhaantai(shu: string): Promise<void> {
-    const payloads: Uint8Array[] = this.packBroadcastPayloads(shu)
-    if (payloads.length <= 0) {
-      hilog.warn(DOMAIN, TAGRUN, '%{public}s', '站台播报内容为空，未发送')
-      return
-    }
-    for (let i: number = 0; i < payloads.length; i++) {
-      const payload8: Uint8Array = new Uint8Array(8)
-      payload8.set(payloads[i], 0)
-      await this.sendData12(0x08, payload8)
-    }
-    hilog.info(DOMAIN, TAGRUN, '%{public}s', `站台播报完成 frames=${payloads.length} text=${shu}`)
-  }
-
-  // 按 Unicode 符号切分，避免代理对（如 emoji）被截断
-  private nextSymbol(text: string, start: number): { value: string, next: number } {
-    if (start >= text.length) {
-      return { value: '', next: start }
-    }
-    const first: number = text.charCodeAt(start)
-    if (first >= 0xD800 && first <= 0xDBFF && start + 1 < text.length) {
-      const second: number = text.charCodeAt(start + 1)
-      if (second >= 0xDC00 && second <= 0xDFFF) {
-        return { value: text.substring(start, start + 2), next: start + 2 }
+  private crc8(frameNoCrcTail: Uint8Array, start: number, endExclusive: number): number {
+    let crc: number = 0x00
+    for (let i: number = start; i < endExclusive; i++) {
+      crc ^= (frameNoCrcTail[i] & 0xFF)
+      for (let b: number = 0; b < 8; b++) {
+        if ((crc & 0x80) !== 0) crc = ((crc << 1) ^ 0x07) & 0xFF
+        else crc = (crc << 1) & 0xFF
       }
     }
-    return { value: text.substring(start, start + 1), next: start + 1 }
+    return crc & 0xFF
   }
 
-  // libentry 编码失败时的兜底：非 ASCII 字符替换为 '?'
-  private asciiFallbackBytes(text: string): Uint8Array {
-    const out: number[] = []
-    for (let i: number = 0; i < text.length; i++) {
-      const code: number = text.charCodeAt(i)
-      out.push(code <= 0x7F ? code : 0x3F)
-    }
-    return this.toByteArray(out)
-  }
+  private buildFrame(type: number, flags: number, seq: number, data?: Uint8Array): Uint8Array {
+    const payload: Uint8Array = data ? data : new Uint8Array(0)
+    const len: number = 4 + payload.length
+    const rawNoCrcTail: Uint8Array = new Uint8Array(2 + 1 + len)
+    rawNoCrcTail[0] = 0xCC
+    rawNoCrcTail[1] = 0xF5
+    rawNoCrcTail[2] = len & 0xFF
+    rawNoCrcTail[3] = type & 0xFF
+    rawNoCrcTail[4] = flags & 0xFF
+    rawNoCrcTail[5] = (seq >> 8) & 0xFF
+    rawNoCrcTail[6] = seq & 0xFF
+    for (let i: number = 0; i < payload.length; i++) rawNoCrcTail[7 + i] = payload[i] & 0xFF
 
-  // 通过 native 层做 GBK 编码，兼容小车端文本协议
-  private encodeGbkBytes(text: string): Uint8Array {
-    try {
-      const buffer: ArrayBuffer = libentry.encodeGbk(text)
-      return new Uint8Array(buffer)
-    } catch (_) {
-      return this.asciiFallbackBytes(text)
-    }
-  }
-
-  // number[] -> Uint8Array 的统一封装
-  private toByteArray(bytes: number[]): Uint8Array {
-    const out: Uint8Array = new Uint8Array(bytes.length)
-    for (let i: number = 0; i < bytes.length; i++) {
-      out[i] = bytes[i] & 0xFF
-    }
+    const out: Uint8Array = new Uint8Array(rawNoCrcTail.length + 2)
+    out.set(rawNoCrcTail, 0)
+    // CRC range: from Byte1=0xF5 to payload end (exclude 0xCC, CRC, 0xBB).
+    out[out.length - 2] = this.crc8(rawNoCrcTail, 1, rawNoCrcTail.length)
+    out[out.length - 1] = 0xBB
     return out
   }
 
-  /**
-   * 文本打包为 8 字节 payload 序列：
-   * - 按符号取字节；
-   * - 不能超 8 字节就新开一帧；
-   * - 返回的每个 Uint8Array 都可直接塞入 12B payload。
-   */
-  private packBroadcastPayloads(text: string): Uint8Array[] {
-    const payloads: Uint8Array[] = []
-    let cursor: number = 0
-    let current: number[] = []
-    // 这里按 8 字节切片：
-    // - 改小：帧数更多，稳定但更慢
-    // - 改大：会破坏当前 12B 协议 payload 约束（不建议改）
-    while (cursor < text.length) {
-      const symbol = this.nextSymbol(text, cursor)
-      cursor = symbol.next
-      const bytes: Uint8Array = this.encodeGbkBytes(symbol.value)
-      if (bytes.length <= 0) {
-        continue
-      }
-      if (current.length > 0 && current.length + bytes.length > 8) {
-        payloads.push(this.toByteArray(current))
-        current = []
-      }
-      for (let i: number = 0; i < bytes.length; i++) {
-        current.push(bytes[i] & 0xFF)
-      }
-    }
-    if (current.length > 0) {
-      payloads.push(this.toByteArray(current))
-    }
-    return payloads
+  private async writeFrame(frame: Uint8Array, tag: string): Promise<void> {
+    if (this.mode !== CarSendMode.REAL_SEND) return
+    if (!this.tcp) return
+    await this.tcp.sendOrLog(frame, tag)
   }
 
-  private async sleepMs(ms: number): Promise<void> {
-    const waitMs: number = Math.max(0, Math.trunc(ms))
-    await new Promise<void>((resolve): void => {
-      setTimeout((): void => resolve(), waitMs)
+  async sendRaw(frame: Uint8Array, tag: string): Promise<void> {
+    await this.writeFrame(frame, tag)
+  }
+
+  async sendPacket(type: number, flags: number, data?: Uint8Array, fixedSeq?: number): Promise<number> {
+    const seq: number = fixedSeq !== undefined ? (fixedSeq & 0xFFFF) : this.nextSeq()
+    const frame: Uint8Array = this.buildFrame(type & 0xFF, flags & 0xFF, seq, data)
+    const tag: string = `type=0x${(type & 0xFF).toString(16).toUpperCase()} seq=${seq}`
+    this.appendDiagTxKeyFrame(type & 0xFF, flags & 0xFF, seq, data, frame)
+    await this.writeFrame(frame, tag)
+    if (this.mode === CarSendMode.REAL_SEND &&
+      (flags === CarFlags.ACK_ONLY || flags === CarFlags.NEED_ACK_AND_STORE) &&
+      type !== CarMsgType.ACK) {
+      this.trackPending(seq, frame, tag)
+    }
+    return seq
+  }
+
+  async sendAck(seq: number): Promise<void> {
+    await this.sendPacket(CarMsgType.ACK, CarFlags.ACK_FRAME, new Uint8Array(0), seq)
+  }
+
+  // 通用命令组发送：
+  // Send0A: data = 0x0A <subCode> [ext...]
+  // Send0B: data = 0x0B <subCode> [ext...]
+  // Send0C: data = 0x0C <subCode> [ext...]
+  async Send0A(subCode: number, ext?: Uint8Array, needStore: boolean = false, needAck: boolean = true): Promise<number> {
+    return await this.sendCmdGroup(0x0A, subCode, ext, needStore, needAck)
+  }
+
+  async Send0B(subCode: number, ext?: Uint8Array, needStore: boolean = false, needAck: boolean = true): Promise<number> {
+    return await this.sendCmdGroup(0x0B, subCode, ext, needStore, needAck)
+  }
+
+  async Send0C(subCode: number, ext?: Uint8Array, needStore: boolean = true, needAck: boolean = true): Promise<number> {
+    return await this.sendCmdGroup(0x0C, subCode, ext, needStore, needAck)
+  }
+
+  // 运动基础命令（基于 0x0A 组）
+  // 前进
+  async Forward(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x01, undefined, needStore)
+  }
+
+  // 后退
+  async Backward(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x02, undefined, needStore)
+  }
+
+  // 左转
+  async TurnLeft(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x03, undefined, needStore)
+  }
+
+  // 右转
+  async TurnRight(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x04, undefined, needStore)
+  }
+
+  // 左半转
+  async TurnLeftHalf(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x05, undefined, needStore)
+  }
+
+  // 右半转
+  async TurnRightHalf(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x06, undefined, needStore)
+  }
+
+  // 掉头
+  async TurnRound(needStore: boolean = false): Promise<number> {
+    return await this.Send0A(0x0E, undefined, needStore)
+  }
+
+  // 0x0C 全量语义命令补充
+  // 设置小车目的地
+  async sendGoalNode(nodeId: string, needStore: boolean = true): Promise<number> {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return 0
+    const ext: Uint8Array = new Uint8Array([
+      id.charCodeAt(0) & 0xFF,
+      id.charCodeAt(1) & 0xFF])
+    return await this.Send0C(0x01, ext, needStore)
+  }
+  // 设置当前位置和方向
+  async sendCurrentNode(nodeId: string, dir: string | number = 'N'): Promise<number> {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return 0
+    const dirAscii: number = this.toDirAscii(dir)
+    const ext: Uint8Array = new Uint8Array([
+      id.charCodeAt(0) & 0xFF,
+      id.charCodeAt(1) & 0xFF,
+      dirAscii & 0xFF])
+    return await this.Send0C(0x02, ext, false)
+  }
+  //设置道闸位置
+  async  setBarrierPosition(fromNodeId: string, toNodeId: string, needStore: boolean = true): Promise<number> {
+    const a: string = (fromNodeId || '').trim().toUpperCase()
+    const b: string = (toNodeId || '').trim().toUpperCase()
+    if (a.length !== 2 || b.length !== 2) return 0
+    return await this.Send0C(
+      0x03,
+      new Uint8Array([
+        a.charCodeAt(0) & 0xFF, a.charCodeAt(1) & 0xFF,
+        b.charCodeAt(0) & 0xFF, b.charCodeAt(1) & 0xFF
+      ]),
+      needStore
+    )
+  }
+  //清除道闸
+  async clearBarrier(): Promise<number> {
+    return await this.Send0C(0x04, undefined, false)
+  }
+  // 设置障碍路段：主指令0x05，4字节数据=两端点位（各2字节ASCII）
+  async setObstacleEdge(fromNodeId: string, toNodeId: string, needStore: boolean = true): Promise<number> {
+    const a: string = (fromNodeId || '').trim().toUpperCase()
+    const b: string = (toNodeId || '').trim().toUpperCase()
+    if (a.length !== 2 || b.length !== 2) return 0
+    return await this.Send0C(
+      0x05,
+      new Uint8Array([
+        a.charCodeAt(0) & 0xFF, a.charCodeAt(1) & 0xFF,
+        b.charCodeAt(0) & 0xFF, b.charCodeAt(1) & 0xFF
+      ]),
+      needStore
+    )
+  }
+
+  // 设置障碍点位
+  async sendObstaclePoint(nodeId: string): Promise<number> {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return 0
+    const ext: Uint8Array = new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF])
+    return await this.Send0C(0x06, ext, true)
+  }
+
+  // 清除所有清除阻塞点位
+  async clearAllObstacles(): Promise<number> {
+    return await this.Send0C(0x07, undefined, false)
+  }
+  //设置车库点位
+  async setGaragePosition(nodeId: string): Promise<number> {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return 0
+    const ext: Uint8Array = new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF])
+    return await this.Send0C(0x08, ext, true)
+  }
+  //清除车库点位
+  async clearGarageNode(): Promise<number> {
+    return await this.Send0C(0x09, undefined, false)
+  }
+  //停止任务
+  async stopTask(): Promise<number> {
+    return await this.Send0C(0x0A, undefined, false)
+  }
+  //继续任务
+  async pauseTask(): Promise<number> {
+    return await this.Send0C(0x0B, undefined, false)
+  }
+
+  //设置特殊路段
+  async setSpecialSegment(fromNodeId: string, toNodeId: string, needStore: boolean = true): Promise<number> {
+    const a: string = (fromNodeId || '').trim().toUpperCase()
+    const b: string = (toNodeId || '').trim().toUpperCase()
+    if (a.length !== 2 || b.length !== 2) return 0
+    return await this.Send0C(
+      0x0C,
+      new Uint8Array([
+        a.charCodeAt(0) & 0xFF, a.charCodeAt(1) & 0xFF,
+        b.charCodeAt(0) & 0xFF, b.charCodeAt(1) & 0xFF
+      ]),
+      needStore
+    )
+  }
+  //清除特殊路段
+  async clearSpecialSegment(): Promise<number> {
+    return await this.Send0C(0x0D, undefined, false)
+  }
+
+  // 设置红绿灯位置（路段两端点位 + 方向）
+  async setTrafficLightNode(
+    fromNodeId: string,
+    toNodeId: string,
+    dir: string | number = 'N',
+    needStore: boolean = true
+  ): Promise<number> {
+    const a: string = (fromNodeId || '').trim().toUpperCase()
+    const b: string = (toNodeId || '').trim().toUpperCase()
+    if (a.length !== 2 || b.length !== 2) return 0
+    const dirAscii: number = this.toDirAscii(dir)
+    return await this.Send0C(
+      0x0E,
+      new Uint8Array([
+        a.charCodeAt(0) & 0xFF, a.charCodeAt(1) & 0xFF,
+        b.charCodeAt(0) & 0xFF, b.charCodeAt(1) & 0xFF,
+        dirAscii & 0xFF
+      ]),
+      needStore
+    )
+  }
+  // 红/黄： 0x0E 0x01
+  // 绿：   0x0E 0x02
+  //红灯
+  async SendTrafficRedOrYellow(needStore: boolean = false): Promise<number> {
+    return await this.Send0C(0x0E, new Uint8Array([0x01]), needStore)
+  }
+  //绿灯
+  async SendTrafficGreen(needStore: boolean = false): Promise<number> {
+    return await this.Send0C(0x0E, new Uint8Array([0x02]), needStore)
+  }
+  //清除交通灯
+  async clearTrafficLightNode(): Promise<number> {
+    return await this.Send0C(0x0F, undefined, false)
+  }
+  // 一键清图
+  async  resetNetworkMap(): Promise<number> {
+    return await this.Send0C(0xF0, undefined, false)
+  }
+
+
+
+  // // 设置 TFTA 位置
+  // async setTftaNode(nodeId: string, needStore: boolean = true): Promise<number> {
+  //   const id: string = (nodeId || '').trim().toUpperCase()
+  //   if (id.length !== 2) return 0
+  //   return await this.Send0C(0x07, new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF]), needStore)
+  // }
+
+  // // 设置 TFTB 位置
+  // async setTftbNode(nodeId: string, needStore: boolean = true): Promise<number> {
+  //   const id: string = (nodeId || '').trim().toUpperCase()
+  //   if (id.length !== 2) return 0
+  //   return await this.Send0C(0x08, new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF]), needStore)
+  // }
+
+  // // 设置车库位置
+  // async setGarageNode(nodeId: string, needStore: boolean = true): Promise<number> {
+  //   const id: string = (nodeId || '').trim().toUpperCase()
+  //   if (id.length !== 2) return 0
+  //   return await this.Send0C(0x09, new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF]), needStore)
+  // }
+
+  // // 清除红绿灯
+  // async clearTrafficLightNode(nodeId: string, needStore: boolean = false): Promise<number> {
+  //   const id: string = (nodeId || '').trim().toUpperCase()
+  //   if (id.length !== 2) return 0
+  //   return await this.Send0C(0x0A, new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF]), needStore)
+  // }
+
+
+  onAckReceived(seq: number): boolean {
+    const key: number = seq & 0xFFFF
+    return this.clearPendingBySeq(key)
+  }
+
+  private async sendCmdGroup(
+    groupCode: number,
+    subCode: number,
+    ext?: Uint8Array,
+    needStore: boolean = false,
+    needAck: boolean = true
+  ): Promise<number> {
+    const tail: Uint8Array = ext ? ext : new Uint8Array(0)
+    const data: Uint8Array = new Uint8Array(2 + tail.length)
+    data[0] = groupCode & 0xFF
+    data[1] = subCode & 0xFF
+    for (let i: number = 0; i < tail.length; i++) data[2 + i] = tail[i] & 0xFF
+    const flags: number = needAck
+      ? (needStore ? CarFlags.NEED_ACK_AND_STORE : CarFlags.ACK_ONLY)
+      : (needStore ? CarFlags.STORE_ONLY : CarFlags.NO_ACK_NO_STORE)
+    return await this.sendPacket(
+      CarMsgType.CONTROL,
+      flags,
+      data
+    )
+  }
+
+  private trackPending(seq: number, frame: Uint8Array, tag: string): void {
+    const key: number = seq & 0xFFFF
+    this.clearPendingBySeq(key)
+    const timeoutId: number = setTimeout((): void => {
+      void this.retryPending(key)
+    }, this.ackTimeoutMs) as number
+    this.pending.set(key, {
+      seq: key,
+      frame: frame,
+      retries: 0,
+      timeoutId: timeoutId,
+      tag: tag
     })
+  }
+
+  private async retryPending(seq: number): Promise<void> {
+    const p = this.pending.get(seq)
+    if (!p) return
+    if (p.retries >= this.ackMaxRetries) {
+      this.clearPendingBySeq(seq)
+      return
+    }
+    p.retries += 1
+    await this.writeFrame(p.frame, `${p.tag} retry=${p.retries}`)
+    p.timeoutId = setTimeout((): void => {
+      void this.retryPending(seq)
+    }, this.ackTimeoutMs) as number
+    this.pending.set(seq, p)
+  }
+
+  private clearPendingBySeq(seq: number): boolean {
+    const p = this.pending.get(seq)
+    if (!p) return false
+    clearTimeout(p.timeoutId)
+    this.pending.delete(seq)
+    return true
+  }
+
+  private clearAllPending(): void {
+    const keys: Array<number> = Array.from(this.pending.keys())
+    for (let i: number = 0; i < keys.length; i++) {
+      this.clearPendingBySeq(keys[i])
+    }
+  }
+
+  private toDirAscii(dir: string | number): number {
+    if (typeof dir === 'number') {
+      const v: number = dir & 0xFF
+      if (v === 0x4E || v === 0x45 || v === 0x53 || v === 0x57) return v // N/E/S/W
+      if (v === 0x01) return 0x4E
+      if (v === 0x02) return 0x45
+      if (v === 0x03) return 0x53
+      if (v === 0x04) return 0x57
+      return 0x4E
+    }
+    const x: string = (dir || '').trim().toUpperCase()
+    if (x === 'N') return 0x4E
+    if (x === 'E') return 0x45
+    if (x === 'S') return 0x53
+    if (x === 'W') return 0x57
+    return 0x4E
+  }
+
+  private appendDiagTxKeyFrame(type: number, flags: number, seq: number, data: Uint8Array | undefined, frame: Uint8Array): void {
+    try {
+      let cmdHex: string = `0x${(type & 0xFF).toString(16).toUpperCase().padStart(2, '0')}`
+      let actionText: string = '发送数据'
+      if (type === CarMsgType.CONTROL && data && data.length >= 2) {
+        const group: number = data[0] & 0xFF
+        const sub: number = data[1] & 0xFF
+        cmdHex = `0x${sub.toString(16).toUpperCase().padStart(2, '0')}`
+        actionText = this.txMeaning(group, sub)
+      } else if (type === CarMsgType.ACK) {
+        cmdHex = 'ACK'
+        actionText = '确认应答'
+      }
+      commStore.appendDiagKeyTxFrame({
+        tsMs: Date.now(),
+        cmdHex: cmdHex,
+        actionText: actionText,
+        modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
+        hex: this.bytesToHex(frame)
+      })
+    } catch (_) {}
+  }
+
+  private txMeaning(group: number, sub: number): string {
+    const g: number = group & 0xFF
+    const s: number = sub & 0xFF
+    if (g === 0x0A) {
+      if (s === 0x01) return '前进'
+      if (s === 0x02) return '后退'
+      if (s === 0x03) return '左转'
+      if (s === 0x04) return '右转'
+      if (s === 0x05) return '左半转'
+      if (s === 0x06) return '右半转'
+      if (s === 0x0E) return '掉头'
+      if (s === 0x00) return '停止'
+    }
+    if (g === 0x0B) {
+      if (s === 0x01) return '识别红黄灯'
+      if (s === 0x02) return '识别绿灯'
+    }
+    if (g === 0x0C) {
+      if (s === 0x01) return '设置目的地'
+      if (s === 0x02) return '设置当前位置'
+      if (s === 0x03) return '设置道闸'
+      if (s === 0x04) return '清除道闸'
+      if (s === 0x05) return '设置障碍路段'
+      if (s === 0x06) return '设置障碍点位'
+      if (s === 0x07) return '清除障碍'
+      if (s === 0x08) return '设置车库'
+      if (s === 0x09) return '清除车库'
+      if (s === 0x0A) return '停止任务'
+      if (s === 0x0B) return '继续任务'
+      if (s === 0x0C) return '设置特殊路段'
+      if (s === 0x0D) return '清除特殊路段'
+      if (s === 0x0E) return '交通灯控制/设置'
+      if (s === 0x0F) return '清除交通灯'
+      if (s === 0xF0) return '清图'
+    }
+    return '控制指令'
+  }
+
+  private bytesToHex(data: Uint8Array): string {
+    let s: string = ''
+    for (let i: number = 0; i < data.length; i++) {
+      const part: string = (data[i] & 0xFF).toString(16).toUpperCase().padStart(2, '0')
+      s = s.length === 0 ? part : `${s} ${part}`
+    }
+    return s
   }
 }

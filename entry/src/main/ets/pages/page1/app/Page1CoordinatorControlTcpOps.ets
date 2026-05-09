@@ -1,184 +1,59 @@
-﻿/**
- * 代码指南：
- * 文件： 
-pages/page1/app/Page1CoordinatorControlTcpOps.ets
- * 用途： 
-Page1 coordination/scheduling helper logic.
- * 何时修改： related behavior or contracts change.
- */
-/**
- * FILE ROLE LOG:
- * 文件： entry/src/main/ets/pages/page1/app/Page1CoordinatorControlTcpOps.ets
- * 用途： 封装 Page1Coordinator 的 TCP 控制与协议收发相关操作。
- * Notes: 修改本文件时请保持与调用方契约一致，避免跨模块行为回归。
- */
-import { Page1UiStore, CarConnState } from './Page1UiStore'
-import { Page1Action, CarTelemetry } from '../types/Page1Types'
+﻿import { Page1UiStore, CarConnState } from './Page1UiStore'
+import { Page1Action } from '../types/Page1Types'
 import { CarTcpCallbacks } from '../../../services/control/CarTcpService'
 import { CarConnectionState } from '../../../services/control/CarConnectionState'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
-import { CarFrame55 } from '../net/CarRx55StreamDecoder'
-import { GridIdCodec } from './PathPlannerAStar'
+import { CarProtoFrame, CarProtoStreamDecoder } from '../net/CarRx55StreamDecoder'
 import { P1C } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
-import { maybeBlockGoByTrafficGate } from './Page1CoordinatorTrafficGateOps'
-import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
-import { page2ReplayService } from '../../../services/replay/Page2ReplayService'
+import { ensureRecognitionCenter } from '../../../services/recognition/RecognitionCenter'
+import { RecognitionSubtype } from '../../../services/recognition/RecognitionTask'
+import { videoStore } from '../../../state/VideoStore'
 import hilog from '@ohos.hilog'
 
 const PAGE1_TCP_LOG_DOMAIN = 0xFF03
 const PAGE1_TCP_LOG_TAG = 'page1tcp'
-const RX_CONSECUTIVE_DUP_WINDOW_MS: number = 220
-
-function kickTcpConnectForRealSendIfNeeded(ctx: any, s: Page1UiStore): void {
-  if (!s.realSendEnabled) return
-  if (s.connState === CarConnState.CONNECTED || s.connState === CarConnState.CONNECTING || s.connState === CarConnState.RECONNECTING) return
-  const nowMs: number = Date.now()
-  const lastKickAtMs: number = Number(ctx.realSendConnectKickAtMs) || 0
-  if (nowMs - lastKickAtMs < 2000) return
-  ctx.realSendConnectKickAtMs = nowMs
-  s.pushLog(`REAL_SEND: 链路未连接，自动重连 ${s.connIp}:${s.connPort}`)
-  void ctx.connectTcp(s.connIp, s.connPort)
-}
 
 export function bindTcpCallbacks(ctx: any): void {
   const cb: CarTcpCallbacks = {
-    onStateChange: (state: CarConnectionState, text: string): void => {
-      onTcpState(ctx, state, text)
-    },
-    onData: (data: Uint8Array): void => {
-      onTcpData(ctx, data)
-    }
+    onStateChange: (state: CarConnectionState, text: string): void => onTcpState(ctx, state, text),
+    onData: (data: Uint8Array): void => onTcpData(ctx, data)
   }
   ctx.tcp.setCallbacks(cb)
-}
-
-function frameDedupKey(f: CarFrame55): string {
-  return `${f.frameKind}|${f.cmd & 0xff}|${f.p1 & 0xff}|${f.p2 & 0xff}|${f.p3 & 0xff}|${bytesToHex(f.raw)}`
-}
-
-function isConsecutiveDuplicateFrame(ctx: any, f: CarFrame55): boolean {
-  const nowMs: number = Date.now()
-  const key: string = frameDedupKey(f)
-  const last: string = typeof ctx.lastRxFrameDedupKey === 'string' ? ctx.lastRxFrameDedupKey : ''
-  const lastAtMs: number = Number(ctx.lastRxFrameDedupAtMs) || 0
-  if (key === last && lastAtMs > 0 && (nowMs - lastAtMs) <= RX_CONSECUTIVE_DUP_WINDOW_MS) {
-    return true
-  }
-  ctx.lastRxFrameDedupKey = key
-  ctx.lastRxFrameDedupAtMs = nowMs
-  return false
-}
-
-function logMergedDuplicateFrame(ctx: any, s: Page1UiStore, f: CarFrame55): void {
-  const key: string = frameDedupKey(f)
-  const prevKey: string = String(ctx.lastRxDupCountKey || '')
-  const nextCount: number = (prevKey === key)
-    ? (Math.max(1, Number(ctx.lastRxDupCount) || 1) + 1)
-    : 2
-  ctx.lastRxDupCountKey = key
-  ctx.lastRxDupCount = nextCount
-
-  if (nextCount > 3) return
-  if ((f.cmd & 0xff) === 0xBD) {
-    const status: number = f.p1 & 0xff
-    if (status === 0x01) {
-      s.pushLog(`RX 55AA cmd=0xBD 状态=01(已接收) x${nextCount}`)
-      return
-    }
-    if (status === 0x02) {
-      s.pushLog(`RX 55AA cmd=0xBD 状态=02(已完成) x${nextCount}`)
-      return
-    }
-    s.pushLog(`RX 55AA cmd=0xBD 状态=0x${byteToHex(status)} x${nextCount}`)
-    return
-  }
-  if ((f.cmd & 0xff) === 0xBC) {
-    const p1: number = f.p1 & 0xff
-    if (p1 === 0x00 || p1 === 0x01 || p1 === 0x02) {
-      s.pushLog(`RX 55AA cmd=0xBC 超声波结果 p1=0x${byteToHex(p1)} x${nextCount}`)
-      return
-    }
-    if (p1 === 0x03) {
-      s.pushLog(`RX 55AA cmd=0xBC garage-ready p1=0x03 x${nextCount}`)
-      return
-    }
-    if (p1 === 0x04) {
-      s.pushLog(`RX 55AA cmd=0xBC garage-park-done p1=0x04 x${nextCount}`)
-      return
-    }
-    if (p1 === 0x05) {
-      s.pushLog(`RX 55AA cmd=0xBC lowcar-done p1=0x05 x${nextCount}`)
-      return
-    }
-    s.pushLog(`RX 55AA cmd=0xBC 重复帧 x${nextCount}`)
-    return
-  }
-  s.pushLog(`RX 55AA cmd=0x${byteToHex(f.cmd)} 重复帧 x${nextCount}`)
 }
 
 export function onTcpState(ctx: any, state: CarConnectionState, text: string): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-  ctx.lastRxFrameDedupKey = ''
 
-  ctx.proto.setMode(
-    (s.realSendEnabled && state === CarConnectionState.CONNECTED)
-      ? CarSendMode.REAL_SEND
-      : CarSendMode.DRY_RUN
-  )
+  ctx.proto.setMode((s.realSendEnabled && state === CarConnectionState.CONNECTED) ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
 
   if (state === CarConnectionState.CONNECTED) {
     ctx.rxDecoder.reset()
     ctx.resetPathAckState()
     s.setConnState(CarConnState.CONNECTED, `TCP:CONNECTED | ${text}`)
     s.heartbeatOk = true
-    s.pushLog('TCP 已连接，进入实时链路模式')
+    s.pushLog('TCP 已连接，进入新协议链路模式(CCF5)')
     commStore.setCommState(true, 'CONNECTED')
     commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
     commStore.setCommLastError('')
-    if (typeof ctx.tryQueryLightMetricOnceOnPageOpen === 'function') {
-      void ctx.tryQueryLightMetricOnceOnPageOpen()
-    }
     return
   }
-
   if (state === CarConnectionState.CONNECTING) {
-    ctx.rxDecoder.reset()
-    ctx.resetPathAckState()
-    s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${text}`)
-    s.pushLog('TCP 连接中...')
-    commStore.setCommState(false, 'CONNECTING')
-    commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
-    return
+    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${text}`)
+    commStore.setCommState(false, 'CONNECTING'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount()); return
   }
-
   if (state === CarConnectionState.RECONNECTING) {
-    ctx.rxDecoder.reset()
-    ctx.resetPathAckState()
-    s.setConnState(CarConnState.RECONNECTING, `TCP:RECONNECTING | ${text}`)
-    s.reconnectCount += 1
-    s.pushLog(`TCP 触发重连，count=${s.reconnectCount}`)
-    commStore.setCommState(false, 'RECONNECTING')
-    commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
-    return
+    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.RECONNECTING, `TCP:RECONNECTING | ${text}`)
+    commStore.setCommState(false, 'RECONNECTING'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount()); return
   }
-
   if (state === CarConnectionState.FAILED) {
-    ctx.rxDecoder.reset()
-    ctx.resetPathAckState()
-    s.setConnState(CarConnState.FAILED, `TCP:FAILED | ${text}`)
+    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.FAILED, `TCP:FAILED | ${text}`)
     s.heartbeatOk = false
-    s.pushLog(`TCP 失败：${text}`)
-    commStore.setCommState(false, 'FAILED')
-    commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
-    commStore.setCommLastError(ctx.tcp.getLastErrorText())
-    return
+    commStore.setCommState(false, 'FAILED'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
+    commStore.setCommLastError(ctx.tcp.getLastErrorText()); return
   }
-
-  ctx.rxDecoder.reset()
-  ctx.resetPathAckState()
-  s.setConnState(CarConnState.IDLE, `TCP:IDLE | ${text}`)
+  ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.IDLE, `TCP:IDLE | ${text}`)
   s.heartbeatOk = false
   commStore.setCommState(false, 'DISCONNECTED')
   commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
@@ -187,125 +62,204 @@ export function onTcpState(ctx: any, state: CarConnectionState, text: string): v
 export function onTcpData(ctx: any, data: Uint8Array): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-  s.bumpRx()
-  s.heartbeatOk = true
-  commStore.bumpRxPacket()
+  s.bumpRx(); s.heartbeatOk = true; commStore.bumpRxPacket()
 
-  const frames: Array<CarFrame55> = ctx.rxDecoder.feed(data)
+  const frames: Array<CarProtoFrame> = (ctx.rxDecoder as CarProtoStreamDecoder).feedProto(data)
   if (frames.length <= 0) {
-    const isHeartbeatEcho: boolean = data.length === 1 && ((data[0] & 0xff) === 0x00)
-    if (!isHeartbeatEcho) {
-      const nowMs: number = Date.now()
-      const lastLogAtMs: number = (ctx.rawNoFrameLastLogAtMs as number) || 0
-      if (nowMs - lastLogAtMs >= 1200) {
-        ctx.rawNoFrameLastLogAtMs = nowMs
-        const bufSize: number = typeof ctx.rxDecoder.getBufferedSize === 'function' ? ctx.rxDecoder.getBufferedSize() : 0
-        s.pushLog(`RX RAW(no55AA): ${bytesToHex(data)} | decoderBuf=${bufSize}`)
-      }
+    const nowMs: number = Date.now()
+    const lastLogAtMs: number = Number(ctx.rawNoFrameLastLogAtMs) || 0
+    if (nowMs - lastLogAtMs >= 1200) {
+      ctx.rawNoFrameLastLogAtMs = nowMs
+      s.pushLog(`RX RAW(noCCF5): ${bytesToHex(data)} | decoderBuf=${ctx.rxDecoder.getBufferedSize()}`)
     }
     return
   }
 
   for (let i: number = 0; i < frames.length; i++) {
-    const f: CarFrame55 = frames[i]
-    const cmd: number = f.cmd & 0xff
-    // 0xBD(路径ACK) 仍不过滤：需要逐帧进入 ACK 状态机。
-    // 其他帧（含 0xBC）按“首帧生效，后续短窗重复帧过滤+合并日志”处理。
-    if (cmd !== 0xBD && isConsecutiveDuplicateFrame(ctx, f)) {
-      const nowMs: number = Date.now()
-      const lastMergeLogAtMs: number = Number(ctx.lastRxMergeLogAtMs) || 0
-      if (nowMs - lastMergeLogAtMs >= 80) {
-        ctx.lastRxMergeLogAtMs = nowMs
-        logMergedDuplicateFrame(ctx, s, f)
-      }
+    const f: CarProtoFrame = frames[i]
+    if (!f.ok) {
+      s.pushLog(`RX CCF5 CRC错误 type=0x${byteToHex(f.type)} seq=${f.seq}`)
+      appendDiagRxFrame(f, 'CRC=BAD')
       continue
     }
-    ctx.lastRxDupCountKey = ''
-    ctx.lastRxDupCount = 1
+    const t: number = f.type & 0xff
+    const d: Uint8Array = f.data
 
-    const nextTelemetry: CarTelemetry | undefined = parseTelemetryFrom55(ctx, s.telemetry, f)
-    if (nextTelemetry) {
-      if (f.cmd === 0xBB) {
-        const lux: number = decodeLuxFromBbFrame(f)
-        appendDiagKeyRxFrame(ctx, f, `光照值=${lux}`)
-      }
-      s.setTelemetry(nextTelemetry)
-      s.updateRisk()
-      if (ctx.maybeTriggerRoutePointObstacle()) continue
-      ctx.maybeReplanOnObstacle()
+    if (t === 0xA0) {
+      const ok: boolean = typeof ctx.proto.onAckReceived === 'function' ? ctx.proto.onAckReceived(f.seq) : false
+      s.pushLog(`RX CCF5 ACK seq=${f.seq} ${ok ? 'matched' : 'untracked'}`)
+      appendDiagRxFrame(f, `ACK seq=${f.seq} ${ok ? 'matched' : 'untracked'}`)
       continue
     }
-    logFrame55(ctx, s, f)
+
+    if (f.flags === 0x02 || f.flags === 0x03) {
+      if (typeof ctx.proto.sendAck === 'function') {
+        void ctx.proto.sendAck(f.seq)
+      }
+    }
+
+    if (t === 0xBC) {
+      appendDiagRxFrame(f, summarizeBcFrame(f))
+      handleBCFrame(ctx, s, f)
+      continue
+    }
+
+    appendDiagRxFrame(f, `type=0x${byteToHex(t)} flags=0x${byteToHex(f.flags)} seq=${f.seq}`)
+    s.pushLog(`RX CCF5 type=0x${byteToHex(t)} flags=0x${byteToHex(f.flags)} seq=${f.seq} data=${bytesToHex(d)}`)
   }
 }
 
-export function parseTelemetryFrom55(ctx: any, prev: CarTelemetry, f: CarFrame55): CarTelemetry | undefined {
-  void ctx
-  if (f.cmd === 0xBB) {
-    const lux: number = decodeLuxFromBbFrame(f)
-    if (typeof ctx.onLightLuxReceived === 'function') {
-      ctx.onLightLuxReceived(lux)
+function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
+  const d: Uint8Array = f.data
+  if (d.length <= 0) {
+    s.pushLog(`RX CCF5 BC: empty seq=${f.seq}`)
+    return
+  }
+  const data1: number = d[0] & 0xff
+  if (data1 === 0x01) {
+    // data1=0x01: 当前点位上报（节点两字节 ASCII，如 F6），可选第4字节为方向 ASCII
+    if (d.length >= 3) {
+      const nodeId: string = decodeNodeAscii(d[1], d[2])
+      if (nodeId.length > 0) {
+        const dirText: string = d.length >= 4 ? decodeDirAscii(d[3]) : 'N'
+        const headingDeg: number = headingDegFromDir(dirText)
+        s.updateCurrentNodePose(nodeId, headingDeg)
+        s.pushLog(`RX CCF5 BC: 当前点位 node=${nodeId} dir=${dirText} seq=${f.seq}`)
+        return
+      }
     }
-    return {
+    s.pushLog(`RX CCF5 BC: 当前点位(格式异常) data=${bytesToHex(d)} seq=${f.seq}`)
+    return
+  }
+  if (data1 === 0x02) {
+    // data1=0x02: 上报障碍物所在路段
+    // 约定解析：02 <fromCol><fromRow><toCol><toRow>
+    if (d.length >= 5) {
+      const fromId: string = decodeNodeAscii(d[1], d[2])
+      const toId: string = decodeNodeAscii(d[3], d[4])
+      if (fromId.length > 0 && toId.length > 0) {
+        const edgeId: string = `${fromId}|${toId}`
+        if (!s.isBlockedEdgeById(edgeId)) {
+          s.toggleBlockedEdge(edgeId)
+        }
+        if (s.destApplied.length > 0 && typeof ctx.planPath === 'function') {
+          ctx.planPath(s.destApplied)
+          s.pushLog(`RX CCF5 BC: 重规划触发 goal=${s.destApplied}`)
+        }
+      }
+      s.pushLog(`RX CCF5 BC: 路段障碍 edge=${fromId.length > 0 ? fromId : '??'}|${toId.length > 0 ? toId : '??'} seq=${f.seq}`)
+      return
+    }
+    s.pushLog(`RX CCF5 BC: 路段障碍(格式异常) data=${bytesToHex(d)} seq=${f.seq}`)
+    return
+  }
+  if (data1 === 0x06) {
+    try {
+      // 小车触发交通灯识别：走识别中心 -> 识别上报服务 -> SendTrafficGreen/SendTrafficRedOrYellow
+      videoStore.recognitionEnabled = true
+      videoStore.setPage2TrafficEnabled(true)
+      const scheduler = ensureRecognitionCenter()
+      scheduler.enqueueAutoSnapshotTriggered(RecognitionSubtype.TRAFFIC_LIGHT)
+      s.pushLog(`RX CCF5 BC: 触发交通灯识别 seq=${f.seq}`)
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`RX CCF5 BC: 交通灯识别触发失败 ${msg}`)
+    }
+    return
+  }
+  if (data1 === 0x03) return
+  s.pushLog(`RX CCF5 BC: data1=0x${byteToHex(data1)} data=${bytesToHex(d)} seq=${f.seq}`)
+}
+
+function decodeNodeAscii(b0: number, b1: number): string {
+  const c0: string = String.fromCharCode(b0 & 0xff).toUpperCase()
+  const c1: string = String.fromCharCode(b1 & 0xff).toUpperCase()
+  const id: string = `${c0}${c1}`
+  const ok0: boolean = c0 >= 'A' && c0 <= 'Z'
+  const ok1: boolean = c1 >= '0' && c1 <= '9'
+  return (ok0 && ok1) ? id : ''
+}
+
+function decodeDirAscii(b: number): string {
+  const c: string = String.fromCharCode(b & 0xff).toUpperCase()
+  if (c === 'N' || c === 'E' || c === 'S' || c === 'W') return c
+  return 'N'
+}
+
+function headingDegFromDir(dir: string): number {
+  if (dir === 'E') return 0
+  if (dir === 'S') return 90
+  if (dir === 'W') return 180
+  return 270
+}
+
+function summarizeBcFrame(f: CarProtoFrame): string {
+  const d: Uint8Array = f.data
+  if (d.length <= 0) return '状态上报'
+  const data1: number = d[0] & 0xFF
+  if (data1 === 0x01) {
+    return '上报当前点位与方向'
+  }
+  if (data1 === 0x02) {
+    return '上报障碍路段(触发重规划)'
+  }
+  if (data1 === 0x03) return '上报道闸通过状态'
+  if (data1 === 0x06) return '触发交通灯识别'
+  return '状态上报'
+}
+
+function appendDiagRxFrame(f: CarProtoFrame, summary: string): void {
+  try {
+    let cmdHex: string = `0x${byteToHex(f.type)}`
+    if ((f.type & 0xFF) === 0xBC && f.data.length > 0) {
+      cmdHex = `0x${byteToHex(f.data[0] & 0xFF)}`
+    } else if ((f.type & 0xFF) === 0xA0) {
+      cmdHex = 'ACK'
+    }
+    commStore.appendDiagKeyRxFrame({
       tsMs: Date.now(),
-      speed: prev.speed,
-      headingDeg: prev.headingDeg,
-      odomMm: prev.odomMm,
-      ultraFrontCm: prev.ultraFrontCm,
-      ultraBackCm: prev.ultraBackCm,
-      irDistCm: prev.irDistCm,
-      lightLux: lux,
-      rfid: prev.rfid
-    }
-  }
-  return undefined
+      cmdHex: cmdHex,
+      summary: summary,
+      frameKind: 'CCF5',
+      hex: bytesToHex(f.raw)
+    })
+  } catch (_) {}
 }
+
 
 export function clearPendingFrameDestApply(ctx: any): void {
-  if (ctx.frameDestApplyTimerId !== -1) {
-    clearTimeout(ctx.frameDestApplyTimerId)
-    ctx.frameDestApplyTimerId = -1
-  }
+  if (ctx.frameDestApplyTimerId !== -1) { clearTimeout(ctx.frameDestApplyTimerId); ctx.frameDestApplyTimerId = -1 }
   ctx.pendingFrameDestNodeId = ''
 }
 
 export function scheduleFrameDestApply(ctx: any, destNodeId: string): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-
   clearPendingFrameDestApply(ctx)
   ctx.pendingFrameDestNodeId = destNodeId
   s.destDraft = destNodeId
-  s.pushLog(`收到主车目的地，2秒后应用：${destNodeId}`)
+  s.pushLog(`收到目的地，2秒后应用：${destNodeId}`)
   s.setAction(`收到目的地：${destNodeId}`)
-
-  ctx.frameDestApplyTimerId = setTimeout(async (): Promise<void> => {
+  ctx.frameDestApplyTimerId = setTimeout((): void => {
     const store: Page1UiStore | undefined = ctx.store
     const pendingDestNodeId: string = ctx.pendingFrameDestNodeId
     ctx.frameDestApplyTimerId = -1
     ctx.pendingFrameDestNodeId = ''
     if (!store || pendingDestNodeId.length <= 0) return
-
     store.destDraft = pendingDestNodeId
     store.applyDest()
     ctx.planPath(store.destApplied)
     ctx.destFromFrame = false
-    store.pushLog(`主车目的地已应用并开始规划：${store.destApplied}`)
   }, P1C.FRAME_DEST_APPLY_DELAY_MS) as number
 }
 
-export function byteToHex(v: number): string {
-  return (v & 0xff).toString(16).toUpperCase().padStart(2, '0')
-}
+export function byteToHex(v: number): string { return (v & 0xff).toString(16).toUpperCase().padStart(2, '0') }
 
 export function bytesToHex(data: Uint8Array): string {
   let s: string = ''
-  let i: number = 0
-  while (i < data.length) {
-    const v: number = data[i] & 0xff
-    const part: string = v.toString(16).toUpperCase().padStart(2, '0')
+  for (let i: number = 0; i < data.length; i++) {
+    const part: string = (data[i] & 0xff).toString(16).toUpperCase().padStart(2, '0')
     s = s.length === 0 ? part : `${s} ${part}`
-    i += 1
   }
   return s
 }
@@ -323,182 +277,19 @@ export function clearParkingUltrasonicRequest(ctx: any): void {
 }
 
 export function isParkingUltrasonicResponseContext(ctx: any, nowMs: number): boolean {
-  if (!ctx.parkingUltrasonicPending) return false
-  if (ctx.parkingUltrasonicRequestAtMs <= 0) return false
-  if (nowMs < ctx.parkingUltrasonicRequestAtMs) return false
-  if (nowMs > ctx.parkingUltrasonicExpireAtMs) return false
-  return true
-}
-
-export function decodeLuxFromBbFrame(f: CarFrame55): number {
-  const lo: number = f.p2 & 0xff
-  const hi: number = f.p3 & 0xff
-  return (hi << 8) + lo
-}
-
-export function appendDiagKeyRxFrame(ctx: any, f: CarFrame55, summary: string): void {
-  commStore.appendDiagKeyRxFrame({
-    tsMs: Date.now(),
-    cmdHex: `0x${byteToHex(f.cmd)}`,
-    summary: summary,
-    frameKind: f.frameKind,
-    hex: bytesToHex(f.raw)
-  })
-}
-
-export function logFrame55(ctx: any, s: Page1UiStore, f: CarFrame55): void {
-  let msg: string = `RX 55AA cmd=0x${byteToHex(f.cmd)} payload=${bytesToHex(f.payload)}`
-
-  if (f.cmd === 0xBB) {
-    const lux: number = decodeLuxFromBbFrame(f)
-    msg = `RX 55AA cmd=0xBB 光照值=${lux}`
-  } else if (f.cmd === 0xBC) {
-    /*1.从回传帧中提取超声波状态码，作为障碍判断依据*/
-    const ultrasonicP1: number = f.p1 & 0xff
-
-    if (ultrasonicP1 === 0x04) {
-      ctx.onGarageParkDone04()
-      msg = `RX 55AA cmd=0xBC garage-park-done p1=0x${byteToHex(ultrasonicP1)}`
-      appendDiagKeyRxFrame(ctx, f, `garage-park-done p1=0x${byteToHex(ultrasonicP1)}`)
-      s.pushLog(msg)
-      return
-    }
-
-    if (ultrasonicP1 === 0x03) {
-      ctx.onGarageDepartReadyAck()
-      msg = `RX 55AA cmd=0xBC garage-ready p1=0x${byteToHex(ultrasonicP1)}`
-      appendDiagKeyRxFrame(ctx, f, `garage-ready p1=0x${byteToHex(ultrasonicP1)}`)
-      s.pushLog(msg)
-      return
-    }
-
-    if (ultrasonicP1 === 0x05) {
-      if (typeof ctx.onLowcarDone05 === 'function') {
-        ctx.onLowcarDone05()
-      }
-      msg = `RX 55AA cmd=0xBC lowcar-done p1=0x${byteToHex(ultrasonicP1)}`
-      appendDiagKeyRxFrame(ctx, f, `lowcar-done p1=0x${byteToHex(ultrasonicP1)}`)
-      s.pushLog(msg)
-      return
-    }
-    /* 当收到00，01，02，进入超声波障碍判断*/
-    if (ultrasonicP1 === 0x00 || ultrasonicP1 === 0x01 || ultrasonicP1 === 0x02) {
-      const recvAtMs: number = Date.now()
-      const parkingCtx: boolean =
-        isParkingUltrasonicResponseContext(ctx, recvAtMs) || !!ctx.parkingAwaitingUltrasonicDecision
-      ctx.lastUltrasonicP1 = ultrasonicP1
-      ctx.lastUltrasonicAtMs = recvAtMs
-      msg = `RX 55AA cmd=0xBC 超声波结果 p1=0x${byteToHex(ultrasonicP1)}`
-      appendDiagKeyRxFrame(ctx, f, `超声波结果 p1=0x${byteToHex(ultrasonicP1)}`)
-      /*下一个点位不是停车位*/
-      if (parkingCtx) {
-        s.pushLog(
-          ultrasonicP1 === 0x01
-            ? '超声波：停车位被占用(0x01)'
-            : `超声波：停车位可用(p1=0x${byteToHex(ultrasonicP1)})`
-        )
-        if (typeof ctx.onParkingUltrasonicResult === 'function') {
-          void ctx.onParkingUltrasonicResult(ultrasonicP1, recvAtMs)
-        } else {
-          clearParkingUltrasonicRequest(ctx)
-        }
-      } else {
-        s.pushLog(
-          ultrasonicP1 === 0x01
-            ? '超声波：行驶前方有障碍物(0x01)'
-            : `超声波：行驶态结果 p1=0x${byteToHex(ultrasonicP1)}`
-        )
-        /*2当状态码等于0x01时，判定前方存在障碍物*/
-        if (ultrasonicP1 === 0x01) {
-          /*3写入page2的复盘，可以回看障碍事件，便于可视化追踪*/
-          replayArchiveService.onObstacleTriggered('ULTRASONIC', '超声波检测到障碍并触发避障')
-          void page2ReplayService.onUltrasonicObstacleSignal('接收到小车 0x01 障碍物信号')
-          /*4把障碍事件送入避障队列，交给重规划链路立即处理*/
-          ctx.queueDrivingUltrasonicObstacle(ctx.lastUltrasonicAtMs)
-        }
-      }
-
-      s.pushLog(msg)
-      return
-    }
-
-    const rawP1Hex: string = byteToHex(f.p1)
-    const rawP2Hex: string = byteToHex(f.p2)
-    const rawP3Hex: string = byteToHex(f.p3)
-    const colChar: string = String.fromCharCode(f.p1 & 0xff)
-    const rowChar: string = String.fromCharCode(f.p2 & 0xff)
-    const destNodeId: string = `${colChar}${rowChar}`.toUpperCase()
-
-    msg = `RX 55AA cmd=0xBC p1=0x${rawP1Hex} p2=0x${rawP2Hex} p3=0x${rawP3Hex} 目的地=${destNodeId}`
-    appendDiagKeyRxFrame(ctx, f, `目的地=${destNodeId} p1=0x${rawP1Hex} p2=0x${rawP2Hex} p3=0x${rawP3Hex}`)
-
-    if (GridIdCodec.isValidId(destNodeId)) {
-      ctx.destFromFrame = true
-      scheduleFrameDestApply(ctx, destNodeId)
-    } else if (destNodeId.trim().length > 0) {
-      s.pushLog(`收到非法目的地编码 ASCII=${destNodeId}`)
-    }
-  } else if (f.cmd === 0xBD) {
-    const status: number = f.p1 & 0xff
-    const prevStatus: number = Number(ctx.lastBdLogStatus) || -1
-    const prevAtMs: number = Number(ctx.lastBdLogAtMs) || 0
-    const nowMs: number = Date.now()
-    const sameBurst: boolean = prevStatus === status && prevAtMs > 0 && (nowMs - prevAtMs) <= 900
-    if (sameBurst) {
-      // 小车 ACK 常见 3 连发：日志可合并，但 ACK 状态机必须逐帧处理，避免误触发/漏触发重发。
-      ctx.onPathAckFrame(f)
-      const n: number = Math.max(1, Number(ctx.lastBdLogCount) || 1) + 1
-      ctx.lastBdLogCount = n
-      ctx.lastBdLogAtMs = nowMs
-      if (status === 0x01) {
-        msg = `RX 55AA cmd=0xBD 状态=01(已接收) x${n}`
-      } else if (status === 0x02) {
-        msg = `RX 55AA cmd=0xBD 状态=02(已完成) x${n}`
-      } else {
-        msg = `RX 55AA cmd=0xBD 状态=0x${byteToHex(status)} x${n}`
-      }
-      if (n <= 3) {
-        s.pushLog(msg)
-      }
-      return
-    }
-    ctx.lastBdLogStatus = status
-    ctx.lastBdLogAtMs = nowMs
-    ctx.lastBdLogCount = 1
-    ctx.onPathAckFrame(f)
-
-    if (status === 0x01) {
-      msg = 'RX 55AA cmd=0xBD 状态=01(已接收)'
-    } else if (status === 0x02) {
-      msg = 'RX 55AA cmd=0xBD 状态=02(已完成)'
-    } else {
-      msg = `RX 55AA cmd=0xBD 状态=0x${byteToHex(status)}`
-    }
-
-    appendDiagKeyRxFrame(ctx, f, msg)
-  }
-
-  s.pushLog(msg)
+  return !!ctx.parkingUltrasonicPending && ctx.parkingUltrasonicRequestAtMs > 0 && nowMs >= ctx.parkingUltrasonicRequestAtMs && nowMs <= ctx.parkingUltrasonicExpireAtMs
 }
 
 export async function connectTcp(ctx: any, ip: string, port: number): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-
   s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${ip}:${port}`)
   s.pushLog(`尝试连接主车：${ip}:${port}`)
-
-  try {
-    await ctx.tcp.connect(ip, port)
-  } catch {
-    s.pushLog('connect() 抛异常：已交给 CarTcpService 重连处理')
-  }
+  try { await ctx.tcp.connect(ip, port) } catch { s.pushLog('connect() 抛异常：已交给 CarTcpService 重连处理') }
 }
 
 export async function disconnectTcp(ctx: any): Promise<void> {
-  try {
-    await ctx.tcp.disconnect()
-  } catch (e) {
+  try { await ctx.tcp.disconnect() } catch (e) {
     const msg: string = e instanceof Error ? e.message : 'disconnect error'
     hilog.warn(PAGE1_TCP_LOG_DOMAIN, PAGE1_TCP_LOG_TAG, '%{public}s', `[Page1] disconnectTcp: ${msg}`)
   }
@@ -506,272 +297,52 @@ export async function disconnectTcp(ctx: any): Promise<void> {
 
 export function canRealSend(ctx: any): boolean {
   const s: Page1UiStore | undefined = ctx.store
-  if (!s) return false
-  if (!s.realSendEnabled) return false
-  return s.connState === CarConnState.CONNECTED
+  return !!s && !!s.realSendEnabled && s.connState === CarConnState.CONNECTED
 }
 
-function isMotionAction(a: Page1Action): boolean {
-  return a === Page1Action.GO ||
-    a === Page1Action.BACK ||
-    a === Page1Action.LEFT ||
-    a === Page1Action.RIGHT ||
-    a === Page1Action.LEFT_HALF ||
-    a === Page1Action.RIGHT_HALF ||
-    a === Page1Action.UTURN
-}
-
-function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
-  return (Number(ctx.emergencyCommandSeq) || 0) !== seq
-}
-
-async function triggerLightBaselineBeforeMotion(ctx: any, s: Page1UiStore): Promise<void> {
-  void ctx
-  void s
-}
-
-async function waitLightBaselineReadyForManualGo(ctx: any, s: Page1UiStore, timeoutMs: number): Promise<boolean> {
-  void ctx
-  void s
-  void timeoutMs
-  return true
-}
-
-export async function sendManualGoCommand(ctx: any, actionText: string, commandSeq: number): Promise<void> {
+export async function sendManualGoCommand(ctx: any, _actionText: string, _commandSeq: number): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-  if (isStaleByEmergencySeq(ctx, commandSeq)) return
-  if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('GO', 'MANUAL_GO_SEND')) return
-  s.setAction('前进')
-  s.bumpTx()
-  await ctx.proto.go()
+  s.setAction('前进'); s.bumpTx(); s.pushLog('旧发送协议已删除：忽略前进下发')
   ctx.manualGoLastSentAtMs = Date.now()
-  void actionText
 }
 
 export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
-  if (isMotionAction(a) && typeof ctx.acquireMotionDispatch === 'function') {
-    await ctx.acquireMotionDispatch(`MANUAL:${Page1Action[a]}`)
-  }
-  const commandSeq: number = Number(ctx.emergencyCommandSeq) || 0
-  // 比赛讲解上下文：
-  // ControlPanel.ets 的按钮点击最终都会进入这个函数。
-  // 现场可按“动作进入 -> 模式选择 -> 协议发送 -> 日志回执”顺序讲解。
-
-  // 急停优先级最高：立即中断自动运行并执行统一急停流程。
-  try {
-    if (a === Page1Action.SCRAM) {
-      if (typeof ctx.emergencyStopAndHold === 'function') {
-        await ctx.emergencyStopAndHold()
-        return
-      }
-    }
-
-  if (a !== Page1Action.GO) {
-    ctx.manualGoGateToken += 1
-    ctx.manualGoGateActive = false
-  }
-
-  // 关键讲解点：统一切换发送模式（已连接真发；未连接或演示模式仅记录）
-  ctx.proto.setMode(canRealSend(ctx) ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
-
-  let actionText: string = ''
-  if (a === Page1Action.GO) actionText = '前进'
-  else if (a === Page1Action.BACK) actionText = '后退'
-  else if (a === Page1Action.LEFT) actionText = '左转'
-  else if (a === Page1Action.RIGHT) actionText = '右转'
-  else if (a === Page1Action.LEFT_HALF) actionText = '左半转'
-  else if (a === Page1Action.RIGHT_HALF) actionText = '右半转'
-  else if (a === Page1Action.UTURN) actionText = '掉头'
-  else if (a === Page1Action.ALARM) actionText = s.alarmEnabled ? '警报关闭' : '警报开启'
-  else if (a === Page1Action.STOP) actionText = '停止'
-  else if (a === Page1Action.LAMP) actionText = '路灯调节'
-  else if (a === Page1Action.LANGUAGE) actionText = '站台播报'
-  else if (a === Page1Action.SCRAM) actionText = '紧急停止'
-  else if (a === Page1Action.TFTA) actionText = 'TFTA发送'
-  else if (a === Page1Action.LIGHT) actionText = '光照查询'
-  else if (a === Page1Action.TFTB) actionText = 'TFTB发送'
-  else if (a === Page1Action.STROBE) actionText = '道闸发送'
-  if (actionText.length > 0) {
-    replayArchiveService.onAction(actionText, 'MANUAL')
-  }
-
-  if (!canRealSend(ctx)) {
-    // DRY_RUN / 未连接分支：不真实发车，但保留动作日志和地图预览，便于现场展示链路
-    kickTcpConnectForRealSendIfNeeded(ctx, s)
-    const mode: string = s.realSendEnabled ? 'REAL_SEND(未连接)' : 'DRY_RUN'
-    s.bumpTx()
-    if (a === Page1Action.ALARM) s.alarmEnabled = !s.alarmEnabled
-    s.setAction(`动作=${actionText} | ${mode}`)
-    ctx.previewManualActionOnMap(a)
+  const name: string = Page1Action[a]
+  if (a === Page1Action.SCRAM) {
+    s.pushLog('SCRAM: 按钮留空（未绑定发送）')
     return
   }
 
-    if (a === Page1Action.GO) {
-    // GO 分支示例：包含去重、道闸/车库约束、光照前置检查，再进入真实发送
-    ctx.pathAckLastCommandText = actionText
-    if (await ctx.maybeHandleGarageDepartBeforeDrive(Date.now())) {
-      return
-    }
-    if (maybeBlockGoByTrafficGate(ctx, Date.now(), true)) {
-      return
-    }
+  // 门控已下线：不再拦截 GO。
 
-    const nowGoMs: number = Date.now()
-    if (nowGoMs - ctx.manualGoLastSentAtMs < P1C.MANUAL_GO_DEDUP_MS) {
-      s.pushLog('MANUAL_GO_DEDUP: 连续前进已跳过')
-      return
-    }
-
-    const lightReadyForGo: boolean = await waitLightBaselineReadyForManualGo(ctx, s, P1C.LIGHT_QUERY_WAIT_TIMEOUT_MS)
-    if (!lightReadyForGo) return
-    await sendManualGoCommand(ctx, actionText, commandSeq)
-    ctx.previewManualActionOnMap(Page1Action.GO)
-      return
-    }
-
-    if (a === Page1Action.BACK) {
-    // BACK/LEFT/RIGHT 分支用于展示“按钮动作 -> 协议动作”的直接映射关系
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('BACK', 'MANUAL_SEND')) return
-    s.setAction('后退')
+  if (!ctx.canRealSend()) {
     s.bumpTx()
-    await ctx.proto.back()
-    ctx.previewManualActionOnMap(Page1Action.BACK)
-      return
-    }
-
-    if (a === Page1Action.LEFT) {
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('LEFT', 'MANUAL_SEND')) return
-    s.setAction('左转')
+    s.setAction(`动作=${name} | DRY`)
+    s.pushLog(`动作发送(DRY_RUN)：${name}`)
+  } else {
+    ctx.proto.setMode(CarSendMode.REAL_SEND)
     s.bumpTx()
-    await ctx.proto.left()
-    ctx.previewManualActionOnMap(Page1Action.LEFT)
-      return
-    }
-
-    if (a === Page1Action.RIGHT) {
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('RIGHT', 'MANUAL_SEND')) return
-    s.setAction('右转')
-    s.bumpTx()
-    await ctx.proto.right()
-    ctx.previewManualActionOnMap(Page1Action.RIGHT)
-      return
-    }
-
-    if (a === Page1Action.LEFT_HALF) {
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('LEFT_HALF', 'MANUAL_SEND')) return
-    s.setAction('左半转')
-    s.bumpTx()
-    await ctx.proto.leftHalf()
-    ctx.previewManualActionOnMap(Page1Action.LEFT_HALF)
-      return
-    }
-
-    if (a === Page1Action.RIGHT_HALF) {
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('RIGHT_HALF', 'MANUAL_SEND')) return
-    s.setAction('右半转')
-    s.bumpTx()
-    await ctx.proto.rightHalf()
-    ctx.previewManualActionOnMap(Page1Action.RIGHT_HALF)
-      return
-    }
-
-    if (a === Page1Action.UTURN) {
-    ctx.pathAckLastCommandText = actionText
-    await triggerLightBaselineBeforeMotion(ctx, s)
-    if (isStaleByEmergencySeq(ctx, commandSeq)) return
-    if (typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand('UTURN', 'MANUAL_SEND')) return
-    s.setAction('掉头')
-    s.bumpTx()
-    await ctx.proto.uturn()
-    ctx.previewManualActionOnMap(Page1Action.UTURN)
-      return
-    }
-
-    if (a === Page1Action.ALARM) {
-    const nextEnabled: boolean = !s.alarmEnabled
-    const alarmText: string = nextEnabled ? '警报开启' : '警报关闭'
-    s.alarmEnabled = nextEnabled
-    s.setAction(alarmText)
-    s.bumpTx()
-    await ctx.proto.setAlarm(nextEnabled)
-      return
-    }
-
-    if (a === Page1Action.STOP) {
-    s.setAction('停止')
-    s.pushLog('STOP: 已忽略 stopTask 下发（该指令无法停止行动任务）')
-      return
-    }
-
-    if (a === Page1Action.LAMP) {
-    s.setAction('路灯调节')
-    s.bumpTx()
-    s.pushLog('LIGHT: 路灯调节发送已关闭')
-      return
-    }
-
-    if (a === Page1Action.LANGUAGE) {
-    s.setAction('站台播报')
-    s.bumpTx()
-    s.pushLog('VOICE: 站台播报发送已关闭')
-      return
-    }
-
-    if (a === Page1Action.SCRAM) {
-    s.setAction('紧急停止')
-    s.bumpTx()
-    s.pushLog('VOICE: 紧急语音发送已关闭')
-      return
-    }
-
-    if (a === Page1Action.TFTA) {
-    s.setAction('TFTA发送')
-    s.bumpTx()
-    await ctx.proto.sendTFTA()
-      return
-    }
-
-    if (a === Page1Action.LIGHT) {
-    s.setAction('光照查询')
-    s.bumpTx()
-    s.pushLog('LIGHT: 已改为页面启动时自动查询一次；当前入口不再发送')
-      return
-    }
-
-    if (a === Page1Action.STROBE) {
-    s.setAction('道闸发送')
-    s.bumpTx()
-    await ctx.proto.strobe()
-      return
-    }
-
-    if (a === Page1Action.TFTB) {
-    s.setAction('TFTB发送')
-    s.bumpTx()
-    await ctx.proto.sendTFTB()
-      return
-    }
-  } finally {
-    if (isMotionAction(a) && typeof ctx.leaveMotionDispatch === 'function') {
-      ctx.leaveMotionDispatch(`MANUAL:${Page1Action[a]}`)
-    }
+    s.setAction(`动作=${name} | REAL`)
+    let seq: number = 0
+    if (a === Page1Action.GO) seq = await ctx.proto.Forward(false)
+    else if (a === Page1Action.BACK) seq = await ctx.proto.Backward(false)
+    else if (a === Page1Action.LEFT) seq = await ctx.proto.TurnLeft(false)
+    else if (a === Page1Action.RIGHT) seq = await ctx.proto.TurnRight(false)
+    else if (a === Page1Action.LEFT_HALF) seq = await ctx.proto.TurnLeftHalf(false)
+    else if (a === Page1Action.RIGHT_HALF) seq = await ctx.proto.TurnRightHalf(false)
+    else if (a === Page1Action.UTURN) seq = await ctx.proto.TurnRound(false)
+    else if (a === Page1Action.STOP) seq = await ctx.proto.Send0A(0x00, undefined, false, true)
+    s.pushLog(`动作发送(CCF5)：${name} seq=${seq}`)
   }
+
+  if (a === Page1Action.GO) ctx.previewManualActionOnMap(Page1Action.GO)
+  if (a === Page1Action.BACK) ctx.previewManualActionOnMap(Page1Action.BACK)
+  if (a === Page1Action.LEFT) ctx.previewManualActionOnMap(Page1Action.LEFT)
+  if (a === Page1Action.RIGHT) ctx.previewManualActionOnMap(Page1Action.RIGHT)
+  if (a === Page1Action.LEFT_HALF) ctx.previewManualActionOnMap(Page1Action.LEFT_HALF)
+  if (a === Page1Action.RIGHT_HALF) ctx.previewManualActionOnMap(Page1Action.RIGHT_HALF)
+  if (a === Page1Action.UTURN) ctx.previewManualActionOnMap(Page1Action.UTURN)
 }

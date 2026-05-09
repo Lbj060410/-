@@ -1,4 +1,4 @@
-import { Page1Action } from '../types/Page1Types'
+﻿import { Page1Action } from '../types/Page1Types'
 import { GridIdCodec, PathPlannerAStar } from './PathPlannerAStar'
 import { videoStore } from '../../../state/VideoStore'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
@@ -85,18 +85,9 @@ export class Page1PlanMotionCoordinator {
     this.syncRecognitionByPathCursor()
     this.ctx.uploadTrajectoryNode(toId)
 
-    const fromId: string = this.ctx.motionPlayer.currentFromId()
     s.pushLog(`ARRIVE: ${toId} via MOTION | pathIndex=${s.pathIndex}`)
 
-    const handledGateDepart: boolean = await this.ctx.maybeHandleGateDepartOnArrival(toId)
-    if (handledGateDepart) return
-    const handledEdgeParking: boolean = await this.ctx.maybeRunParkingBeforeFinalEdgeArrival(toId)
-    if (handledEdgeParking) return
-    const handledNormalParking: boolean = await this.ctx.maybeRunNormalFinalParkingAfterArrival(fromId, toId)
-    if (handledNormalParking) return
-
     if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
-      await this.ctx.maybeHandleGarageFinalArrive(toId)
       if (!this.ctx.pathCoordinator.canSendNextCommand(Date.now())) return
       await this.ctx.driveAckCoordinator.sendDriveActionDirect(Page1Action.STOP)
       s.setAction('到达终点，停止')
@@ -117,7 +108,6 @@ export class Page1PlanMotionCoordinator {
     this.ctx.clearAheadVisionReplanState()
     this.ctx.cancelParkingSequence()
     this.ctx.stopActiveMotion()
-    this.ctx.resetGateDepartDedupState()
     this.ctx.resetRouteVoiceFlags()
     this.ctx.resetPathAckState()
 
@@ -141,28 +131,6 @@ export class Page1PlanMotionCoordinator {
 
     const blocked: Array<string> = s.blockedNodes
     const blockedEdges: Array<string> = s.blockedEdges
-    const gateVia: string = this.ctx.pathCoordinator.gateForcedWaypoint(start, goal)
-    if (gateVia.length > 0) {
-      const gateRes: any = this.ctx.pathCoordinator.buildPathViaWaypoint(start, gateVia, goal, blocked, blockedEdges)
-      if (!gateRes.ok) {
-        s.setPath([], 'A*闸口失败')
-        s.pushLog(`A*: GATE FAIL reason=${gateRes.reason} start=${start} via=${gateVia} goal=${goal}`)
-        return
-      }
-      s.setPath(gateRes.path, 'A*GATE')
-      replayArchiveService.onPathReplanned(oldPath, gateRes.path, 'A*GATE')
-      s.currentSnapNodeId = start
-      this.syncRecognitionByPathCursor()
-      this.ctx.uploadTrajectoryNode(start)
-      s.lastAutoFollowAtMs = 0
-      this.ctx.pathCoordinator.syncLogicalHeadingWithCurrentState()
-      s.pushLog(`A*: GATE ${start} -> ${goal} via=${gateVia} | len=${gateRes.path.length} blockedN=${blocked.length} blockedE=${blockedEdges.length}`)
-      if (s.pathIndex >= s.pathNodes.length - 1) {
-        void this.ctx.driveAckCoordinator.sendDriveActionDirect(Page1Action.STOP)
-        s.setAction('到达终点，停止')
-      }
-      return
-    }
 
     const segPath: Array<string> | undefined = this.ctx.tryBuildSegmentAwarePath(goal, blocked, blockedEdges)
     if (segPath && segPath.length > 0) {

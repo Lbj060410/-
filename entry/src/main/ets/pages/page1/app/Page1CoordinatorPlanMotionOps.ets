@@ -114,19 +114,9 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
   syncRecognitionByPathCursor(ctx)
   ctx.uploadTrajectoryNode(toId)
 
-  const fromId: string = ctx.motionPlayer.currentFromId()
   s.pushLog(`ARRIVE: ${toId} via MOTION | pathIndex=${s.pathIndex}`)
-  await ctx.maybeHandleF7GarageSpecialFlowOnArrival(toId)
-
-  const handledGateDepart: boolean = await ctx.maybeHandleGateDepartOnArrival(toId)
-  if (handledGateDepart) return
-  const handledEdgeParking: boolean = await ctx.maybeRunParkingBeforeFinalEdgeArrival(toId)
-  if (handledEdgeParking) return
-  const handledNormalParking: boolean = await ctx.maybeRunNormalFinalParkingAfterArrival(fromId, toId)
-  if (handledNormalParking) return
 
   if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
-    await ctx.maybeHandleGarageFinalArrive(toId)
     if (!ctx.canSendNextCommand(Date.now())) return
     await ctx.sendDriveActionDirect(Page1Action.STOP)
     s.setAction('到达终点，停止')
@@ -134,7 +124,7 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
     return
   }
 
-  // 收到上一段 BD=02 并完成到点后，立即尝试下发下一步指令。
+  // 收到上一段 新协议状态回执 并完成到点后，立即尝试下发下一步指令。
   await ctx.followPathOnce(Date.now(), true)
 }
 
@@ -149,7 +139,6 @@ export function planPath(ctx: any, dest: string): void {
   ctx.clearAheadVisionReplanState()
   ctx.cancelParkingSequence()
   ctx.stopActiveMotion()
-  ctx.resetGateDepartDedupState()
   ctx.resetRouteVoiceFlags()
   ctx.resetPathAckState()
 
@@ -174,68 +163,27 @@ export function planPath(ctx: any, dest: string): void {
     ctx.setTrajectoryPlanEndpoints(start, goal)
   }
 
+  // 小车已内置 A*：上位机仍做一次本地 A*，仅用于地图路线可视化。
   const blocked: Array<string> = s.blockedNodes
   const blockedEdges: Array<string> = s.blockedEdges
-  const gateVia: string = ctx.gateForcedWaypoint(start, goal)
-  if (gateVia.length > 0) {
-    const gateRes: any = ctx.buildPathViaWaypoint(start, gateVia, goal, blocked, blockedEdges)
-    if (!gateRes.ok) {
-      s.setPath([], 'A*闸口失败')
-      s.pushLog(`A*: GATE FAIL reason=${gateRes.reason} start=${start} via=${gateVia} goal=${goal}`)
-      return
-    }
-    s.setPath(gateRes.path, 'A*GATE')
-    replayArchiveService.onPathReplanned(oldPath, gateRes.path, 'A*GATE')
-    s.currentSnapNodeId = start
-    syncRecognitionByPathCursor(ctx)
-    ctx.uploadTrajectoryNode(start)
-    s.lastAutoFollowAtMs = 0
-    ctx.syncLogicalHeadingWithCurrentState()
-    s.pushLog(`A*: GATE ${start} -> ${goal} via=${gateVia} | len=${gateRes.path.length} blockedN=${blocked.length} blockedE=${blockedEdges.length}`)
-    if (s.pathIndex >= s.pathNodes.length - 1) {
-      void ctx.sendDriveActionDirect(Page1Action.STOP)
-      s.setAction('到达终点，停止')
-    }
-    return
-  }
-
-  const segPath: Array<string> | undefined = ctx.tryBuildSegmentAwarePath(goal, blocked, blockedEdges)
-  if (segPath && segPath.length > 0) {
-    s.setPath(segPath, 'A*SEG')
-    replayArchiveService.onPathReplanned(oldPath, segPath, 'A*SEG')
-    const near: string = ctx.nearestNodeIdByPose()
-    s.currentSnapNodeId = GridIdCodec.isValidId(near) ? near : segPath[0]
-    syncRecognitionByPathCursor(ctx)
-    ctx.uploadTrajectoryNode(s.currentSnapNodeId)
-    s.lastAutoFollowAtMs = 0
-    ctx.syncLogicalHeadingWithCurrentState()
-    s.pushLog(`A*: SEG -> ${goal} | len=${segPath.length} blockedN=${blocked.length} blockedE=${blockedEdges.length}`)
-    if (s.pathIndex >= s.pathNodes.length - 1) {
-      void ctx.sendDriveActionDirect(Page1Action.STOP)
-      s.setAction('到达终点，停止')
-    }
-    return
-  }
-  /*1.基于最新起点、终点和障碍信息重新计算路径*/
-  const res: any = PathPlannerAStar.plan(start, goal, blocked, blockedEdges)
-  /*2.如果重规划失败时立即停止旧路径执行，防止错误动作继续下发*/
-  if (!res.ok) {
-    /*3.把新路径替换到当前执行状态*/
-    s.setPath([], 'A*失败')
-    s.pushLog(`A*: FAIL reason=${res.reason} start=${start} goal=${goal} blockedN=[${blocked.join(',')}] blockedE=[${blockedEdges.join(',')}]`)
-    return
-  }
-  /*4.记录重规划前后差异，便于后续回放和评估*/
-  s.setPath(res.path, 'A*')
-  replayArchiveService.onPathReplanned(oldPath, res.path, 'A*')
+  const visRes: any = PathPlannerAStar.plan(start, goal, blocked, blockedEdges)
+  const visualPath: Array<string> = (visRes && visRes.ok && visRes.path && visRes.path.length > 0)
+    ? visRes.path
+    : [start, goal]
+  s.setPath(visualPath, 'CAR_ASTAR_VIS')
+  ctx.carAstarMode = true
+  replayArchiveService.onPathReplanned(oldPath, visualPath, 'CAR_ASTAR_VIS')
   s.currentSnapNodeId = start
   syncRecognitionByPathCursor(ctx)
   ctx.uploadTrajectoryNode(start)
   s.lastAutoFollowAtMs = 0
   ctx.syncLogicalHeadingWithCurrentState()
-  s.pushLog(`A*: ${start} -> ${goal} | len=${res.path.length} blockedN=${blocked.length} blockedE=${blockedEdges.length}`)
-  if (s.pathIndex >= s.pathNodes.length - 1) {
-    void ctx.sendDriveActionDirect(Page1Action.STOP)
-    s.setAction('到达终点，停止')
+  s.pushLog(`CAR_ASTAR: visual path ready start=${start}, goal=${goal}, len=${visualPath.length}`)
+  if (ctx.canRealSend && ctx.canRealSend() && ctx.proto && typeof ctx.proto.sendGoalNode === 'function') {
+    void ctx.proto.sendGoalNode(goal, true)
+    s.pushLog(`CAR_ASTAR: goal sent -> ${goal}`)
+  } else {
+    s.pushLog(`CAR_ASTAR: DRY_RUN goal=${goal}`)
   }
 }
+

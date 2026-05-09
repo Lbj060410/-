@@ -2407,7 +2407,6 @@ export struct Page4View {
     if (action === Page1Action.STOP) return '停止'
     if (action === Page1Action.SCRAM) return '紧急停止'
     if (action === Page1Action.TFTA) return 'TFTA'
-    if (action === Page1Action.STROBE) return '道闸'
     return '动作'
   }
 

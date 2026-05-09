@@ -20,8 +20,7 @@ export enum Page1Action {
   SCRAM= 11,
   TFTA=12,
   LIGHT=13,
-  TFTB=14,
-  STROBE=15
+  TFTB=14
 }
 
 export interface CarTelemetry {
@@ -35,4 +34,3 @@ export interface CarTelemetry {
   lightLux: number
   rfid: string
 }
-

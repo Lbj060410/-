@@ -10,6 +10,7 @@
 import { page1Store, Page1UiStore } from './app/Page1UiStore'
 import { page1Coordinator } from './app/Page1Coordinator'
 import { Page1Theme } from './Page1Theme'
+import { Page1Action } from './types/Page1Types'
 import { SandboxMap } from './components/SandboxMap'
 import { CarStatusCard } from './components/CarStatusCard'
 import { ControlPanel } from './components/ControlPanel'
@@ -22,6 +23,7 @@ export struct Page1View {
   @State private store: Page1UiStore = page1Store
   @State private showDiag: boolean = false
   @State private showReplay: boolean = false
+  @State private showMorePanel: boolean = false
   private startDeferredTimerId: number = -1
 
   aboutToAppear(): void {
@@ -71,7 +73,10 @@ export struct Page1View {
             Column({ space: 10 }) {
               CarStatusCard({})
               ControlPanel({
-                onDiag: (): void => { this.showDiag = true }
+                onDiag: (): void => { this.showDiag = true },
+                onMore: (): void => { this.showMorePanel = true },
+                onTrafficLight: (): void => { this.store.toggleTrafficLightEdit() },
+                onGate: (): void => { this.store.toggleGateEdit() }
               })
               Column() {}.height(4)
             }
@@ -143,6 +148,121 @@ export struct Page1View {
         .backgroundColor('#00000033')
         .align(Alignment.Bottom)
         .onClick((): void => { this.showReplay = false })
+      }
+
+      if (this.showMorePanel) {
+        Stack() {
+          Row() {
+            Blank()
+            Column({ space: 10 }) {
+              Row() {
+                Text('更多')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Page1Theme.TEXT_PRIMARY)
+                Blank()
+                Button('关闭')
+                  .height(30)
+                  .padding({ left: 12, right: 12 })
+                  .borderRadius(14)
+                  .fontSize(12)
+                  .backgroundColor('#F1F5F9')
+                  .fontColor(Page1Theme.TEXT_SECONDARY)
+                  .onClick((): void => { this.showMorePanel = false })
+              }
+              .width('100%')
+
+              Text('更多功能面板（预留）')
+                .fontSize(12)
+                .fontColor(Page1Theme.TEXT_SECONDARY)
+                .width('100%')
+
+              Button('左半转')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#F8FAFC')
+                .fontColor(Page1Theme.TEXT_PRIMARY)
+                .border({ width: 1, color: '#E2E8F0' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.LEFT_HALF)
+                })
+
+              Button('右半转')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#F8FAFC')
+                .fontColor(Page1Theme.TEXT_PRIMARY)
+                .border({ width: 1, color: '#E2E8F0' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.RIGHT_HALF)
+                })
+
+              Button('特殊路段')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  this.store.toggleSpecialRoadEdit()
+                })
+                .gesture(
+                  LongPressGesture()
+                    .onAction((): void => {
+                      void page1Coordinator.clearSpecialSegmentByUi()
+                      this.store.specialRoadEditEnabled = false
+                    })
+                )
+
+              Button('设置车库')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  void page1Coordinator.setGarageByUi()
+                })
+
+              Button('停止任务')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#FFF1F2')
+                .fontColor('#9F1239')
+                .border({ width: 1, color: '#FECDD3' })
+                .onClick((): void => {
+                  void page1Coordinator.stopTaskByUi()
+                })
+
+              Button('继续任务')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#ECFDF5')
+                .fontColor('#166534')
+                .border({ width: 1, color: '#BBF7D0' })
+                .onClick((): void => {
+                  void page1Coordinator.resumeTaskByUi()
+                })
+            }
+            .width('30%')
+            .height('100%')
+            .padding(12)
+            .backgroundColor(Page1Theme.SURFACE)
+            .shadow({ radius: 18, color: '#00000022', offsetX: -4, offsetY: 0 })
+          }
+          .width('100%')
+          .height('100%')
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#00000033')
+        .onClick((): void => { this.showMorePanel = false })
       }
     }
     .width('100%')

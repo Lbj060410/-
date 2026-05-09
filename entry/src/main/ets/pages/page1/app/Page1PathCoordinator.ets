@@ -24,45 +24,6 @@ export class Page1PathCoordinator {
     return p.row === 0
   }
 
-  isInsideGateInnerSideNode(id: string): boolean {
-    const p = GridIdCodec.parse(id)
-    if (!p) return false
-    return p.row <= 1
-  }
-
-  private rowLabelByIndex(rowIndex: number): number {
-    if (rowIndex === 0) return 1
-    if (rowIndex === 1) return 2
-    if (rowIndex === 2) return 4
-    if (rowIndex === 3) return 6
-    if (rowIndex === 4) return 7
-    return -1
-  }
-
-  private isUpperZoneById(id: string): boolean {
-    const p = GridIdCodec.parse(id)
-    if (!p) return false
-    const rowLabel: number = this.rowLabelByIndex(p.row)
-    return rowLabel === 1 || rowLabel === 2
-  }
-
-  private isLowerZoneById(id: string): boolean {
-    const p = GridIdCodec.parse(id)
-    if (!p) return false
-    const rowLabel: number = this.rowLabelByIndex(p.row)
-    return rowLabel === 4 || rowLabel === 6 || rowLabel === 7
-  }
-
-  gateForcedWaypoint(startId: string, goalId: string): string {
-    const startUpper: boolean = this.isUpperZoneById(startId)
-    const goalUpper: boolean = this.isUpperZoneById(goalId)
-    const startLower: boolean = this.isLowerZoneById(startId)
-    const goalLower: boolean = this.isLowerZoneById(goalId)
-    if (startUpper && goalLower) return 'B2'
-    if (startLower && goalUpper) return 'B4'
-    return ''
-  }
-
   buildPathViaWaypoint(
     start: string,
     via: string,
@@ -197,6 +158,7 @@ export class Page1PathCoordinator {
   async followPathOnce(nowMs: number, force: boolean = false): Promise<void> {
     const s = this.ctx.store
     if (!s) return
+    if (this.ctx.carAstarMode === true) return
     if (force) s.pushLog(`AUTO_FIRST: follow enter idx=${s.pathIndex} len=${s.pathNodes.length}`)
     if (this.ctx.maybeHandleAheadVisionReplan(nowMs)) {
       if (force) s.pushLog('AUTO_FIRST: blocked by ahead-vision replan')
@@ -204,14 +166,6 @@ export class Page1PathCoordinator {
     }
     if (nowMs < this.ctx.pauseUntilMs) {
       if (force) s.pushLog(`AUTO_FIRST: blocked by pause now=${nowMs} until=${this.ctx.pauseUntilMs}`)
-      return
-    }
-    if (this.ctx.parkingInProgress) {
-      if (force) s.pushLog('AUTO_FIRST: blocked by parkingInProgress')
-      return
-    }
-    if (this.ctx.gateDepartInProgress) {
-      if (force) s.pushLog('AUTO_FIRST: blocked by gateDepartInProgress')
       return
     }
     if (this.ctx.motionRunning()) {
@@ -245,11 +199,6 @@ export class Page1PathCoordinator {
         return
       }
     }
-    if (await this.ctx.maybeHandleGarageDepartBeforeDrive(nowMs)) {
-      if (force) s.pushLog('AUTO_FIRST: consumed by garageDepart flow')
-      s.markAutoFollow(nowMs)
-      return
-    }
     if (!this.canSendNextCommand(nowMs)) {
       if (force) s.pushLog('AUTO_FIRST: blocked by scheduler canSendNextCommand=false')
       return
@@ -257,16 +206,6 @@ export class Page1PathCoordinator {
     const idx: number = s.pathIndex
     const fromId: string = s.pathNodes[idx]
     const toId: string = s.pathNodes[idx + 1]
-    const gateEdge: boolean =
-      (fromId.trim().toUpperCase() === 'B2' && toId.trim().toUpperCase() === 'B4') ||
-      (fromId.trim().toUpperCase() === 'B4' && toId.trim().toUpperCase() === 'B2')
-    if (gateEdge) {
-      const handledGateDepartBeforeGo: boolean = await this.ctx.maybeHandleGateDepartOnArrival(fromId)
-      if (force) s.pushLog(`AUTO_FIRST: gateEdge ${fromId}->${toId} handled=${handledGateDepartBeforeGo ? 1 : 0}`)
-      if (!handledGateDepartBeforeGo) s.pushLog(`GATE_DEPART_GUARD: ${fromId}->${toId} blocked normal go`)
-      s.markAutoFollow(nowMs)
-      return
-    }
     if ((s.isBlocked(toId) || s.isBlockedEdge(fromId, toId)) && s.destApplied.length > 0) {
       if (force) s.pushLog(`AUTO_FIRST: blocked by obstacle edge=${fromId}->${toId}, replan`)
       this.ctx.maybeReplanOnObstacle()
@@ -304,7 +243,7 @@ export class Page1PathCoordinator {
       else if (turnAction === Page1Action.RIGHT) turnText = '鍙宠浆'
       else if (turnAction === Page1Action.UTURN) turnText = '鎺夊ご'
       s.setAction(`鑷姩杞悜=${turnText}`)
-      s.pushLog(`TURN_ONLY: ${fromId} -> ${toId} | sent, wait BD=02 before dot turn`)
+      s.pushLog(`TURN_ONLY: ${fromId} -> ${toId} | sent, wait 新协议状态回执 before dot turn`)
       return
     }
     if (force) s.pushLog('AUTO_FIRST: before maybeStartAheadVisionReplan')
@@ -347,7 +286,8 @@ export class Page1PathCoordinator {
     }
     if (force) s.pushLog(`AUTO_FIRST: GO send ok edge=${fromId}->${toId}`)
     s.markAutoFollow(nowMs)
-    s.pushLog(`SEGMENT_START: ${fromId} -> ${toId} | sent, wait BD=02 then move dot ${this.ctx.driveAckCoordinator.pathDotMotionTimingMs()}ms`)
+    s.pushLog(`SEGMENT_START: ${fromId} -> ${toId} | sent, wait 新协议状态回执 then move dot ${this.ctx.driveAckCoordinator.pathDotMotionTimingMs()}ms`)
   }
 }
+
 
