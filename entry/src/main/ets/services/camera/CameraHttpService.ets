@@ -1,10 +1,6 @@
-/**
- * 代码指南：
- * 文件：services/camera/CameraHttpService.ets
- * 用途：摄像头设备发现、状态检测及HTTP服务集成。
- * 修改时机：摄像头源配置、设备检测逻辑或请求处理逻辑发生变更时。
- * 相关文件：pages/page2/* 以及 services/source/*。
- */
+﻿/**
+ * 浠ｇ爜鎸囧崡锛? * 鏂囦欢锛歴ervices/camera/CameraHttpService.ets
+ * 鐢ㄩ€旓細鎽勫儚澶磋澶囧彂鐜般€佺姸鎬佹娴嬪強HTTP鏈嶅姟闆嗘垚銆? * 淇敼鏃舵満锛氭憚鍍忓ご婧愰厤缃€佽澶囨娴嬮€昏緫鎴栬姹傚鐞嗛€昏緫鍙戠敓鍙樻洿鏃躲€? * 鐩稿叧鏂囦欢锛歱ages/page2/* 浠ュ強 services/source/*銆? */
 import http from '@ohos.net.http'
 import image from '@ohos.multimedia.image'
 
@@ -17,7 +13,7 @@ export interface HttpFrameResult {
 
 export class CameraHttpService {
   private readonly timeoutMs: number = 2500
-  // ��֤�������й�������ɢ���� URL �ַ�����
+  // 保证用户名和密码经过 URL 编码，避免特殊字符导致请求失败。
 
   buildSnapshotUrl(host: string, user: string, pass: string): string {
     const parts: Array<string> = []
@@ -60,9 +56,10 @@ export class CameraHttpService {
       }
     } catch (e) {
       const costMs: number = Date.now() - start
-      return { ok: false, errorText: 'HTTP���ɴ�/��ʱ', costMs }
+      return { ok: false, errorText: 'HTTP不可达/超时', costMs }
     }
   }
 }
+
 
 

@@ -149,14 +149,66 @@ export struct ControlPanel {
         }
         .width('100%')
 
-        // 第1行：比赛演示核心四按钮（建议现场优先展示这一行）
-        // 讲解口径：UI按钮 -> onClick -> page1Coordinator.onAction -> 协议下发
-       Row({space:10}){
-         this.controlBtn('前进',Page1Action.GO,'basic')
-         this.controlBtn('后退',Page1Action.BACK,'basic')
-         this.controlBtn('左转',Page1Action.LEFT,'basic')
-         this.controlBtn('右转',Page1Action.RIGHT,'basic')
-       }
+        Row({ space: 10 }) {
+          Button('特殊路段')
+            .layoutWeight(1)
+            .height(48)
+            .borderRadius(6)
+            .backgroundColor('#EEF2FF')
+            .fontColor('#3730A3')
+            .border({ width: 1, color: '#C7D2FE' })
+            .onClick((): void => {
+              this.store.toggleSpecialRoadEdit()
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  void page1Coordinator.clearSpecialSegmentByUi()
+                  this.store.specialRoadEditEnabled = false
+                })
+            )
+
+          Button('设置车库')
+            .layoutWeight(1)
+            .height(48)
+            .borderRadius(6)
+            .backgroundColor(this.store.garageEditEnabled ? '#EDE9FE' : '#EEF2FF')
+            .fontColor('#3730A3')
+            .border({ width: 1, color: this.store.garageEditEnabled ? '#A78BFA' : '#C7D2FE' })
+            .onClick((): void => {
+              this.store.toggleGarageEdit()
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  void page1Coordinator.clearGarageByUi()
+                  this.store.garageEditEnabled = false
+                })
+            )
+
+          Button('停止任务')
+            .layoutWeight(1)
+            .height(48)
+            .borderRadius(6)
+            .backgroundColor('#EEF2FF')
+            .fontColor('#3730A3')
+            .border({ width: 1, color: '#C7D2FE' })
+            .onClick((): void => {
+              void page1Coordinator.stopTaskByUi()
+            })
+
+          Button('继续任务')
+            .layoutWeight(1)
+            .height(48)
+            .borderRadius(6)
+            .backgroundColor('#EEF2FF')
+            .fontColor('#3730A3')
+            .border({ width: 1, color: '#C7D2FE' })
+            .onClick((): void => {
+              void page1Coordinator.resumeTaskByUi()
+            })
+        }
+        .width('100%')
 
         // 第2行：高级动作
         Row({ space: 10 }) {
@@ -164,13 +216,13 @@ export struct ControlPanel {
             Text(this.store.trafficLightEditEnabled ? '交通灯：开' : '交通灯')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#0F766E')
+              .fontColor('#3730A3')
           }
           .layoutWeight(1)
           .height(48)
           .borderRadius(6)
-          .backgroundColor('#ECFEFF')
-          .border({ width: 1, color: '#A5F3FC' })
+          .backgroundColor('#EEF2FF')
+          .border({ width: 1, color: '#C7D2FE' })
           .onClick((): void => { this.onTrafficLight() })
           .gesture(
             LongPressGesture()
@@ -184,13 +236,13 @@ export struct ControlPanel {
             Text(this.store.gateEditEnabled ? '道闸：开' : '道闸')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#7C2D12')
+              .fontColor('#3730A3')
           }
           .layoutWeight(1)
           .height(48)
           .borderRadius(6)
-          .backgroundColor('#FFF7ED')
-          .border({ width: 1, color: '#FED7AA' })
+          .backgroundColor('#EEF2FF')
+          .border({ width: 1, color: '#C7D2FE' })
           .onClick((): void => {
             this.onGate()
           })
@@ -202,18 +254,32 @@ export struct ControlPanel {
               })
           )
 
-          this.controlBtn('掉头', Page1Action.UTURN, 'advanced')
           Button() {
-            Text('清图')
+            Text('掉头')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#0369A1')
+              .fontColor('#3730A3')
           }
           .layoutWeight(1)
           .height(48)
           .borderRadius(6)
-          .backgroundColor('#E0F2FE')
-          .border({ width: 1, color: '#BAE6FD' })
+          .backgroundColor('#EEF2FF')
+          .border({ width: 1, color: '#C7D2FE' })
+          .onClick((): void => {
+            void page1Coordinator.onAction(Page1Action.UTURN)
+          })
+
+          Button() {
+            Text('清图')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#3730A3')
+          }
+          .layoutWeight(1)
+          .height(48)
+          .borderRadius(6)
+          .backgroundColor('#EEF2FF')
+          .border({ width: 1, color: '#C7D2FE' })
           .shadow({ radius: 0 })
           .onClick((): void => {
             void page1Coordinator.resetNetworkMap()

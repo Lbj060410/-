@@ -14,6 +14,11 @@ import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
 import hilog from '@ohos.hilog'
 
+const BENGKUI_LOG_DOMAIN: number = 0xFF0B
+const BENGKUI_LOG_TAG: string = 'bengkui'
+const SHANTUI_LOG_DOMAIN: number = 0xFF0C
+const SHANTUI_LOG_TAG: string = 'shantui'
+
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
 // 视觉配置中心：后续改地图样式优先改这里，而不是到处改魔法数字。
@@ -95,10 +100,6 @@ interface MapBlockCellRect extends MapRoadRect {
 
 @Component
 export struct SandboxMap {
-  private static readonly BENGKUI_LOG_DOMAIN: number = 0xFF0B
-  private static readonly BENGKUI_LOG_TAG: string = 'bengkui'
-  private static readonly SHANTUI_LOG_DOMAIN: number = 0xFF0C
-  private static readonly SHANTUI_LOG_TAG: string = 'shantui'
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
   private readonly parkingMapStyle: ParkingMapStyle = PARKING_MAP_STYLE
@@ -182,11 +183,11 @@ export struct SandboxMap {
   }
 
   private logBengkui(msg: string): void {
-    hilog.info(SandboxMap.BENGKUI_LOG_DOMAIN, SandboxMap.BENGKUI_LOG_TAG, '%{public}s', msg)
+    hilog.info(BENGKUI_LOG_DOMAIN, BENGKUI_LOG_TAG, '%{public}s', msg)
   }
 
   private logShantui(msg: string): void {
-    hilog.info(SandboxMap.SHANTUI_LOG_DOMAIN, SandboxMap.SHANTUI_LOG_TAG, '%{public}s', msg)
+    hilog.info(SHANTUI_LOG_DOMAIN, SHANTUI_LOG_TAG, '%{public}s', msg)
   }
 
   build() {
@@ -264,6 +265,7 @@ export struct SandboxMap {
             this.buildTrafficLightMarkers()
             this.buildGateMarkers()
             this.buildSpecialRoadMarkers()
+            this.buildGarageMarkers()
             this.buildBlockedNodeMarkers()
             this.buildRouteObstaclePointMarkers()
             this.buildBlockedEdgeMarkers()
@@ -355,6 +357,16 @@ export struct SandboxMap {
             this.store.upsertSpecialRoadPoint(edgeId)
             void page1Coordinator.sendSpecialSegmentByMapEdge(edgeId)
             this.store.specialRoadEditEnabled = false
+          }
+          return
+        }
+
+        if (this.store.garageEditEnabled) {
+          const id: string = this.store.nearestNodeIdByPixel(x, y)
+          if (id.length > 0) {
+            this.store.upsertGaragePoint(id)
+            void page1Coordinator.setGarageByMapNode(id)
+            this.store.garageEditEnabled = false
           }
           return
         }
@@ -620,10 +632,10 @@ export struct SandboxMap {
   private buildTrafficLightMarkers(): void {
     ForEach(this.store.trafficLights, (p: any): void => {
       Image($rawfile('icon/红绿灯.png'))
-        .width(24)
-        .height(24)
+        .width(36)
+        .height(36)
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
         .zIndex(6)
     }, (p: any): string => `traffic-${p.id}`)
   }
@@ -632,10 +644,10 @@ export struct SandboxMap {
   private buildGateMarkers(): void {
     ForEach(this.store.gatePoints, (p: any): void => {
       Image($rawfile('icon/道闸.png'))
-        .width(24)
-        .height(24)
+        .width(36)
+        .height(36)
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
         .zIndex(6)
     }, (p: any): string => `gate-${p.id}`)
   }
@@ -644,12 +656,24 @@ export struct SandboxMap {
   private buildSpecialRoadMarkers(): void {
     ForEach(this.store.specialRoadPoints, (p: any): void => {
       Image($rawfile('icon/农作物.png'))
-        .width(24)
-        .height(24)
+        .width(36)
+        .height(36)
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 12, y: p.yNorm * this.store.mapH - 12 })
+        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
         .zIndex(6)
     }, (p: any): string => `special-${p.id}`)
+  }
+
+  @Builder
+  private buildGarageMarkers(): void {
+    ForEach(this.store.garagePoints, (p: any): void => {
+      Image($rawfile('icon/车库.png'))
+        .width(36)
+        .height(36)
+        .objectFit(ImageFit.Contain)
+        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
+        .zIndex(6)
+    }, (p: any): string => `garage-${p.id}`)
   }
 
 
@@ -711,8 +735,8 @@ export struct SandboxMap {
     ForEach(this.visibleRouteObstaclePointsForRender(), (p: RouteObstaclePoint): void => {
       if (!this.edgeMarkerSuppressedByNodeBlock(p.edgeId)) {
         Image($rawfile('icon/障碍物.png'))
-          .width(18)
-          .height(18)
+          .width(30)
+          .height(30)
           .objectFit(ImageFit.Contain)
           .position(this.routeObstaclePointPos(p))
           .zIndex(4)
@@ -721,8 +745,8 @@ export struct SandboxMap {
   }
 
   private routeObstaclePointPos(p: RouteObstaclePoint): XYPos {
-    const x: number = p.xNorm * this.store.mapW - 9
-    const y: number = p.yNorm * this.store.mapH - 9
+    const x: number = p.xNorm * this.store.mapW - 15
+    const y: number = p.yNorm * this.store.mapH - 15
     return { x: x, y: y }
   }
 
@@ -731,8 +755,8 @@ export struct SandboxMap {
     ForEach(this.visibleBlockedEdgesForRender(), (edgeId: string): void => {
       if (this.edgeMarkerVisible(edgeId)) {
         Image($rawfile('icon/障碍物.png'))
-          .width(18)
-          .height(18)
+          .width(30)
+          .height(30)
           .objectFit(ImageFit.Contain)
           .position(this.edgeMarkerPos(edgeId))
           .zIndex(3)
@@ -750,7 +774,7 @@ export struct SandboxMap {
     if (!p) {
       return { x: -1000, y: -1000 }
     }
-    return { x: p.x - 9, y: p.y - 9 }
+    return { x: p.x - 15, y: p.y - 15 }
   }
 
   @Builder
@@ -758,10 +782,10 @@ export struct SandboxMap {
     ForEach(this.visibleBlockedNodesForRender(), (n: GridNode): void => {
       if (this.shouldShowBlockedNodeMarker(n.id)) {
         Image(this.blockedNodeMarkerResource(n.id))
-        .width(20)
-        .height(20)
+        .width(30)
+        .height(30)
         .objectFit(ImageFit.Contain)
-        .position(this.store.gridNodeDotPos(n, 20))
+        .position(this.store.gridNodeDotPos(n, 30))
         .zIndex(6)
       }
     }, (n: GridNode): string => `blocked-node-${n.id}`)

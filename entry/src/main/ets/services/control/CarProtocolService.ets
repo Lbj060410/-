@@ -35,6 +35,7 @@ export class CarProtocolService {
     timeoutId: number
     tag: string
   }> = new Map()
+  private readonly ackMeaningBySeq: Map<number, string> = new Map()
 
   bindTcp(tcp: CarTcpService): void {
     this.tcp = tcp
@@ -351,6 +352,16 @@ export class CarProtocolService {
     return this.clearPendingBySeq(key)
   }
 
+  consumeAckMatchedMeaning(seq: number): string {
+    const key: number = seq & 0xFFFF
+    const text: string | undefined = this.ackMeaningBySeq.get(key)
+    if (text !== undefined) {
+      this.ackMeaningBySeq.delete(key)
+      return text
+    }
+    return ''
+  }
+
   private async sendCmdGroup(
     groupCode: number,
     subCode: number,
@@ -444,10 +455,15 @@ export class CarProtocolService {
         const group: number = data[0] & 0xFF
         const sub: number = data[1] & 0xFF
         cmdHex = `0x${sub.toString(16).toUpperCase().padStart(2, '0')}`
-        actionText = this.txMeaning(group, sub)
+        actionText = this.txMeaning(group, sub, data)
       } else if (type === CarMsgType.ACK) {
         cmdHex = 'ACK'
         actionText = '确认应答'
+      }
+      this.ackMeaningBySeq.set(seq & 0xFFFF, actionText)
+      if (this.ackMeaningBySeq.size > 200) {
+        const keys: Array<number> = Array.from(this.ackMeaningBySeq.keys())
+        for (let i: number = 0; i < keys.length - 150; i++) this.ackMeaningBySeq.delete(keys[i])
       }
       commStore.appendDiagKeyTxFrame({
         tsMs: Date.now(),
@@ -459,9 +475,18 @@ export class CarProtocolService {
     } catch (_) {}
   }
 
-  private txMeaning(group: number, sub: number): string {
+  private txMeaning(group: number, sub: number, data: Uint8Array): string {
     const g: number = group & 0xFF
     const s: number = sub & 0xFF
+    const asciiPair = (offset: number): string => {
+      if (data.length < offset + 2) return '??'
+      return `${String.fromCharCode(data[offset] & 0xFF)}${String.fromCharCode(data[offset + 1] & 0xFF)}`.toUpperCase()
+    }
+    const asciiDir = (offset: number): string => {
+      if (data.length < offset + 1) return 'N'
+      const c: string = String.fromCharCode(data[offset] & 0xFF).toUpperCase()
+      return (c === 'N' || c === 'E' || c === 'S' || c === 'W') ? c : 'N'
+    }
     if (g === 0x0A) {
       if (s === 0x01) return '前进'
       if (s === 0x02) return '后退'
@@ -477,20 +502,25 @@ export class CarProtocolService {
       if (s === 0x02) return '识别绿灯'
     }
     if (g === 0x0C) {
-      if (s === 0x01) return '设置目的地'
-      if (s === 0x02) return '设置当前位置'
-      if (s === 0x03) return '设置道闸'
+      if (s === 0x01) return `设置目的地 ${asciiPair(2)}`
+      if (s === 0x02) return `设置当前位置 ${asciiPair(2)} dir=${asciiDir(4)}`
+      if (s === 0x03) return `设置道闸 ${asciiPair(2)}|${asciiPair(4)}`
       if (s === 0x04) return '清除道闸'
-      if (s === 0x05) return '设置障碍路段'
-      if (s === 0x06) return '设置障碍点位'
+      if (s === 0x05) return `设置障碍路段 ${asciiPair(2)}|${asciiPair(4)}`
+      if (s === 0x06) return `设置障碍点位 ${asciiPair(2)}`
       if (s === 0x07) return '清除障碍'
-      if (s === 0x08) return '设置车库'
+      if (s === 0x08) return `设置车库 ${asciiPair(2)}`
       if (s === 0x09) return '清除车库'
       if (s === 0x0A) return '停止任务'
       if (s === 0x0B) return '继续任务'
-      if (s === 0x0C) return '设置特殊路段'
+      if (s === 0x0C) return `设置特殊路段 ${asciiPair(2)}|${asciiPair(4)}`
       if (s === 0x0D) return '清除特殊路段'
-      if (s === 0x0E) return '交通灯控制/设置'
+      if (s === 0x0E) {
+        if (data.length >= 3 && (data[2] & 0xFF) === 0x01) return '交通灯控制 红/黄'
+        if (data.length >= 3 && (data[2] & 0xFF) === 0x02) return '交通灯控制 绿灯'
+        if (data.length >= 7) return `设置交通灯 ${asciiPair(2)}|${asciiPair(4)} dir=${asciiDir(6)}`
+        return '交通灯控制/设置'
+      }
       if (s === 0x0F) return '清除交通灯'
       if (s === 0xF0) return '清图'
     }

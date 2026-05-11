@@ -127,7 +127,7 @@ export struct DiagnosticsPanel {
               Scroll() {
                 Column({ space: 6 }) {
                   ForEach(commStore.diagKeyTxFrames, (item: DiagKeyTxFrame): void => {
-                    Text(`[${this.fmtTime(item.tsMs)}] ${item.cmdHex} ${item.actionText} (${item.modeText})`)
+                    Text(`[${this.fmtTime(item.tsMs)}] ${item.cmdHex} ${item.actionText}`)
                       .fontSize(11)
                       .fontColor('#101828')
                       .maxLines(1)

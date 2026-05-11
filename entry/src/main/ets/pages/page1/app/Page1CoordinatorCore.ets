@@ -1143,6 +1143,35 @@ export class Page1Coordinator {
     }
   }
 
+  async setGarageByMapNode(nodeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setGaragePosition(id)
+      s.pushLog(`设置车库(CCF5): node=${id} seq=${seq}`)
+    } else {
+      s.pushLog(`设置车库(DRY_RUN): node=${id}`)
+    }
+  }
+
+  async clearGarageByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearGaragePoints()
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.clearGarageNode()
+      s.pushLog(`清除车库(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('清除车库(DRY_RUN)')
+    }
+  }
+
   async stopTaskByUi(): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return

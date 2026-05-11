@@ -69,6 +69,13 @@ export interface MapSpecialRoadPoint {
   yNorm: number
 }
 
+export interface MapGaragePoint {
+  id: string
+  nodeId: string
+  xNorm: number
+  yNorm: number
+}
+
 // 为与协调器交通闸门流程兼容而保留；地图侧编辑 UI 已移除。
 
 interface RouteSegProjection {
@@ -114,6 +121,7 @@ export class Page1UiStore {
   trafficLightEditEnabled: boolean = false
   gateEditEnabled: boolean = false
   specialRoadEditEnabled: boolean = false
+  garageEditEnabled: boolean = false
   targetPickEnabled: boolean = false
   // 地图点选目标后，等待“再次点击目标按钮”确认发送
   mapTargetPendingSend: boolean = false
@@ -133,6 +141,7 @@ export class Page1UiStore {
   trafficLights: Array<MapTrafficLightPoint> = []
   gatePoints: Array<MapGatePoint> = []
   specialRoadPoints: Array<MapSpecialRoadPoint> = []
+  garagePoints: Array<MapGaragePoint> = []
 
   /**
    * 障碍编辑模式开关：
@@ -145,6 +154,7 @@ export class Page1UiStore {
       this.trafficLightEditEnabled = false
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
+      this.garageEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -157,6 +167,7 @@ export class Page1UiStore {
       this.obstacleEditEnabled = false
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
+      this.garageEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -169,6 +180,7 @@ export class Page1UiStore {
       this.obstacleEditEnabled = false
       this.trafficLightEditEnabled = false
       this.specialRoadEditEnabled = false
+      this.garageEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -181,10 +193,24 @@ export class Page1UiStore {
       this.obstacleEditEnabled = false
       this.trafficLightEditEnabled = false
       this.gateEditEnabled = false
+      this.garageEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`特殊路段设置：${this.specialRoadEditEnabled ? 'ON' : 'OFF'}`)
+  }
+
+  toggleGarageEdit(): void {
+    this.garageEditEnabled = !this.garageEditEnabled
+    if (this.garageEditEnabled) {
+      this.obstacleEditEnabled = false
+      this.trafficLightEditEnabled = false
+      this.gateEditEnabled = false
+      this.specialRoadEditEnabled = false
+      this.targetPickEnabled = false
+      this.mapTargetPendingSend = false
+    }
+    this.pushLog(`车库设置：${this.garageEditEnabled ? 'ON' : 'OFF'}`)
   }
 
   toggleTargetPick(): void {
@@ -194,6 +220,7 @@ export class Page1UiStore {
       this.trafficLightEditEnabled = false
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
+      this.garageEditEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`目标点选：${this.targetPickEnabled ? 'ON' : 'OFF'}`)
@@ -276,6 +303,22 @@ export class Page1UiStore {
     // 和道闸一致：仅允许一个
     this.specialRoadPoints = [{ id: edge, edgeId: edge, xNorm: pos.x, yNorm: pos.y }]
     this.pushLog(`特殊路段设置：edge=${edge}`)
+    return true
+  }
+
+  clearGaragePoints(): void {
+    if (this.garagePoints.length <= 0) return
+    this.garagePoints = []
+    this.pushLog('车库清空')
+  }
+
+  upsertGaragePoint(nodeId: string): boolean {
+    const id: string = nodeId.trim().toUpperCase()
+    const n: GridNode | undefined = this.findGridNodeById(id)
+    if (!n) return false
+    // 全图最多一个车库：新设置直接覆盖旧设置
+    this.garagePoints = [{ id: id, nodeId: id, xNorm: n.xNorm, yNorm: n.yNorm }]
+    this.pushLog(`车库设置：node=${id}`)
     return true
   }
 
@@ -890,10 +933,12 @@ export class Page1UiStore {
     this.trafficLights = []
     this.gatePoints = []
     this.specialRoadPoints = []
+    this.garagePoints = []
     this.obstacleEditEnabled = false
     this.trafficLightEditEnabled = false
     this.gateEditEnabled = false
     this.specialRoadEditEnabled = false
+    this.garageEditEnabled = false
     this.targetPickEnabled = false
     this.mapTargetPendingSend = false
     this.pushLog('清图：地图配置已清空（障碍/红绿灯/道闸/特殊路段）')

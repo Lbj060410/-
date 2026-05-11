@@ -73,11 +73,11 @@ export class VideoStore {
   private readonly pinnedPixelMaps: Set<PixelMap> = new Set<PixelMap>()
 
   // ==== 识别调度预留 ====
-  recognitionEnabled: boolean = true
+  recognitionEnabled: boolean = false
   lastRecognizeAtMs: number = 0
   recognizeIntervalMs: number = 200
   // Page2 yolov26barrier 模型开关：默认开启。
-  page2Yolov26BarrierExperimentalEnabled: boolean = true
+  page2Yolov26BarrierExperimentalEnabled: boolean = false
   // Page2 traffic 模型开关：默认关闭。
   // 与 yolov26barrier 互斥：traffic 开启时 yolov26barrier 自动关闭。
   page2TrafficEnabled: boolean = false

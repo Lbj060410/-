@@ -172,18 +172,58 @@ export struct Page1View {
               }
               .width('100%')
 
-              Text('更多功能面板（预留）')
-                .fontSize(12)
-                .fontColor(Page1Theme.TEXT_SECONDARY)
+
+              Button('前进')
                 .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.GO)
+                })
+
+              Button('后退')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.BACK)
+                })
+
+              Button('左转')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.LEFT)
+                })
+
+              Button('右转')
+                .width('100%')
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.RIGHT)
+                })
 
               Button('左半转')
                 .width('100%')
                 .height(40)
                 .borderRadius(10)
-                .backgroundColor('#F8FAFC')
-                .fontColor(Page1Theme.TEXT_PRIMARY)
-                .border({ width: 1, color: '#E2E8F0' })
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.LEFT_HALF)
                 })
@@ -192,62 +232,11 @@ export struct Page1View {
                 .width('100%')
                 .height(40)
                 .borderRadius(10)
-                .backgroundColor('#F8FAFC')
-                .fontColor(Page1Theme.TEXT_PRIMARY)
-                .border({ width: 1, color: '#E2E8F0' })
+                .backgroundColor('#EEF2FF')
+                .fontColor('#3730A3')
+                .border({ width: 1, color: '#C7D2FE' })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.RIGHT_HALF)
-                })
-
-              Button('特殊路段')
-                .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
-                .onClick((): void => {
-                  this.store.toggleSpecialRoadEdit()
-                })
-                .gesture(
-                  LongPressGesture()
-                    .onAction((): void => {
-                      void page1Coordinator.clearSpecialSegmentByUi()
-                      this.store.specialRoadEditEnabled = false
-                    })
-                )
-
-              Button('设置车库')
-                .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
-                .onClick((): void => {
-                  void page1Coordinator.setGarageByUi()
-                })
-
-              Button('停止任务')
-                .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#FFF1F2')
-                .fontColor('#9F1239')
-                .border({ width: 1, color: '#FECDD3' })
-                .onClick((): void => {
-                  void page1Coordinator.stopTaskByUi()
-                })
-
-              Button('继续任务')
-                .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#ECFDF5')
-                .fontColor('#166534')
-                .border({ width: 1, color: '#BBF7D0' })
-                .onClick((): void => {
-                  void page1Coordinator.resumeTaskByUi()
                 })
             }
             .width('30%')

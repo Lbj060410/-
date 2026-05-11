@@ -79,7 +79,7 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
     const f: CarProtoFrame = frames[i]
     if (!f.ok) {
       s.pushLog(`RX CCF5 CRC错误 type=0x${byteToHex(f.type)} seq=${f.seq}`)
-      appendDiagRxFrame(f, 'CRC=BAD')
+      appendDiagRxFrame(f, `CRC错误 type=0x${byteToHex(f.type)}`)
       continue
     }
     const t: number = f.type & 0xff
@@ -88,7 +88,14 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
     if (t === 0xA0) {
       const ok: boolean = typeof ctx.proto.onAckReceived === 'function' ? ctx.proto.onAckReceived(f.seq) : false
       s.pushLog(`RX CCF5 ACK seq=${f.seq} ${ok ? 'matched' : 'untracked'}`)
-      appendDiagRxFrame(f, `ACK seq=${f.seq} ${ok ? 'matched' : 'untracked'}`)
+      let ackSummary: string = `ACK 未匹配 seq=${f.seq}`
+      if (ok) {
+        const meaning: string = (typeof ctx.proto.consumeAckMatchedMeaning === 'function')
+          ? String(ctx.proto.consumeAckMatchedMeaning(f.seq) || '')
+          : ''
+        ackSummary = meaning.length > 0 ? `ACK ${meaning}` : `ACK 已匹配 seq=${f.seq}`
+      }
+      appendDiagRxFrame(f, ackSummary)
       continue
     }
 
@@ -104,7 +111,7 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
       continue
     }
 
-    appendDiagRxFrame(f, `type=0x${byteToHex(t)} flags=0x${byteToHex(f.flags)} seq=${f.seq}`)
+    appendDiagRxFrame(f, `收到类型0x${byteToHex(t)} flags=0x${byteToHex(f.flags)}`)
     s.pushLog(`RX CCF5 type=0x${byteToHex(t)} flags=0x${byteToHex(f.flags)} seq=${f.seq} data=${bytesToHex(d)}`)
   }
 }
@@ -124,7 +131,7 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
         const dirText: string = d.length >= 4 ? decodeDirAscii(d[3]) : 'N'
         const headingDeg: number = headingDegFromDir(dirText)
         s.updateCurrentNodePose(nodeId, headingDeg)
-        s.pushLog(`RX CCF5 BC: 当前点位 node=${nodeId} dir=${dirText} seq=${f.seq}`)
+        s.pushLog(`RX CCF5 BC: 当前点位 node=${nodeId} 方向为${dirToCn(dirText)} seq=${f.seq}`)
         return
       }
     }
@@ -135,6 +142,8 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
     // data1=0x02: 上报障碍物所在路段
     // 约定解析：02 <fromCol><fromRow><toCol><toRow>
     if (d.length >= 5) {
+      videoStore.setRecognitionEnabled(true)
+      videoStore.setPage2Yolov26BarrierEnabled(true)
       const fromId: string = decodeNodeAscii(d[1], d[2])
       const toId: string = decodeNodeAscii(d[3], d[4])
       if (fromId.length > 0 && toId.length > 0) {
@@ -156,7 +165,7 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
   if (data1 === 0x06) {
     try {
       // 小车触发交通灯识别：走识别中心 -> 识别上报服务 -> SendTrafficGreen/SendTrafficRedOrYellow
-      videoStore.recognitionEnabled = true
+      videoStore.setRecognitionEnabled(true)
       videoStore.setPage2TrafficEnabled(true)
       const scheduler = ensureRecognitionCenter()
       scheduler.enqueueAutoSnapshotTriggered(RecognitionSubtype.TRAFFIC_LIGHT)
@@ -167,7 +176,21 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
     }
     return
   }
-  if (data1 === 0x03) return
+  if (data1 === 0x03) {
+    s.setAction('小车已通过道闸')
+    s.pushLog(`RX CCF5 BC: 小车已通过道闸 seq=${f.seq}`)
+    return
+  }
+  if (data1 === 0x04) {
+    s.setAction('入库完成')
+    s.pushLog(`RX CCF5 BC: 入库完成 seq=${f.seq}`)
+    return
+  }
+  if (data1 === 0x05) {
+    s.setAction('出库完成')
+    s.pushLog(`RX CCF5 BC: 出库完成 seq=${f.seq}`)
+    return
+  }
   s.pushLog(`RX CCF5 BC: data1=0x${byteToHex(data1)} data=${bytesToHex(d)} seq=${f.seq}`)
 }
 
@@ -193,19 +216,39 @@ function headingDegFromDir(dir: string): number {
   return 270
 }
 
+function dirToCn(dir: string): string {
+  const d: string = (dir || 'N').trim().toUpperCase()
+  if (d === 'E') return '东'
+  if (d === 'S') return '南'
+  if (d === 'W') return '西'
+  return '北'
+}
+
 function summarizeBcFrame(f: CarProtoFrame): string {
   const d: Uint8Array = f.data
   if (d.length <= 0) return '状态上报'
   const data1: number = d[0] & 0xFF
   if (data1 === 0x01) {
-    return '上报当前点位与方向'
+    if (d.length >= 3) {
+      const nodeId: string = decodeNodeAscii(d[1], d[2])
+      const dirText: string = d.length >= 4 ? decodeDirAscii(d[3]) : 'N'
+      return `上报当前点位 node=${nodeId.length > 0 ? nodeId : '??'} 方向为${dirToCn(dirText)}`
+    }
+    return '上报当前点位(格式异常)'
   }
   if (data1 === 0x02) {
-    return '上报障碍路段(触发重规划)'
+    if (d.length >= 5) {
+      const fromId: string = decodeNodeAscii(d[1], d[2])
+      const toId: string = decodeNodeAscii(d[3], d[4])
+      return `上报障碍路段 edge=${fromId.length > 0 ? fromId : '??'}|${toId.length > 0 ? toId : '??'}`
+    }
+    return '上报障碍路段(格式异常)'
   }
-  if (data1 === 0x03) return '上报道闸通过状态'
+  if (data1 === 0x03) return '小车已通过道闸'
+  if (data1 === 0x04) return '上报入库完成'
+  if (data1 === 0x05) return '上报出库完成'
   if (data1 === 0x06) return '触发交通灯识别'
-  return '状态上报'
+  return `状态上报 data1=0x${byteToHex(data1)}`
 }
 
 function appendDiagRxFrame(f: CarProtoFrame, summary: string): void {

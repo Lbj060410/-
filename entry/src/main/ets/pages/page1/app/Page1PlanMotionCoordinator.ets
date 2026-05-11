@@ -13,9 +13,9 @@ function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
 
 function syncRecognitionBySegment(fromId: string, toId: string): void {
   const trafficEnabled: boolean = shouldEnableTrafficBySegment(fromId, toId)
-  videoStore.setRecognitionEnabled(true)
-  if (trafficEnabled) videoStore.setPage2TrafficEnabled(true)
-  else videoStore.setPage2Yolov26BarrierEnabled(true)
+  videoStore.setRecognitionEnabled(false)
+  if (trafficEnabled) videoStore.setPage2TrafficEnabled(false)
+  else videoStore.setPage2Yolov26BarrierEnabled(false)
 }
 
 export class Page1PlanMotionCoordinator {
@@ -29,14 +29,14 @@ export class Page1PlanMotionCoordinator {
     const s = this.ctx.store
     if (!s) return
     if (s.pathNodes.length <= 1) {
-      videoStore.setRecognitionEnabled(true)
-      videoStore.setPage2Yolov26BarrierEnabled(true)
+      videoStore.setRecognitionEnabled(false)
+      videoStore.setPage2Yolov26BarrierEnabled(false)
       return
     }
     const idx: number = s.pathIndex
     if (idx < 0 || idx >= s.pathNodes.length - 1) {
-      videoStore.setRecognitionEnabled(true)
-      videoStore.setPage2Yolov26BarrierEnabled(true)
+      videoStore.setRecognitionEnabled(false)
+      videoStore.setPage2Yolov26BarrierEnabled(false)
       return
     }
     syncRecognitionBySegment(s.pathNodes[idx], s.pathNodes[idx + 1])
@@ -101,8 +101,8 @@ export class Page1PlanMotionCoordinator {
     const s = this.ctx.store
     if (!s) return
     const oldPath: Array<string> = s.pathNodes.slice()
-    videoStore.setRecognitionEnabled(true)
-    videoStore.setPage2Yolov26BarrierEnabled(true)
+    videoStore.setRecognitionEnabled(false)
+    videoStore.setPage2Yolov26BarrierEnabled(false)
     this.ctx.resetGarageFlowState()
 
     this.ctx.clearAheadVisionReplanState()
