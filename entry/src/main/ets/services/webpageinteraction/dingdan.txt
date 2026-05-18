@@ -1,0 +1,46 @@
+﻿
+        "{
+          orderId: 'OUT-20240418-001',
+          skuCode: 'MZ-8820',
+          productName: '高端运动水壶',
+          quantity: 120,
+          zone: 'A-03 货架',
+          status: '待拣货',
+          createTime: '2024-04-18 09:30:22'
+        }",
+        "{
+          orderId: 'OUT-20240418-002',
+          skuCode: 'PL-4560',
+          productName: '智能体重秤',
+          quantity: 45,
+          zone: 'B-12 货架',
+          status: '拣货中',
+          createTime: '2024-04-18 10:15:07'
+        }",
+        "{
+          orderId: 'OUT-20240418-003',
+          skuCode: 'EL-3321',
+          productName: '无线蓝牙耳机',
+          quantity: 88,
+          zone: 'C-05 货架',
+          status: '待复核',
+          createTime: '2024-04-18 11:02:33'
+        }",
+        "{
+          orderId: 'OUT-20240417-015',
+          skuCode: 'FT-9901',
+          productName: '折叠收纳箱',
+          quantity: 200,
+          zone: 'A-08 货架',
+          status: '已出库',
+          createTime: '2024-04-17 16:20:15'
+        }",
+        "{
+          orderId: 'OUT-20240417-012',
+          skuCode: 'BK-2345',
+          productName: '电子书阅读器',
+          quantity: 32,
+          zone: 'B-03 货架',
+          status: '已发货',
+          createTime: '2024-04-17 14:08:42'
+        }"

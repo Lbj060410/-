@@ -1194,22 +1194,27 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     await maybeHandleMotionArriveOp(this, toId)
   }
 
-   uploadTrajectoryNode(nodeId: string): void {
+  uploadTrajectoryNode(nodeId: string): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
     const id: string = nodeId.trim().toUpperCase()
     if (id.length <= 0) return
+    const point: string = id
+    const startPoint: string = this.trajectoryPlanStartPoint.length > 0 ? this.trajectoryPlanStartPoint : '-'
+    const endPoint: string = this.trajectoryPlanEndPoint.length > 0 ? this.trajectoryPlanEndPoint : '-'
+    const lineByResult = (ok: boolean): string =>
+      `WEB_CONNECT: ${ok ? 'SUCCESS' : 'FAILED'} id=${id} point=${point} start=${startPoint} end=${endPoint}`
     const intervalMs: number = 0
     void saveCarTrajectoryByNode(id, intervalMs, {
       startPoint: this.trajectoryPlanStartPoint,
       endPoint: this.trajectoryPlanEndPoint
     })
       .then((ok: boolean): void => {
-        if (!ok) s.pushLog(`WEB_CONNECT: 上报跳过 node=${id}`)
+        s.pushLog(lineByResult(ok))
       })
       .catch((err: Object): void => {
         const message: string = (err as Error).message
-        s.pushLog(`WEB_CONNECT: 上报失败 node=${id} err=${message}`)
+        s.pushLog(`${lineByResult(false)} err=${message}`)
       })
   }
 
@@ -1878,7 +1883,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
-
 
 
 

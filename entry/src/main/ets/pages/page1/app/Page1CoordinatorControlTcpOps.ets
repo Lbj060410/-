@@ -171,6 +171,7 @@ function handleBCFrame(ctx: IPage1CoordinatorOps, s: Page1UiStore, f: CarProtoFr
       // 小车触发交通灯识别：走识别中心 -> 识别上报服务 -> SendTrafficGreen/SendTrafficRedOrYellow
       videoStore.setRecognitionEnabled(true)
       videoStore.setPage2TrafficEnabled(true)
+      void page2ReplayService.onTrafficLightSignal(`RX CCF5 BC: data1=0x06 seq=${f.seq}`)
       const scheduler = ensureRecognitionCenter()
       scheduler.enqueueAutoSnapshotTriggered(RecognitionSubtype.TRAFFIC_LIGHT)
       s.pushLog(`RX CCF5 BC: 触发交通灯识别 seq=${f.seq}`)
@@ -253,6 +254,7 @@ function summarizeBcFrame(f: CarProtoFrame): string {
     if (d.length >= 5) {
       const fromId: string = decodeNodeAscii(d[1], d[2])
       const toId: string = decodeNodeAscii(d[3], d[4])
+
       return `上报障碍路段 edge=${fromId.length > 0 ? fromId : '??'}|${toId.length > 0 ? toId : '??'}`
     }
     return '上报障碍路段(格式异常)'

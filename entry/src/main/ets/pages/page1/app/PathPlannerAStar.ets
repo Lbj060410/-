@@ -127,11 +127,11 @@ export class PathPlannerAStar {
   // 修改”允许怎么走”必须改这里，A* 只会在这张图上搜索。
   private static readonly ROUTE_EDGES: Array<RouteSegment> = [
     // 五条主要垂直干线
-    { a: 'A1', b: 'A2' }, { a: 'A2', b: 'A4' }, { a: 'A4', b: 'A6' }, { a: 'A6', b: 'A7' },
+    { a: 'A1', b: 'A2' }, { a: 'A6', b: 'A7' },
     { a: 'B1', b: 'B2' }, { a: 'B2', b: 'B4' }, { a: 'B4', b: 'B6' }, { a: 'B6', b: 'B7' },
     { a: 'D1', b: 'D2' }, { a: 'D2', b: 'D4' }, { a: 'D4', b: 'D6' }, { a: 'D6', b: 'D7' },
     { a: 'F1', b: 'F2' }, { a: 'F2', b: 'F4' }, { a: 'F4', b: 'F6' }, { a: 'F6', b: 'F7' },
-    { a: 'G1', b: 'G2' }, { a: 'G2', b: 'G4' }, { a: 'G4', b: 'G6' }, { a: 'G6', b: 'G7' },
+    { a: 'G1', b: 'G2' }, { a: 'G6', b: 'G7' },
 
     // 五行的水平连接
     { a: 'A1', b: 'B1' }, { a: 'B1', b: 'D1' }, { a: 'D1', b: 'F1' }, { a: 'F1', b: 'G1' },
@@ -262,7 +262,6 @@ export class PathPlannerAStar {
         const tentativeG: number = current.g + 1
         const oldG: number | undefined = bestG.get(nb)
         if (oldG !== undefined && tentativeG >= oldG) continue
-
         parent.set(nb, current.id)
         /*5.记录更优前驱关系和代价，为最终回溯整条最优路径做准备*/
         bestG.set(nb, tentativeG)

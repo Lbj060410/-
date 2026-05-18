@@ -212,23 +212,33 @@ export struct ControlPanel {
                 })
             )
 
-          Button('停止任务')
+          Button() {
+            Text('停止任务')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.trafficBtnFg(false))
+          }
             .layoutWeight(1)
             .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
             .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
             .backgroundColor(this.trafficBtnBg(false))
-            .fontColor(this.trafficBtnFg(false))
+            .stateEffect(false)
             .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               void page1Coordinator.stopTaskByUi()
             })
 
-          Button('继续任务')
+          Button() {
+            Text('继续任务')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.trafficBtnFg(false))
+          }
             .layoutWeight(1)
             .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
             .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
             .backgroundColor(this.trafficBtnBg(false))
-            .fontColor(this.trafficBtnFg(false))
+            .stateEffect(false)
             .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               void page1Coordinator.resumeTaskByUi()
@@ -280,12 +290,17 @@ export struct ControlPanel {
               })
           )
 
-          Button('设置仓库')
+          Button() {
+            Text('设置仓库')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.trafficBtnFg(this.store.warehouseEditEnabled))
+          }
           .layoutWeight(1)
           .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
           .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
           .backgroundColor(this.trafficBtnBg(this.store.warehouseEditEnabled))
-          .fontColor(this.trafficBtnFg(this.store.warehouseEditEnabled))
+          .stateEffect(false)
           .border({ width: 1, color: this.trafficBtnBorder(this.store.warehouseEditEnabled) })
           .onClick((): void => {
             this.store.toggleWarehouseEdit()

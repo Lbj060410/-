@@ -44,6 +44,7 @@ import { page4TencentLocalTtsService } from '../../services/assistant/Page4Tence
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
+import resourceManager from '@ohos.resourceManager'
 import { AssistantMessage as SessionAssistantMessage, HistorySession as SessionHistorySession, Page4SessionModule } from './modules/Page4SessionModule'
 import { Page4InputQueueModule } from './modules/Page4InputQueueModule'
 import { Page4LocalIntentModule } from './modules/Page4LocalIntentModule'
@@ -68,6 +69,7 @@ const PAGE4_LOG_DOMAIN = 0xFF04
 const PAGE4_LOG_TAG = 'page4log'
 const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
 const PAGE4_POI_EXPORT_FILE: string = 'page4_poi_mappings_export.json'
+const PAGE4_ORDER_DATA_RAWFILE: string = 'dingdan.txt'
 const ADAPTIVE_WEAK_RECOG_INTERVAL_MS: number = 450
 const ADAPTIVE_WEAK_SWITCH_COOLDOWN_MS: number = 4000
 const ADAPTIVE_WEAK_CONNECT_TIMEOUT_MS: number = 10000
@@ -77,6 +79,16 @@ const ADAPTIVE_NORMAL_SWITCH_COOLDOWN_MS: number = 2500
 
 type AssistantMessage = SessionAssistantMessage
 type HistorySession = SessionHistorySession
+
+interface OutboundOrder {
+  orderId: string
+  skuCode: string
+  productName: string
+  quantity: number
+  zone: string
+  status: string
+  createTime: string
+}
 
 
 @Component
@@ -92,6 +104,9 @@ export struct Page4View {
   @State private voiceRecording: boolean = false
   @State private voiceHintShown: boolean = false
   @State private assistantBusy: boolean = false
+  @State private queryThinkingVisible: boolean = false
+  @State private queryThinkingStageText: string = '\u601d\u8003\u4e2d...'
+  @State private queryThinkingProgressPct: number = 0
   @State private inputMode: 'text' | 'voice' = 'text'
   @State private showSidebar: boolean = false
   @State private voiceReplyEnabled: boolean = false
@@ -107,6 +122,10 @@ export struct Page4View {
   private readonly typingCharIntervalMs: number = 24
   private typingMessageId: string = ''
   private typingFullText: string = ''
+  private queryThinkingTimerId: number = -1
+  private queryThinkingToken: number = 0
+  private queryThinkingStartMs: number = 0
+  private readonly queryThinkingMinDurationMs: number = 3000
 
   private longPressTimerId: number = -1
   private readonly managedTimerIds: Set<number> = new Set<number>()
@@ -150,9 +169,11 @@ export struct Page4View {
   private companyNodeId: string = ''
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
+  private outboundOrders: Array<OutboundOrder> = []
 
   aboutToAppear(): void {
     this.ensurePlaceBindingsLoaded()
+    void this.ensureOrderDataLoaded()
     installPage4TencentVoiceInputAdapter()
     page1Coordinator.bind(this.store)
     void page1Coordinator.start()
@@ -166,6 +187,7 @@ export struct Page4View {
 
   aboutToDisappear(): void {
     this.stopAssistantTyping()
+    this.endQueryThinkingProgress()
     this.clearLongPressTimer()
     this.clearToastTimer()
     this.clearAllManagedTimers()
@@ -228,7 +250,10 @@ export struct Page4View {
           Page4ChatPanel({
             chatScroller: this.chatScroller,
             messages: this.messages,
-            assistantBusy: this.assistantBusy
+            assistantBusy: this.assistantBusy,
+            queryThinkingVisible: this.queryThinkingVisible,
+            queryThinkingStageText: this.queryThinkingStageText,
+            queryThinkingProgressPct: this.queryThinkingProgressPct
           })
           Page4InputPanel({
             inputMode: this.inputMode,
@@ -817,6 +842,13 @@ export struct Page4View {
     return await new Promise<void>((resolve: () => void): void => {
       this.setManagedTimeout((): void => resolve(), Math.max(0, Math.trunc(delayMs)))
     })
+  }
+
+  private async ensureQueryThinkingShown(minMs: number = this.queryThinkingMinDurationMs): Promise<void> {
+    if (!this.queryThinkingVisible) return
+    const elapsedMs: number = Math.max(0, Date.now() - this.queryThinkingStartMs)
+    const remainMs: number = Math.max(0, Math.trunc(minMs) - elapsedMs)
+    if (remainMs > 0) await this.sleepMs(remainMs)
   }
 
   private async waitUntilArriveNode(destNodeId: string): Promise<{ arrived: boolean, finalNode: string, reason: string }> {
@@ -1564,6 +1596,42 @@ export struct Page4View {
     Page4TimerModule.clearAllManagedTimers(this.managedTimerIds)
   }
 
+  private beginQueryThinkingProgress(stageText: string = '\u601d\u8003\u4e2d...'): void {
+    this.queryThinkingToken += 1
+    const token: number = this.queryThinkingToken
+    this.queryThinkingVisible = true
+    this.queryThinkingStartMs = Date.now()
+    this.queryThinkingStageText = stageText
+    this.queryThinkingProgressPct = 8
+    this.queryThinkingTimerId = this.clearManagedTimer(this.queryThinkingTimerId)
+    const tick = (): void => {
+      if (token !== this.queryThinkingToken) return
+      const cap: number = this.queryThinkingStageText.indexOf('\u6574\u7406') >= 0 ? 92 : 78
+      const step: number = this.queryThinkingStageText.indexOf('\u6574\u7406') >= 0 ? 4 : 3
+      const next: number = Math.min(cap, this.queryThinkingProgressPct + step)
+      this.queryThinkingProgressPct = next
+      this.queryThinkingTimerId = this.setManagedTimeout((): void => tick(), 220)
+    }
+    this.queryThinkingTimerId = this.setManagedTimeout((): void => tick(), 180)
+  }
+
+  private setQueryThinkingProgress(stageText: string, pct: number): void {
+    if (!this.queryThinkingVisible) return
+    this.queryThinkingStageText = stageText
+    const n: number = Math.max(0, Math.min(100, Math.round(pct)))
+    if (n > this.queryThinkingProgressPct) this.queryThinkingProgressPct = n
+  }
+
+  private endQueryThinkingProgress(): void {
+    this.queryThinkingToken += 1
+    this.queryThinkingTimerId = this.clearManagedTimer(this.queryThinkingTimerId)
+    this.queryThinkingProgressPct = 100
+    this.queryThinkingVisible = false
+    this.queryThinkingStartMs = 0
+    this.queryThinkingStageText = '\u601d\u8003\u4e2d...'
+    this.queryThinkingProgressPct = 0
+  }
+
   private mapPoiNameToNode(input: string): string {
     return Page4PoiBindingModule.mapPoiNameToNode(
       input,
@@ -1735,10 +1803,107 @@ export struct Page4View {
     mode: 'all' | 'earliest' | 'latest' = 'all',
     statusFilter: string = ''
   ): string {
-    void queryText
-    void mode
-    void statusFilter
-    return '暂无订单数据，请接入真实数据源'
+    return Page4RuntimeDiagnosticsModule.buildOrderQueryText(this.outboundOrders, queryText, mode, statusFilter)
+  }
+
+  private async ensureOrderDataLoaded(): Promise<void> {
+    if (this.outboundOrders.length > 0) return
+    const rm: resourceManager.ResourceManager | undefined = this.getAbilityResourceManager()
+    if (!rm) return
+    try {
+      const rawData: Object = await rm.getRawFileContent(PAGE4_ORDER_DATA_RAWFILE)
+      const buf: ArrayBuffer | undefined = this.toArrayBuffer(rawData)
+      if (!buf) return
+      const bytes: Uint8Array = new Uint8Array(buf)
+      const text: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
+      this.outboundOrders = this.parseOutboundOrdersText(text)
+      this.logInfo('orderDataLoaded', `count=${this.outboundOrders.length}`)
+    } catch (e) {
+      this.logError('orderDataLoadFail', e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  private getAbilityResourceManager(): resourceManager.ResourceManager | undefined {
+    const root: Record<string, Object | undefined> = globalThis as Record<string, Object | undefined>
+    const ctxObj: Object | undefined = root['abilityContext']
+    if (!ctxObj) return undefined
+    const ctx: Record<string, Object | undefined> = ctxObj as Record<string, Object | undefined>
+    const rmObj: Object | undefined = ctx['resourceManager']
+    if (!rmObj) return undefined
+    return rmObj as resourceManager.ResourceManager
+  }
+
+  private toArrayBuffer(dataObj: Object | undefined | null): ArrayBuffer | undefined {
+    if (dataObj === undefined || dataObj === null) return undefined
+
+    const maybeArrayBuffer = dataObj as ArrayBuffer
+    if (maybeArrayBuffer instanceof ArrayBuffer) {
+      return maybeArrayBuffer.slice(0)
+    }
+
+    const maybeBytes = dataObj as Uint8Array
+    const rawObj = maybeBytes.buffer as Object | undefined
+    if (rawObj) {
+      const raw: ArrayBuffer = rawObj as ArrayBuffer
+      const byteOffsetNum: number = Number(maybeBytes.byteOffset)
+      const byteLengthNum: number = Number(maybeBytes.byteLength)
+      if (Number.isFinite(byteOffsetNum) && Number.isFinite(byteLengthNum) && byteLengthNum > 0) {
+        return raw.slice(byteOffsetNum, byteOffsetNum + byteLengthNum)
+      }
+    }
+
+    const mapObj = dataObj as Record<string, Object | undefined>
+    const nestedData: Object | undefined = mapObj['data']
+    if (nestedData !== undefined) {
+      return this.toArrayBuffer(nestedData)
+    }
+    return undefined
+  }
+
+  private parseOutboundOrdersText(raw: string): Array<OutboundOrder> {
+    const out: Array<OutboundOrder> = []
+    const blocks: Array<string> | null = raw.match(/\{[\s\S]*?\}/g)
+    if (!blocks || blocks.length <= 0) return out
+    for (let i: number = 0; i < blocks.length; i++) {
+      const one: OutboundOrder | undefined = this.parseOutboundOrderBlock(blocks[i])
+      if (!one) continue
+      out.push(one)
+    }
+    return out
+  }
+
+  private parseOutboundOrderBlock(block: string): OutboundOrder | undefined {
+    const orderId: string = this.pickFieldString(block, 'orderId')
+    const skuCode: string = this.pickFieldString(block, 'skuCode')
+    const productName: string = this.pickFieldString(block, 'productName')
+    const quantity: number = this.pickFieldNumber(block, 'quantity')
+    const zone: string = this.pickFieldString(block, 'zone')
+    const status: string = this.pickFieldString(block, 'status')
+    const createTime: string = this.pickFieldString(block, 'createTime')
+    if (orderId.length <= 0 || skuCode.length <= 0 || createTime.length <= 0) return undefined
+    return {
+      orderId,
+      skuCode,
+      productName,
+      quantity,
+      zone,
+      status,
+      createTime
+    }
+  }
+
+  private pickFieldString(block: string, key: string): string {
+    const m: RegExpMatchArray | null = block.match(new RegExp(`${key}\\s*:\\s*'([^']*)'`))
+    if (!m || m.length < 2) return ''
+    return m[1].trim()
+  }
+
+  private pickFieldNumber(block: string, key: string): number {
+    const m: RegExpMatchArray | null = block.match(new RegExp(`${key}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`))
+    if (!m || m.length < 2) return 0
+    const v: number = Number(m[1])
+    if (!Number.isFinite(v)) return 0
+    return Math.trunc(v)
   }
 
   private looksLikeOrderQueryIntent(text: string, lower: string): boolean {
@@ -1981,27 +2146,40 @@ export struct Page4View {
     this.inputText = ''
 
     const lower: string = text.toLowerCase()
-    if (await this.handlePlaceBindingPrompt(text, lower)) {
-      return
+    const orderQueryIntent: boolean = this.looksLikeOrderQueryIntent(text, lower)
+    const placeQueryIntent = this.wantsPlaceBindingQuery(lower)
+    const placeSetIntent: boolean = this.looksLikePlaceBindingIntent(lower)
+    const showQueryThinking: boolean = orderQueryIntent || placeQueryIntent !== undefined || placeSetIntent
+    if (showQueryThinking) {
+      this.beginQueryThinkingProgress(orderQueryIntent ? '\u601d\u8003\u4e2d...' : '\u601d\u8003\u4e2d...')
     }
+    try {
+      if (await this.handlePlaceBindingPrompt(text, lower)) {
+        this.endQueryThinkingProgress()
+        return
+      }
 
-    if (await this.quickRouteToPlaceShortcut(text)) {
-      return
-    }
+      if (await this.quickRouteToPlaceShortcut(text)) {
+        this.endQueryThinkingProgress()
+        return
+      }
 
-    const aliasLearn: string = this.learnAliasFromText(text)
-    if (aliasLearn.length > 0) {
-      this.pushAssistant(aliasLearn)
-      return
-    }
+      const aliasLearn: string = this.learnAliasFromText(text)
+      if (aliasLearn.length > 0) {
+        this.pushAssistant(aliasLearn)
+        this.endQueryThinkingProgress()
+        return
+      }
 
     if (this.containsAny(lower, ['撤销', 'undo', '回到上一个安全点', '回到安全点'])) {
       await this.undoLastActionToSafePoint()
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['夜间策略', '弱网策略', '稳态策略', '稳定策略'])) {
       this.applyAdaptiveStrategy(true)
+      this.endQueryThinkingProgress()
       return
     }
 
@@ -2009,11 +2187,13 @@ export struct Page4View {
       const reason: string = this.lastRouteFailureReason.length > 0 ? this.lastRouteFailureReason : '暂无失败记录'
       const replan: string = this.lastReplanSummary.length > 0 ? this.lastReplanSummary : '暂无重规划记录'
       this.pushAssistant(`导航语义查询：失败原因=${reason}；新方案=${replan}`)
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位','查看所有映射点位'])) {
       this.pushAssistant(this.buildPoiMappingSummaryText())
+      this.endQueryThinkingProgress()
       return
     }
 
@@ -2021,12 +2201,14 @@ export struct Page4View {
       const exp = this.exportPoiMappingsToFile()
       if (exp.ok) this.pushAssistant(`已导出点位映射：${exp.path}`)
       else this.pushAssistant(`导出点位映射失败：${exp.error}`)
+      this.endQueryThinkingProgress()
       return
     }
 
     const localTasks: Array<Page4PlannedTask> = this.parseLocalPlannedTasks(text)
     if (localTasks.length >= 2) {
       await this.executePlannedTasks(localTasks)
+      this.endQueryThinkingProgress()
       return
     }
 
@@ -2034,31 +2216,37 @@ export struct Page4View {
       const openClawTasks: Array<Page4PlannedTask> = await this.planTasksByOpenClaw(text)
       if (openClawTasks.length > 0) {
         await this.executePlannedTasks(openClawTasks)
+        this.endQueryThinkingProgress()
         return
       }
     }
 
     if (this.containsAny(lower, ['示例', '例子', 'help', '帮助', '怎么用'])) {
       this.pushAssistant(this.buildExampleText())
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.looksLikeCaptureFrameIntent(lower)) {
       this.pushAssistant(this.buildCameraFrameSummaryText())
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['查询状态', '状态', 'status'])) {
       this.pushAssistant(this.buildStatusSummaryText())
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['识别状态', '视觉状态', '识别结果', 'vision'])) {
       this.pushAssistant(this.buildVisionSummaryText())
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.looksLikeOrderQueryIntent(text, lower)) {
+      this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 64)
       let query: string = ''
       const idMatch: RegExpMatchArray | null = text.match(/OUT-\d{8}-\d{3}/i)
       const skuMatch: RegExpMatchArray | null = text.match(/[A-Z]{2}-\d{4}/i)
@@ -2070,7 +2258,9 @@ export struct Page4View {
       if (this.containsAny(lower, ['全部', '所有'])) mode = 'all'
       let statusFilter: string = ''
       if (this.containsAny(lower, ['已发货'])) statusFilter = '已发货'
+      await this.ensureQueryThinkingShown()
       this.pushAssistant(this.buildOrderQueryText(query, mode, statusFilter))
+      this.endQueryThinkingProgress()
       return
     }
 
@@ -2078,6 +2268,7 @@ export struct Page4View {
       this.store.autoFollowEnabled = true
       this.store.pushLog('info assistant.autoFollow set=ON')
       this.pushAssistant('已开启自动跟随。')
+      this.endQueryThinkingProgress()
       return
     }
 
@@ -2085,24 +2276,30 @@ export struct Page4View {
       this.store.autoFollowEnabled = false
       this.store.pushLog('info assistant.autoFollow set=OFF')
       this.pushAssistant('已关闭自动跟随。')
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['开启真车模式', '真车模式', 'real_send'])) {
       this.store.setRealSendEnabled(true)
       this.pushAssistant('已切换到 REAL_SEND。')
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['开启仿真模式', '仿真模式', 'dry_run', '关闭真车模式'])) {
       this.store.setRealSendEnabled(false)
       this.pushAssistant('已切换到 DRY_RUN。')
+      this.endQueryThinkingProgress()
       return
     }
     /*1.先尝试解析用户是否在下发“导航目标”*/
     const dest: string = this.extractDestNode(text)
     /*2.命中导航意图就直接走导航链路，优先保证控制实时性*/
-    if (await this.RaprouteWith(dest, text))return
+    if (await this.RaprouteWith(dest, text)) {
+      this.endQueryThinkingProgress()
+      return
+    }
     /*3.如果不是导航，再识别是否是前进/停止等动作控制指令*/
     const action: Page1Action | undefined = this.resolveActionByText(lower)
     if (action !== undefined) {
@@ -2119,20 +2316,29 @@ export struct Page4View {
         this.logError('sendVehicleActionFail', `action=${this.actionName(action)}, reason=${msg}`)
         this.pushAssistant(`执行回执：${this.renderReceiptsSummary([this.buildReceipt(`动作失败:${msg}`, false, false)])}`)
       }
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['网络', '通信'])) {
       this.pushAssistant(`通信状态=${commStore.commStateText} | connected=${commStore.commConnected} | reconnect=${commStore.commReconnectCount} | tx/rx=${commStore.txPackets}/${commStore.rxPackets}`)
+      this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['视频', '相机'])) {
       this.pushAssistant(`视频模式=${videoStore.displayMode} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | status=${videoStore.statusText}`)
+      this.endQueryThinkingProgress()
       return
     }
     /*5.前两类都不命中时，再进入AI问答兜底*/
-    await this.answerByOpenClaw()
+      await this.answerByOpenClaw()
+      this.endQueryThinkingProgress()
+    } finally {
+      if (showQueryThinking && this.queryThinkingVisible) {
+        this.endQueryThinkingProgress()
+      }
+    }
   }
 
   private logInfo(name: string, message: string): void {
@@ -2241,6 +2447,8 @@ export struct Page4View {
 
     const query = this.wantsPlaceBindingQuery(lower)
     if (query) {
+      this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 64)
+      await this.ensureQueryThinkingShown()
       const parts: Array<string> = []
       if (query.askHome) parts.push(this.formatPlaceBinding('home'))
       if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
@@ -2259,6 +2467,7 @@ export struct Page4View {
     const node: string = GridIdCodec.isValidId(nodeFromPlace) ? nodeFromPlace : nodeFromAll
     if (!GridIdCodec.isValidId(node)) {
       const roleText: string = this.placeRoleText(req.role)
+      await this.ensureQueryThinkingShown()
       this.pushAssistant(`未识别到可用点位，无法设置${roleText}。请直接说节点（如“将D4设置为${roleText}”）或说可映射地名。`)
       return true
     }
@@ -2266,8 +2475,10 @@ export struct Page4View {
     const roleText: string = this.placeRoleText(req.role)
     if (req.role === 'home') this.homeNodeId = node
     else this.companyNodeId = node
+    this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 72)
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
     const ok: boolean = this.persistPlaceBindings()
+    await this.ensureQueryThinkingShown()
     if (ok) {
       this.pushAssistant(`已设置：${roleText}=${node}（来源“${req.placeText}”）。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
     } else {
@@ -2352,4 +2563,3 @@ export struct Page4View {
     return undefined
   }
 }
-

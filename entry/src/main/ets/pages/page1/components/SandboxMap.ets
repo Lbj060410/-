@@ -235,6 +235,7 @@ export struct SandboxMap {
             this.buildBlockedNodeMarkers()
             this.buildRouteObstaclePointMarkers()
             this.buildBlockedEdgeMarkers()
+            this.buildPlaceBindingBubbles()
           }
           this.buildDestinationMarker()
 
@@ -751,6 +752,56 @@ export struct SandboxMap {
           .zIndex(3)
       }
     }, (edgeId: string): string => edgeId)
+  }
+
+  @Builder
+  private buildPlaceBindingBubbles(): void {
+    this.buildPlaceBubble('home', this.store.homePlaceNodeId, '物流中心')
+    this.buildPlaceBubble('company', this.store.companyPlaceNodeId, '快递点')
+  }
+
+  @Builder
+  private buildPlaceBubble(kind: 'home' | 'company', nodeId: string, text: string): void {
+    if (this.shouldShowPlaceBubble(nodeId)) {
+      Text(text)
+        .fontSize(12)
+        .fontColor('#FFFFFF')
+        .fontWeight(FontWeight.Bold)
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .backgroundColor(this.placeBubbleBg(kind))
+        .borderRadius(10)
+        .border({ width: 1, color: 'rgba(255,255,255,0.28)' })
+        .position(this.placeBubblePosById(nodeId))
+        .zIndex(9)
+    }
+  }
+
+  private shouldShowPlaceBubble(nodeId: string): boolean {
+    const node: GridNode | undefined = this.findGridNodeById(nodeId)
+    if (!node) return false
+    if (this.isDetailLevel() && !this.isWorldPointVisible(node.xNorm * this.store.mapW, node.yNorm * this.store.mapH, 64)) return false
+    return true
+  }
+
+  private placeBubbleBg(kind: 'home' | 'company'): string {
+    if (kind === 'home') return 'rgba(16, 185, 129, 0.94)'
+    return 'rgba(59, 130, 246, 0.94)'
+  }
+
+  private placeBubblePosById(nodeId: string): XYPos {
+    const node: GridNode | undefined = this.findGridNodeById(nodeId)
+    if (!node) return { x: -9999, y: -9999 }
+    return this.placeBubblePos(node)
+  }
+
+  private placeBubblePos(node: GridNode): XYPos {
+    const centerX: number = node.xNorm * this.store.mapW
+    const centerY: number = node.yNorm * this.store.mapH
+    const yOffset: number = this.mapPlacedMarkerSize() * 0.65
+    return {
+      x: centerX - 34,
+      y: centerY - yOffset
+    }
   }
 
   private edgeMarkerVisible(edgeId: string): boolean {

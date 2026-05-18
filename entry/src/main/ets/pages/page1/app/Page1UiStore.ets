@@ -106,6 +106,8 @@ export class Page1UiStore {
   carDotSize: number = 26
   homePlaceConfigured: boolean = false
   companyPlaceConfigured: boolean = false
+  homePlaceNodeId: string = ''
+  companyPlaceNodeId: string = ''
 
   // ===== 黑线路网节点（行号 1/2/4/6/7）=====
   gridNodes: Array<GridNode> = SandboxGridModel.buildDefaultNodes()
@@ -508,8 +510,12 @@ export class Page1UiStore {
   }
 
   setPlaceConfigured(homeNodeId: string, companyNodeId: string): void {
-    this.homePlaceConfigured = this.isValidPlaceNodeId(homeNodeId)
-    this.companyPlaceConfigured = this.isValidPlaceNodeId(companyNodeId)
+    const homeId: string = String(homeNodeId ?? '').trim().toUpperCase()
+    const companyId: string = String(companyNodeId ?? '').trim().toUpperCase()
+    this.homePlaceConfigured = this.isValidPlaceNodeId(homeId)
+    this.companyPlaceConfigured = this.isValidPlaceNodeId(companyId)
+    this.homePlaceNodeId = this.homePlaceConfigured ? homeId : ''
+    this.companyPlaceNodeId = this.companyPlaceConfigured ? companyId : ''
   }
 
   private isValidPlaceNodeId(raw: string): boolean {

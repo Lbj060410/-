@@ -118,18 +118,32 @@ export class Page4PoiBindingModule {
 
   static parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
     const src: string = text.trim()
-    const m: RegExpMatchArray | null = src.match(/(?:把|将)?\s*(物流中心|快递点|公司仓库|home|company)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(.+)$/i)
-    if (!m || m.length < 3) return undefined
-    const roleRaw: string = String(m[1] ?? '')
-    const placeText: string = String(m[2] ?? '').trim()
+    const roleFirst: RegExpMatchArray | null =
+      src.match(/(?:把|将)?\s*(物流中心|快递点|公司仓库|home|company)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(.+)$/i)
+    if (roleFirst && roleFirst.length >= 3) {
+      const roleRaw: string = String(roleFirst[1] ?? '')
+      const placeText: string = String(roleFirst[2] ?? '').trim()
+      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(roleRaw)
+      if (!role || placeText.length <= 0) return undefined
+      return { role, placeText }
+    }
+
+    const placeFirst: RegExpMatchArray | null =
+      src.match(/(?:把|将)?\s*(.+?)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(物流中心|快递点|公司仓库|home|company)\s*$/i)
+    if (!placeFirst || placeFirst.length < 3) return undefined
+    const placeText: string = String(placeFirst[1] ?? '').trim()
+    const roleRaw: string = String(placeFirst[2] ?? '')
     const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(roleRaw)
     if (!role || placeText.length <= 0) return undefined
     return { role, placeText }
   }
 
   static wantsPlaceBindingQuery(rawLower: string, containsAny: (text: string, keys: Array<string>) => boolean): { askHome: boolean, askCompany: boolean } | undefined {
+    if (containsAny(rawLower, ['设置为', '设为', '改为', '改成', '定义为', '记为', '当成', '作为'])) {
+      return undefined
+    }
     const ask: boolean = containsAny(rawLower, ['物流中心', '快递点', '公司仓库']) &&
-      containsAny(rawLower, ['在哪', '是什么', '查询', '查看', '配置', '设置'])
+      containsAny(rawLower, ['在哪', '是什么', '查询', '查看', '配置', '设置了吗', '有没有设置', '是否设置'])
     if (!ask) return undefined
     const askHome: boolean = containsAny(rawLower, ['物流中心', 'home']) || !containsAny(rawLower, ['快递点', 'company', '公司仓库'])
     const askCompany: boolean = containsAny(rawLower, ['快递点', 'company', '公司仓库']) || !containsAny(rawLower, ['物流中心', 'home'])

@@ -58,6 +58,7 @@ export class Page2ReplayService {
   private lastShigongTaskId: string = ''
   private lastShigongAtMs: number = 0
   private lastUltrasonicAtMs: number = 0
+  private lastTrafficSignalAtMs: number = 0
   private lastVisionTaskId: string = ''
   private lastVisionAtMs: number = 0
 
@@ -135,6 +136,26 @@ export class Page2ReplayService {
       buttonName: `Obstacle Edge: ${from}|${to}`,
       resultText: '路段障碍',
       decisionText: '路段障碍上报，已标记并触发重规划',
+      decisionImageRef,
+      clipFrameRefs
+    })
+  }
+
+  async onTrafficLightSignal(note: string): Promise<void> {
+    const nowMs: number = Date.now()
+    if (nowMs - this.lastTrafficSignalAtMs < 1000) return
+    this.lastTrafficSignalAtMs = nowMs
+
+    const id: string = this.nextId('obs')
+    const clipFrameRefs: Array<string> = await this.saveRecentClipFrames(id, 2000)
+    const decisionImageRef: string = await this.saveDecisionImage(id, 'traffic_signal_06')
+    this.pushObstacle({
+      id,
+      tsMs: nowMs,
+      triggerType: 'VISION',
+      buttonName: 'Traffic Signal 0x06',
+      resultText: note.length > 0 ? note : '收到 0x06 交通灯识别触发',
+      decisionText: '收到0x06，已触发交通灯识别并截取画面',
       decisionImageRef,
       clipFrameRefs
     })

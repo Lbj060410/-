@@ -68,6 +68,26 @@ function parseNodeCoordinate(nodeId: string): { xCoordinate: string, yCoordinate
   return { xCoordinate: xCoordinate, yCoordinate: yCoordinate }
 }
 
+function pointTextByNode(nodeId: string): string {
+  const c = parseNodeCoordinate(nodeId)
+  if (!c) return '-'
+  return `${c.xCoordinate}${c.yCoordinate}`
+}
+
+function safePointText(v: string | undefined): string {
+  if (typeof v !== 'string') return '-'
+  const x: string = sanitizeNodeId(v)
+  return x.length > 0 ? x : '-'
+}
+
+function formatWebTrajectoryLine(ok: boolean, nodeId: string, startPoint?: string, endPoint?: string): string {
+  const normalizedId: string = sanitizeNodeId(nodeId)
+  const point: string = pointTextByNode(normalizedId)
+  const start: string = safePointText(startPoint)
+  const end: string = safePointText(endPoint)
+  return `id=${normalizedId} point=${point} start=${start} end=${end}`
+}
+
 function buildPayloadByNode(nodeId: string, _intervalMs: number): SaveTrajectoryPayload | undefined {
   const coordinate = parseNodeCoordinate(nodeId)
   if (!coordinate) return undefined
@@ -96,13 +116,11 @@ export async function saveCarTrajectory(payload: SaveTrajectoryPayload): Promise
     const resultText: string = String(response.result)
     hilog.info(SENDWEB_DOMAIN, SENDWEB_TAG, 'send success response: %{public}s', resultText)
     console.info(`[WEB_CONNECT] trajectory upload success: ${payloadText}`)
-    appendWebDiag('SENT', `payload=${payloadText} response=${resultText}`)
     return resultText
   } catch (err) {
     const message: string = (err as BusinessError).message
     hilog.error(SENDWEB_DOMAIN, SENDWEB_TAG, 'send failed err: %{public}s payload=%{public}s', message, payloadText)
     console.error(`[WEB_CONNECT] trajectory upload failed: ${message}`)
-    appendWebDiag('FAILED', `payload=${payloadText} err=${message}`)
     throw err
   } finally {
     httpRequest.destroy()
@@ -121,14 +139,18 @@ export interface SaveByNodeOptions {
 
 export async function saveCarTrajectoryByNode(nodeId: string, intervalMs: number, options?: SaveByNodeOptions): Promise<boolean> {
   const safeIntervalMs: number = Math.max(0, Math.trunc(intervalMs))
+  const normalizedId: string = sanitizeNodeId(nodeId)
+  const ext: SaveByNodeOptions = options ?? {}
+  const line: string = formatWebTrajectoryLine(true, normalizedId, ext.startPoint, ext.endPoint)
+  const failLine: string = formatWebTrajectoryLine(false, normalizedId, ext.startPoint, ext.endPoint)
+
   const payload = buildPayloadByNode(nodeId, safeIntervalMs)
   if (!payload) {
     console.error(`[WEB_CONNECT] skip upload, bad nodeId=${nodeId}`)
     hilog.warn(SENDWEB_DOMAIN, SENDWEB_TAG, 'skip bad nodeId=%{public}s', nodeId)
-    appendWebDiag('SKIP', `bad nodeId=${nodeId}`)
+    appendWebDiag('FAILED', failLine)
     return false
   }
-  const ext: SaveByNodeOptions = options ?? {}
   if (typeof ext.startPoint === 'string') payload.startPoint = sanitizeNodeId(ext.startPoint)
   if (typeof ext.endPoint === 'string') payload.endPoint = sanitizeNodeId(ext.endPoint)
   if (typeof ext.plateNumber === 'string' && ext.plateNumber.trim().length > 0) payload.plateNumber = ext.plateNumber.trim()
@@ -137,7 +159,13 @@ export async function saveCarTrajectoryByNode(nodeId: string, intervalMs: number
   if (typeof ext.speed === 'number') payload.speed = Number(ext.speed)
   if (typeof ext.status === 'number') payload.status = Math.max(0, Math.trunc(ext.status))
 
-  await saveCarTrajectory(payload)
+  try {
+    await saveCarTrajectory(payload)
+    appendWebDiag('SUCCESS', line)
+  } catch (_err) {
+    appendWebDiag('FAILED', failLine)
+    throw _err
+  }
   return true
 }
 
@@ -168,4 +196,3 @@ export async function saveSignalCarBatch(payloads: SignalCarPayload[]): Promise<
     httpRequest.destroy()
   }
 }
-
