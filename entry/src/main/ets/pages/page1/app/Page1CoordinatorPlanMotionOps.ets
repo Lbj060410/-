@@ -14,8 +14,11 @@ Page1 coordination/scheduling helper logic.
  */
 import { Page1Action } from '../types/Page1Types'
 import { GridIdCodec, PathPlannerAStar } from './PathPlannerAStar'
+import { IPage1CoordinatorOps } from './Page1CoordinatorDefs'
 import { videoStore } from '../../../state/VideoStore'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
+import { VehicleMotionHooks } from './VehicleMotionPlayer'
+import { VehicleActionSchedulerDeps } from './VehicleActionScheduler'
 
 function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
   const from: string = fromId.trim().toUpperCase()
@@ -23,7 +26,7 @@ function shouldEnableTrafficBySegment(fromId: string, toId: string): boolean {
   return from === 'B4' && to === 'B6'
 }
 
-function shouldEnableTrafficByPoseAtB4(ctx: any): boolean {
+function shouldEnableTrafficByPoseAtB4(ctx: IPage1CoordinatorOps): boolean {
   const s = ctx.store
   if (!s) return false
   const curId: string = s.currentSnapNodeId.trim().toUpperCase()
@@ -46,7 +49,7 @@ function syncRecognitionBySegment(fromId: string, toId: string): void {
   }
 }
 
-function syncRecognitionByPathCursor(ctx: any): void {
+function syncRecognitionByPathCursor(ctx: IPage1CoordinatorOps): void {
   const s = ctx.store
   if (!s) return
   if (shouldEnableTrafficByPoseAtB4(ctx)) {
@@ -70,9 +73,9 @@ function syncRecognitionByPathCursor(ctx: any): void {
   syncRecognitionBySegment(fromId, toId)
 }
 
-export function motionHooks(ctx: any): any {
+export function motionHooks(ctx: IPage1CoordinatorOps): VehicleMotionHooks {
   return {
-    findNode: (id: string): any => ctx.findNode(id),
+    findNode: (id: string) => ctx.findNode(id),
     updatePoseAndTelemetryForDisplay: (xNorm: number, yNorm: number, headingDeg: number, speed: number): void => {
       ctx.updatePoseAndTelemetryForDisplay(xNorm, yNorm, headingDeg, speed)
     },
@@ -93,7 +96,7 @@ export function motionHooks(ctx: any): any {
   }
 }
 
-export function schedulerDeps(ctx: any): any {
+export function schedulerDeps(ctx: IPage1CoordinatorOps): VehicleActionSchedulerDeps {
   return {
     sendDriveActionDirect: async (a: Page1Action): Promise<boolean> => {
       return await ctx.sendDriveActionDirect(a)
@@ -104,7 +107,7 @@ export function schedulerDeps(ctx: any): any {
   }
 }
 
-export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<void> {
+export async function maybeHandleMotionArrive(ctx: IPage1CoordinatorOps, toId: string): Promise<void> {
   const s = ctx.store
   if (!s) return
   s.currentSnapNodeId = toId
@@ -116,18 +119,14 @@ export async function maybeHandleMotionArrive(ctx: any, toId: string): Promise<v
   s.pushLog(`ARRIVE: ${toId} via MOTION | pathIndex=${s.pathIndex}`)
 
   if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
-    if (!ctx.canSendNextCommand(Date.now())) return
     await ctx.sendDriveActionDirect(Page1Action.STOP)
     s.setAction('到达终点，停止')
     replayArchiveService.closeActive('到达终点')
     return
   }
-
-  // 收到上一段 新协议状态回执 并完成到点后，立即尝试下发下一步指令。
-  await ctx.followPathOnce(Date.now(), true)
 }
 
-export function planPath(ctx: any, dest: string): void {
+export function planPath(ctx: IPage1CoordinatorOps, dest: string): void {
   const s = ctx.store
   if (!s) return
   const oldPath: Array<string> = s.pathNodes.slice()
@@ -139,7 +138,6 @@ export function planPath(ctx: any, dest: string): void {
   ctx.cancelParkingSequence()
   ctx.stopActiveMotion()
   ctx.resetRouteVoiceFlags()
-  ctx.resetPathAckState()
 
   const goal: string = dest.trim().toUpperCase()
   if (goal.length === 0) {
@@ -165,7 +163,7 @@ export function planPath(ctx: any, dest: string): void {
   // 小车已内置 A*：上位机仍做一次本地 A*，仅用于地图路线可视化。
   const blocked: Array<string> = s.blockedNodes
   const blockedEdges: Array<string> = s.blockedEdges
-  const visRes: any = PathPlannerAStar.plan(start, goal, blocked, blockedEdges)
+  const visRes = PathPlannerAStar.plan(start, goal, blocked, blockedEdges)
   const visualPath: Array<string> = (visRes && visRes.ok && visRes.path && visRes.path.length > 0)
     ? visRes.path
     : [start, goal]

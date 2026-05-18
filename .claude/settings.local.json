@@ -42,7 +42,13 @@
       "Read(//tmp/**)",
       "Bash(xargs sed:*)",
       "Bash(identify \"C:\\\\Users\\\\来不及捂手\\\\Desktop\\\\素材\\\\720.png\")",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(gh pr *)",
+      "Bash(git -C F:/HarmonyOs/car2/car status --short -- entry/src/main/ets/pages/page1/app/Page1PathAckState.ets)",
+      "Bash(git -C F:/HarmonyOs/car2/car status --short -- entry/src/main/ets/pages/page1/app/Page1PendingAckMotion.ets)",
+      "Bash(sort -k5 -rn)",
+      "Read(//c/Users/来不及捂手/Desktop/Axing_Functions_By_File/**)",
+      "Bash(dir \"C:\\\\Users\\\\来不及捂手\\\\Desktop\\\\Axing_Functions_By_File\")"
     ]
   }
 }

@@ -44,95 +44,47 @@ import { page4TencentLocalTtsService } from '../../services/assistant/Page4Tence
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
-import image from '@ohos.multimedia.image'
+import { AssistantMessage as SessionAssistantMessage, HistorySession as SessionHistorySession, Page4SessionModule } from './modules/Page4SessionModule'
+import { Page4InputQueueModule } from './modules/Page4InputQueueModule'
+import { Page4LocalIntentModule } from './modules/Page4LocalIntentModule'
+import { Page4PromptContextModule } from './modules/Page4PromptContextModule'
+import { Page4VoiceUiModule } from './modules/Page4VoiceUiModule'
+import { Page4TimerModule } from './modules/Page4TimerModule'
+import { Page4RuntimeDiagnosticsModule } from './modules/Page4RuntimeDiagnosticsModule'
+import { Page4OpenClawChatModule } from './modules/Page4OpenClawChatModule'
+import { Page4OpenClawTaskPlannerModule } from './modules/Page4OpenClawTaskPlannerModule'
+import { Page4PoiBindingModule, Page4AliasItem, Page4PlaceBindingPayload, Page4PlaceBindingPlan, Page4PlaceRole } from './modules/Page4PoiBindingModule'
+import { Page4VoiceFlowModule } from './modules/Page4VoiceFlowModule'
+import { Page4PlannedTask, Page4PlannedTaskKind, Page4OpenClawPlanQaModule } from './modules/Page4OpenClawPlanQaModule'
+import { Page4ExecutionReceipt, Page4RouteExecutionModule } from './modules/Page4RouteExecutionModule'
+import { Page4TaskExecutionModule } from './modules/Page4TaskExecutionModule'
+import { Page4VoiceInputAdapter } from './modules/Page4VoiceInputModule'
+import { Page4TopNavBar } from './ui/Page4TopNavBar'
+import { Page4Sidebar } from './ui/Page4Sidebar'
+import { Page4ChatPanel } from './ui/Page4ChatPanel'
+import { Page4InputPanel } from './ui/Page4InputPanel'
 
 const PAGE4_LOG_DOMAIN = 0xFF04
 const PAGE4_LOG_TAG = 'page4log'
-const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
-const PAGE4_POI_EXPORT_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_poi_mappings_export.json'
+const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
+const PAGE4_POI_EXPORT_FILE: string = 'page4_poi_mappings_export.json'
+const ADAPTIVE_WEAK_RECOG_INTERVAL_MS: number = 450
+const ADAPTIVE_WEAK_SWITCH_COOLDOWN_MS: number = 4000
+const ADAPTIVE_WEAK_CONNECT_TIMEOUT_MS: number = 10000
+const ADAPTIVE_WEAK_READ_TIMEOUT_MS: number = 60000
+const ADAPTIVE_NORMAL_RECOG_INTERVAL_MS: number = 220
+const ADAPTIVE_NORMAL_SWITCH_COOLDOWN_MS: number = 2500
 
-interface AssistantMessage {
-  id: string
-  role: 'user' | 'assistant'
-  text: string
-  tsMs: number
-}
+type AssistantMessage = SessionAssistantMessage
+type HistorySession = SessionHistorySession
 
-interface HistorySession {
-  title: string
-  messages: Array<AssistantMessage>
-  tsMs: number
-}
-
-type Page4PlannedTaskKind =
-  'route' |
-  'action' |
-  'auto_follow' |
-  'send_mode' |
-  'capture_frame' |
-  'undo' |
-  'method' |
-  'query_status' |
-  'query_vision' |
-  'query_comm' |
-  'query_video'
-
-interface Page4PlannedTask {
-  kind: Page4PlannedTaskKind
-  destNodeId?: string
-  action?: Page1Action
-  enabled?: boolean
-  mode?: 'REAL_SEND' | 'DRY_RUN'
-  methodName?: string
-  methodArgs?: Record<string, Object | string | number | boolean | undefined>
-}
-
-interface Page4AliasItem {
-  name: string
-  destNodeId: string
-  tsMs: number
-}
-
-interface Page4ExecutionReceipt {
-  taskText: string
-  sent: boolean
-  ack: string
-  done: string
-}
-
-interface Page4VoiceInputAdapter {
-  startListening: () => void | Promise<void>
-  stopListening: () => string | Promise<string>
-}
-
-type Page4PlaceRole = 'home' | 'company'
-
-interface Page4PlaceBindingPayload {
-  homeNodeId?: string
-  companyNodeId?: string
-}
-
-interface Page4PlaceBindingPlan {
-  role: Page4PlaceRole
-  placeText: string
-}
-
-interface OutboundOrder {
-  orderId: string
-  skuCode: string
-  productName: string
-  quantity: number
-  zone: string
-  status: string
-  createTime: string
-}
 
 @Component
 export struct Page4View {
   private readonly logTag: string = 'Page4View'
   private readonly maxMessages: number = 120
   private readonly maxHistorySessions: number = 24
-  @State private store: Page1UiStore = page1Store
+  private readonly store: Page1UiStore = page1Store
   @State private inputText: string = ''
   @State private messages: Array<AssistantMessage> = []
   @State private seq: number = 0
@@ -186,6 +138,10 @@ export struct Page4View {
   private lastAction?: Page1Action = undefined
   private lastRouteFailureReason: string = ''
   private lastReplanSummary: string = ''
+
+  private getFilesDir(): string {
+    return getContext(this).filesDir
+  }
   private lastSafeNodeId: string = ''
   private prevSafeNodeId: string = ''
   private aliasDict: Array<Page4AliasItem> = []
@@ -194,53 +150,6 @@ export struct Page4View {
   private companyNodeId: string = ''
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
-  private readonly outboundOrders: Array<OutboundOrder> = [
-    {
-      orderId: 'OUT-20240418-001',
-      skuCode: 'MZ-8820',
-      productName: '高端运动水壶',
-      quantity: 120,
-      zone: 'A-03 货架',
-      status: '待拣货',
-      createTime: '2024-04-18 09:30:22'
-    },
-    {
-      orderId: 'OUT-20240418-002',
-      skuCode: 'PL-4560',
-      productName: '智能体重秤',
-      quantity: 45,
-      zone: 'B-12 货架',
-      status: '拣货中',
-      createTime: '2024-04-18 10:15:07'
-    },
-    {
-      orderId: 'OUT-20240418-003',
-      skuCode: 'EL-3321',
-      productName: '无线蓝牙耳机',
-      quantity: 88,
-      zone: 'C-05 货架',
-      status: '待复核',
-      createTime: '2024-04-18 11:02:33'
-    },
-    {
-      orderId: 'OUT-20240417-015',
-      skuCode: 'FT-9901',
-      productName: '折叠收纳箱',
-      quantity: 200,
-      zone: 'A-08 货架',
-      status: '已出库',
-      createTime: '2024-04-17 16:20:15'
-    },
-    {
-      orderId: 'OUT-20240417-012',
-      skuCode: 'BK-2345',
-      productName: '电子书阅读器',
-      quantity: 32,
-      zone: 'B-03 货架',
-      status: '已发货',
-      createTime: '2024-04-17 14:08:42'
-    }
-  ]
 
   aboutToAppear(): void {
     this.ensurePlaceBindingsLoaded()
@@ -267,21 +176,76 @@ export struct Page4View {
     Stack({ alignContent: Alignment.Center }) {
       Row() {
         if (this.showSidebar) {
-          Column() {
-            this.buildSidebarHeader()
-            this.buildHistoryList()
-          }
-          .width('30%')
-          .height('100%')
-          .backgroundColor('#F8FAFC')
-          .border({ width: { right: 1 }, color: '#E2E8F0' })
-          .transition({ type: TransitionType.All, translate: { x: -200 }, opacity: 0 })
+          Page4Sidebar({
+            historyTitles: this.historyTitles,
+            historySessions: this.historySessions,
+            onOpenHistory: (session: HistorySession): void => {
+              if (!this.isCurrentNewChat()) {
+                this.archiveCurrentChatTitle()
+              }
+              const restored: Array<AssistantMessage> = []
+              for (let k: number = 0; k < session.messages.length; k++) restored.push(session.messages[k])
+              animateTo({ duration: 200 }, (): void => {
+                this.messages = restored
+                this.currentChatTitle = session.title
+                this.showSidebar = false
+              })
+              this.scrollChatToBottomSoon()
+            }
+          })
         }
 
         Column() {
-          this.buildTopNavBar()
-          this.buildChatPanel()
-          this.buildInputArea()
+          Page4TopNavBar({
+            showSidebar: this.showSidebar,
+            currentChatTitle: this.currentChatTitle,
+            voiceReplyEnabled: this.voiceReplyEnabled,
+            onToggleSidebar: (): void => {
+              animateTo({ duration: 200, curve: Curve.EaseInOut }, (): void => {
+                this.showSidebar = !this.showSidebar
+              })
+            },
+            onToggleVoiceReply: (): void => {
+              this.voiceReplyEnabled = !this.voiceReplyEnabled
+              this.showToast(this.voiceReplyEnabled ? '已开启本机播报' : '已关闭本机播报')
+              if (this.voiceReplyEnabled) void this.previewVoiceReplyAfterEnable()
+              else page4TencentLocalTtsService.stop()
+            },
+            onNewChat: (): void => {
+              if (this.isCurrentNewChat()) {
+                this.showToast('已经在新对话中')
+                return
+              }
+              this.archiveCurrentChatTitle()
+              animateTo({ duration: 300 }, (): void => {
+                this.messages = []
+                this.currentChatTitle = '新对话'
+                this.pushAssistant('您好，我是您的智能助理，有什么我可以帮您？')
+              })
+              this.scrollChatToTopSoon()
+            }
+          })
+          Page4ChatPanel({
+            chatScroller: this.chatScroller,
+            messages: this.messages,
+            assistantBusy: this.assistantBusy
+          })
+          Page4InputPanel({
+            inputMode: this.inputMode,
+            inputText: this.inputText,
+            voiceRecording: this.voiceRecording,
+            onToggleMode: (): void => {
+              this.inputMode = this.inputMode === 'voice' ? 'text' : 'voice'
+            },
+            onInputChange: (v: string): void => {
+              this.inputText = v
+            },
+            onSubmitText: (): void => {
+              if (!this.inputText) return
+              void this.enqueuePrompt(this.inputText, 'text')
+            },
+            onVoiceTouch: (event: TouchEvent): void => this.onVoiceTouch(event)
+          })
         }
         .layoutWeight(1)
         .height('100%')
@@ -302,351 +266,6 @@ export struct Page4View {
     .width('100%')
     .height('100%')
   }
-
-  @Builder
-  private buildTopNavBar(): void {
-    Row() {
-      this.buildSidebarToggleButton()
-
-      Blank()
-
-      Text(this.currentChatTitle)
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontFamily('STSong')
-        .fontColor(Page1Theme.TEXT_PRIMARY)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-      Blank()
-
-      Row({ space: 10 }) {
-        this.buildVoiceReplyButton()
-        this.buildNewChatButton()
-      }
-    }
-    .width('100%')
-    .height(74)
-    .padding({ left: 16, right: 16 })
-    .margin({ top: 15 })
-    .backgroundColor(Page1Theme.BG)
-    .shadow({ radius: 10, color: '#00000008', offsetX: 0, offsetY: 2 })
-    .alignItems(VerticalAlign.Bottom)
-    .zIndex(10)
-  }
-
-  @Builder
-  private buildSidebarToggleButton(): void {
-    Button() {
-      Image(this.showSidebar ? $rawfile('icon/关闭侧边栏.png') : $rawfile('icon/开启侧边栏.png'))
-        .width(24)
-        .height(24)
-    }
-    .width(40)
-    .height(40)
-    .padding(0)
-    .backgroundColor(Color.Transparent)
-    .borderWidth(0)
-    .stateEffect(false)
-    .onClick((): void => {
-      animateTo({ duration: 200, curve: Curve.EaseInOut }, (): void => {
-        this.showSidebar = !this.showSidebar
-      })
-    })
-  }
-
-  @Builder
-  private buildNewChatButton(): void {
-    Button() {
-      Image($rawfile('icon/添加新对话.png'))
-        .width(28)
-        .height(28)
-    }
-    .height(40)
-    .width(40)
-    .padding(0)
-    .backgroundColor(Color.Transparent)
-    .borderRadius(0)
-    .borderWidth(0)
-    .stateEffect(false)
-    .onClick((): void => {
-      if (this.isCurrentNewChat()) {
-        this.showToast('已经在新对话中')
-        return
-      }
-
-      this.archiveCurrentChatTitle()
-      animateTo({ duration: 300 }, (): void => {
-        this.messages = []
-        this.currentChatTitle = '新对话'
-        this.pushAssistant('您好，我是您的智能助理，有什么我可以帮您？')
-      })
-      this.scrollChatToTopSoon()
-    })
-  }
-
-  @Builder
-  private buildVoiceReplyButton(): void {
-    Button() {
-      Image(this.voiceReplyEnabled ? $rawfile('icon/语音播报开启.png') : $rawfile('icon/语音播报关闭.png'))
-        .width(28)
-        .height(28)
-    }
-    .height(40)
-    .width(40)
-    .padding(0)
-    .backgroundColor(Color.Transparent)
-    .borderRadius(0)
-    .borderWidth(0)
-    .stateEffect(false)
-    .onClick((): void => {
-      this.voiceReplyEnabled = !this.voiceReplyEnabled
-      this.showToast(this.voiceReplyEnabled ? '已开启本机播报' : '已关闭本机播报')
-      if (this.voiceReplyEnabled) {
-        void this.previewVoiceReplyAfterEnable()
-      } else {
-        page4TencentLocalTtsService.stop()
-      }
-    })
-  }
-
-  @Builder
-  private buildSidebarHeader(): void {
-    Row({ space: 12 }) {
-      Stack() {
-        Circle({ width: 40, height: 40 }).fill('#EEF3FF')
-        Text('🤖').fontSize(20)
-      }
-      Column() {
-        Text('智能助理')
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Page1Theme.TEXT_PRIMARY)
-        Text('随时待命')
-          .fontSize(12)
-          .fontColor(Page1Theme.SUCCESS)
-          .margin({ top: 2 })
-      }
-      .alignItems(HorizontalAlign.Start)
-    }
-    .width('100%')
-    .padding({ top: 40, left: 24, right: 24, bottom: 20 })
-  }
-
-  @Builder
-  private buildHistoryList(): void {
-    Column() {
-      Text('历史记录')
-        .fontSize(12)
-        .fontColor(Page1Theme.TEXT_TERTIARY)
-        .fontWeight(FontWeight.Bold)
-        .width('100%')
-        .padding({ left: 24, bottom: 12 })
-
-      Scroll() {
-        Column({ space: 8 }) {
-          ForEach(this.historyTitles,
-            (title: string, index: number) => {
-              Button() {
-                Text(title)
-                  .fontSize(13)
-                  .fontColor(Page1Theme.TEXT_SECONDARY)
-                  .fontWeight(FontWeight.Medium)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-              }
-                .width('100%')
-                .height(44)
-                .padding({ left: 14, right: 14 })
-                .backgroundColor('#F8FAFC')
-                .borderRadius(0)
-                .borderWidth(0)
-                .stateEffect(false)
-                .onClick((): void => {
-                  if (index >= this.historySessions.length) return
-                  const session: HistorySession = this.historySessions[index]
-                  if (!this.isCurrentNewChat()) {
-                    this.archiveCurrentChatTitle()
-                  }
-                  const restored: Array<AssistantMessage> = []
-                  for (let k: number = 0; k < session.messages.length; k++) {
-                    restored.push(session.messages[k])
-                  }
-                  animateTo({ duration: 200 }, (): void => {
-                    this.messages = restored
-                    this.currentChatTitle = session.title
-                    this.showSidebar = false
-                  })
-                  this.scrollChatToBottomSoon()
-                })
-            },
-            (title: string, index: number): string => `${title}-${index}`)
-        }
-        .padding({ left: 0, right: 0 })
-      }
-      .scrollBar(BarState.Off)
-      .layoutWeight(1)
-    }
-    .width('100%')
-    .layoutWeight(1)
-  }
-
-  @Builder
-  private buildChatPanel(): void {
-    Column() {
-      Scroll(this.chatScroller) {
-        Column({ space: 24 }) {
-          ForEach(this.messages, (msg: AssistantMessage) => {
-            Row() {
-              if (msg.role === 'assistant') {
-                Column({ space: 4 }) {
-                  Text(msg.text)
-                    .fontSize(15)
-                    .fontColor(Page1Theme.TEXT_PRIMARY)
-                    .padding({ left: 18, right: 18, top: 14, bottom: 14 })
-                    .borderRadius({ topLeft: 4, topRight: 20, bottomLeft: 20, bottomRight: 20 })
-                    .backgroundColor(Page1Theme.BG)
-                    .constraintSize({ maxWidth: '80%' })
-                  Text(this.formatTime(msg.tsMs))
-                    .fontSize(11)
-                    .fontColor(Page1Theme.TEXT_TERTIARY)
-                    .margin({ left: 6 })
-                }
-                .alignItems(HorizontalAlign.Start)
-                Blank()
-              } else {
-                Blank()
-                Column({ space: 4 }) {
-                  Text(msg.text)
-                    .fontSize(15)
-                    .fontColor('#FFFFFF')
-                    .padding({ left: 18, right: 18, top: 14, bottom: 14 })
-                    .borderRadius({ topLeft: 20, topRight: 4, bottomLeft: 20, bottomRight: 20 })
-                    .linearGradient(Page1Theme.PRIMARY_GRADIENT)
-                    .shadow({ radius: 16, color: '#2F6BFF4D', offsetX: 0, offsetY: 6 })
-                    .constraintSize({ maxWidth: '80%' })
-                  Text(this.formatTime(msg.tsMs))
-                    .fontSize(11)
-                    .fontColor(Page1Theme.TEXT_TERTIARY)
-                    .margin({ right: 6 })
-                }
-                .alignItems(HorizontalAlign.End)
-              }
-            }
-            .width('100%')
-          }, (msg: AssistantMessage): string => msg.id)
-
-          if (this.assistantBusy) {
-            Row() {
-              Row() {
-                LoadingProgress()
-                  .width(20)
-                  .height(20)
-                  .color(Page1Theme.PRIMARY)
-                Text('思考中...')
-                  .fontSize(13)
-                  .fontColor(Page1Theme.TEXT_TERTIARY)
-                  .margin({ left: 8 })
-              }
-              .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-              .backgroundColor(Page1Theme.BG)
-              .borderRadius({ topLeft: 4, topRight: 20, bottomLeft: 20, bottomRight: 20 })
-            }
-            .width('100%')
-            .justifyContent(FlexAlign.Start)
-            .alignItems(VerticalAlign.Top)
-          }
-        }
-        .width('100%')
-        .padding({ top: 0, bottom: 32, left: 24, right: 24 })
-      }
-      .width('100%')
-      .layoutWeight(1)
-      .edgeEffect(EdgeEffect.None)
-      .scrollBar(BarState.Off)
-    }
-    .width('100%')
-    .layoutWeight(1)
-  }
-
-  @Builder
-  private buildInputArea(): void {
-    Row({ space: 12 }) {
-      Button() {
-        Image(this.inputMode === 'voice' ? $rawfile('icon/文字输入.png') : $rawfile('icon/语音输入.png'))
-          .width(28)
-          .height(28)
-      }
-      .width(48)
-      .height(48)
-      .backgroundColor('transparent')
-      .borderWidth(0)
-      .stateEffect(false)
-      .onClick((): void => {
-        animateTo({ duration: 250, curve: Curve.FastOutSlowIn }, (): void => {
-          this.inputMode = this.inputMode === 'voice' ? 'text' : 'voice'
-        })
-      })
-
-      if (this.inputMode === 'text') {
-        TextInput({ text: this.inputText, placeholder: '发送指令或提问...' })
-          .layoutWeight(1)
-          .height(48)
-          .backgroundColor('#F1F5F9')
-          .borderRadius(24)
-          .fontSize(15)
-          .fontColor(Page1Theme.TEXT_PRIMARY)
-          .padding({ left: 20, right: 20 })
-          .onChange((v: string): void => {
-            this.inputText = v
-          })
-          .onSubmit(() => {
-            if (!this.inputText) {
-              return
-            }
-            void this.enqueuePrompt(this.inputText, 'text')
-          })
-
-        if (this.inputText.length > 0) {
-          Button() {
-            Text('↑')
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#FFFFFF')
-          }
-          .width(48)
-          .height(48)
-          .borderRadius(24)
-          .linearGradient(Page1Theme.PRIMARY_GRADIENT)
-          .shadow({ radius: 12, color: '#2F6BFF66', offsetX: 0, offsetY: 4 })
-          .transition({ type: TransitionType.Insert, scale: { x: 0.1, y: 0.1 } })
-          .onClick((): void => {
-            if (!this.inputText) {
-              return
-            }
-            void this.enqueuePrompt(this.inputText, 'text')
-          })
-        }
-      } else {
-        Button(this.voiceRecording ? '松开发送 / 滑动取消' : '按住说话')
-          .layoutWeight(1)
-          .height(48)
-          .backgroundColor(this.voiceRecording ? '#EEF3FF' : '#F1F5F9')
-          .fontColor(this.voiceRecording ? Page1Theme.PRIMARY : Page1Theme.TEXT_PRIMARY)
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .borderRadius(24)
-          .onTouch((event: TouchEvent): void => {
-            this.onVoiceTouch(event)
-          })
-      }
-    }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 32 })
-    .backgroundColor('#FFFFFF')
-    .shadow({ radius: 30, color: '#0000000A', offsetX: 0, offsetY: -4 })
-  }
-
   private formatTime(ts: number): string {
     const d = new Date(ts)
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
@@ -700,45 +319,48 @@ export struct Page4View {
   }
 
   private onVoicePressDown(): void {
-    this.voicePressing = true
-    this.clearLongPressTimer()
-    this.longPressTimerId = this.setManagedTimeout((): void => {
-      this.longPressTimerId = -1
-      void this.startVoiceListening()
-    }, this.longPressThresholdMs)
+    const rs = Page4VoiceFlowModule.onVoicePressDown({
+      longPressTimerId: this.longPressTimerId,
+      longPressThresholdMs: this.longPressThresholdMs,
+      voicePressing: this.voicePressing,
+      voiceRecording: this.voiceRecording,
+      voiceHintShown: this.voiceHintShown,
+      setManagedTimeout: (cb: () => void, delayMs: number): number =>
+        this.setManagedTimeout((): void => {
+          this.longPressTimerId = -1
+          cb()
+        }, delayMs),
+      clearLongPressTimer: (): void => this.clearLongPressTimer(),
+      pushAssistant: (text: string): void => this.pushAssistant(text),
+      enqueuePrompt: async (text: string, source: string): Promise<void> => await this.enqueuePrompt(text, source),
+      splitPromptToClauses: (text: string): Array<string> => this.splitPromptToClauses(text),
+      startVoiceListening: async (): Promise<void> => await this.startVoiceListening(),
+      stopVoiceListening: async (): Promise<string> => await this.stopVoiceListening(),
+      voiceHintText: (): string => Page4VoiceUiModule.voiceHintText()
+    })
+    this.voicePressing = rs.voicePressing ?? this.voicePressing
+    this.longPressTimerId = rs.longPressTimerId ?? this.longPressTimerId
   }
 
   private async onVoicePressUp(): Promise<void> {
-    this.voicePressing = false
-
-    if (this.longPressTimerId >= 0) {
-      this.clearLongPressTimer()
-      if (!this.voiceHintShown) {
-        this.voiceHintShown = true
-        this.pushAssistant('语音输入方式：按住说话，松开后自动发送识别文本。')
-      }
-      return
-    }
-
-    if (!this.voiceRecording) {
-      return
-    }
-
-    this.voiceRecording = false
-    const asrText: string = await this.stopVoiceListening()
-    if (asrText.trim().length <= 0) {
-      this.pushAssistant('未识别到语音内容，请重试。')
-      return
-    }
-    const clauses: Array<string> = this.splitPromptToClauses(asrText)
-    if (clauses.length <= 1) {
-      await this.enqueuePrompt(asrText, 'voice')
-      return
-    }
-    this.pushAssistant(`已识别多句指令，共${clauses.length}条，开始顺序执行。`)
-    for (let i: number = 0; i < clauses.length; i++) {
-      await this.enqueuePrompt(clauses[i], 'voice')
-    }
+    const rs = await Page4VoiceFlowModule.onVoicePressUp({
+      longPressTimerId: this.longPressTimerId,
+      longPressThresholdMs: this.longPressThresholdMs,
+      voicePressing: this.voicePressing,
+      voiceRecording: this.voiceRecording,
+      voiceHintShown: this.voiceHintShown,
+      setManagedTimeout: (cb: () => void, delayMs: number): number => this.setManagedTimeout(cb, delayMs),
+      clearLongPressTimer: (): void => this.clearLongPressTimer(),
+      pushAssistant: (text: string): void => this.pushAssistant(text),
+      enqueuePrompt: async (text: string, source: string): Promise<void> => await this.enqueuePrompt(text, source),
+      splitPromptToClauses: (text: string): Array<string> => this.splitPromptToClauses(text),
+      startVoiceListening: async (): Promise<void> => await this.startVoiceListening(),
+      stopVoiceListening: async (): Promise<string> => await this.stopVoiceListening(),
+      voiceHintText: (): string => Page4VoiceUiModule.voiceHintText()
+    })
+    this.voicePressing = rs.voicePressing ?? this.voicePressing
+    this.voiceRecording = rs.voiceRecording ?? this.voiceRecording
+    this.voiceHintShown = rs.voiceHintShown ?? this.voiceHintShown
   }
 
   private async startVoiceListening(): Promise<void> {
@@ -774,11 +396,7 @@ export struct Page4View {
 
   private resolveVoiceInputAdapter(): Page4VoiceInputAdapter | undefined {
     const root: Record<string, Object | undefined> = globalThis as Record<string, Object | undefined>
-    const adapter: Page4VoiceInputAdapter | undefined = root['page4VoiceInputAdapter'] as Page4VoiceInputAdapter | undefined
-    if (!adapter) return undefined
-    if (typeof adapter.startListening !== 'function') return undefined
-    if (typeof adapter.stopListening !== 'function') return undefined
-    return adapter
+    return Page4VoiceUiModule.resolveVoiceInputAdapter(root) as Page4VoiceInputAdapter | undefined
   }
 
   private clearLongPressTimer(): void {
@@ -811,23 +429,11 @@ export struct Page4View {
 
   private scrollChatToBottomSoon(): void {
     this.setManagedTimeout((): void => {
-      this.chatScroller.scrollTo({
-        xOffset: 0,
-        yOffset: 1000000,
-        animation: { duration: 220, curve: Curve.EaseOut }
-      })
+      this.chatScroller.scrollEdge(Edge.Bottom)
     }, 0)
   }
 
   private stabilizeChatTopOnEnter(): void {
-    this.scrollChatToTopSoon()
-    this.setManagedTimeout((): void => {
-      this.chatScroller.scrollTo({
-        xOffset: 0,
-        yOffset: 0,
-        animation: { duration: 0, curve: Curve.Linear }
-      })
-    }, 80)
     this.setManagedTimeout((): void => {
       this.chatScroller.scrollTo({
         xOffset: 0,
@@ -931,35 +537,15 @@ export struct Page4View {
   }
 
   private findMessageIndexById(msgId: string): number {
-    for (let i: number = this.messages.length - 1; i >= 0; i--) {
-      if (this.messages[i].id === msgId) return i
-    }
-    return -1
+    return Page4SessionModule.findMessageIndexById(this.messages, msgId)
   }
 
   private replaceMessageTextByIndex(index: number, text: string): void {
-    if (index < 0 || index >= this.messages.length) return
-    const next: Array<AssistantMessage> = []
-    for (let i: number = 0; i < this.messages.length; i++) {
-      const one: AssistantMessage = this.messages[i]
-      if (i === index) {
-        next.push({
-          id: one.id,
-          role: one.role,
-          text,
-          tsMs: one.tsMs
-        })
-      } else {
-        next.push(one)
-      }
-    }
-    this.messages = next
+    this.messages = Page4SessionModule.replaceMessageTextByIndex(this.messages, index, text)
   }
 
   private trimMessages(): void {
-    if (this.messages.length <= this.maxMessages) return
-    const keepFrom: number = this.messages.length - this.maxMessages
-    this.messages = this.messages.slice(keepFrom)
+    this.messages = Page4SessionModule.trimMessages(this.messages, this.maxMessages)
   }
 
   private async maybeAutoSpeakAssistantText(text: string): Promise<void> {
@@ -992,89 +578,34 @@ export struct Page4View {
   }
 
   private latestAssistantMessageText(): string {
-    for (let i: number = this.messages.length - 1; i >= 0; i--) {
-      const one: AssistantMessage = this.messages[i]
-      if (one.role === 'assistant') {
-        return one.text.trim()
-      }
-    }
-    return ''
+    return Page4SessionModule.latestAssistantMessageText(this.messages)
   }
 
   private errorToText(e: Object): string {
-    if (e instanceof Error) {
-      const msg: string = e.message.trim()
-      return msg.length > 0 ? msg : 'unknown error'
-    }
-    const anyObj: Record<string, Object | string | number | boolean> = e as Record<string, Object | string | number | boolean>
-    const code: string = String(anyObj['code'] ?? '')
-    const msg: string = String(anyObj['message'] ?? '')
-    const details: string = String(anyObj['details'] ?? '')
-    const out: string = `${code} ${msg} ${details}`.trim()
-    if (out.length > 0 && out !== 'undefined undefined undefined') return out
-    try {
-      const asJson: string = JSON.stringify(e)
-      if (asJson.length > 0 && asJson !== '{}') return asJson
-    } catch (_) {}
-    return 'unknown error'
+    return Page4RuntimeDiagnosticsModule.errorToText(e)
   }
 
   private isCurrentNewChat(): boolean {
-    for (let i: number = 0; i < this.messages.length; i++) {
-      if (this.messages[i].role === 'user') return false
-    }
-    return true
+    return Page4SessionModule.isCurrentNewChat(this.messages)
   }
 
   private archiveCurrentChatTitle(): void {
-    const title: string = this.currentChatTitle.trim()
-    if (title.length <= 0 || title === '新对话') return
-    if (this.isCurrentNewChat()) return
-
-    const savedMessages: Array<AssistantMessage> = []
-    for (let i: number = 0; i < this.messages.length; i++) {
-      savedMessages.push(this.messages[i])
-    }
-    const session: HistorySession = { title: title, messages: savedMessages, tsMs: Date.now() }
-
-    const nextSessions: Array<HistorySession> = [session]
-    const nextTitles: Array<string> = [title]
-    for (let i: number = 0; i < this.historySessions.length; i++) {
-      nextSessions.push(this.historySessions[i])
-      nextTitles.push(this.historySessions[i].title)
-    }
-    if (nextSessions.length > this.maxHistorySessions) {
-      this.historySessions = nextSessions.slice(0, this.maxHistorySessions)
-      this.historyTitles = nextTitles.slice(0, this.maxHistorySessions)
-      return
-    }
-    this.historySessions = nextSessions
-    this.historyTitles = nextTitles
+    const archived = Page4SessionModule.archiveSession(
+      this.currentChatTitle,
+      this.messages,
+      this.historySessions,
+      this.maxHistorySessions
+    )
+    this.historySessions = archived.sessions
+    this.historyTitles = archived.titles
   }
 
   private maybeRefreshCurrentChatTitleByFirstUserSentence(): void {
-    for (let i: number = 0; i < this.messages.length; i++) {
-      const m: AssistantMessage = this.messages[i]
-      if (m.role !== 'user') continue
-      const title: string = this.summarizeTitleByFirstSentence(m.text)
-      this.currentChatTitle = title.length > 0 ? title : '新对话'
-      return
-    }
-    this.currentChatTitle = '新对话'
+    this.currentChatTitle = Page4SessionModule.deriveCurrentChatTitle(this.messages)
   }
 
   private summarizeTitleByFirstSentence(text: string): string {
-    const raw: string = text.trim()
-    if (raw.length <= 0) return ''
-    let end: number = raw.length
-    const seps: Array<string> = ['。', '！', '？', '.', '!', '?', '；', ';', '\n']
-    for (let i: number = 0; i < seps.length; i++) {
-      const pos: number = raw.indexOf(seps[i])
-      if (pos >= 0 && pos < end) end = pos
-    }
-    let out: string = raw.substring(0, end).trim()
-    if (out.length > 14) out = `${out.substring(0, 14)}...`
-    return out
+    return Page4SessionModule.summarizeTitleByFirstSentence(text)
   }
 
   private connStateText(): string {
@@ -1094,90 +625,45 @@ export struct Page4View {
   }
 
   private containsAny(text: string, keys: Array<string>): boolean {
-    const x: string = text.toLowerCase()
-    for (let i: number = 0; i < keys.length; i++) {
-      if (x.indexOf(keys[i].toLowerCase()) >= 0) return true
-    }
-    return false
+    return Page4LocalIntentModule.containsAny(text, keys)
   }
 
   private async enqueuePrompt(raw: string, source: string = 'text'): Promise<void> {
-    const text: string = raw.trim()
-    if (text.length <= 0) return
-    if (this.queuedPromptCount >= this.queuedPromptCap) {
-      this.pushAssistant(`任务队列已满(${this.queuedPromptCap})，请稍后再试。`)
-      return
-    }
-    this.queuedPromptCount += 1
-    if (this.queuedPromptCount > 1) {
-      this.pushAssistant(`已加入队列，前方还有 ${this.queuedPromptCount - 1} 条。`)
-    }
-
-    const runOne = async (): Promise<void> => {
-      this.assistantBusy = true
-      try {
-        await this.submitPrompt(text, true, source)
-      } finally {
-        this.queuedPromptCount = Math.max(0, this.queuedPromptCount - 1)
-        if (this.queuedPromptCount <= 0) this.assistantBusy = false
+    const next = await Page4InputQueueModule.enqueuePrompt(
+      raw,
+      source,
+      {
+        queuedPromptCount: this.queuedPromptCount,
+        queuedPromptCap: this.queuedPromptCap,
+        assistantBusy: this.assistantBusy,
+        promptQueueTail: this.promptQueueTail
+      },
+      {
+        pushAssistant: (text: string): void => this.pushAssistant(text),
+        submitPrompt: async (text: string, fromQueue: boolean, src: string): Promise<void> => await this.submitPrompt(text, fromQueue, src)
       }
-    }
-    this.promptQueueTail = this.promptQueueTail.then(runOne, runOne)
-    await this.promptQueueTail
+    )
+    this.queuedPromptCount = next.queuedPromptCount
+    this.assistantBusy = next.assistantBusy
+    this.promptQueueTail = next.promptQueueTail
   }
 
   private learnAliasFromText(text: string): string {
-    const src: string = text.trim()
-    if (src.length <= 0) return ''
-    const patterns: Array<RegExp> = [
-      /(?:把|将)\s*([^，。；;,\s]{1,16})\s*(?:记为|设为|设置为|定义为)\s*([A-Ga-g]\d{1,2})/,
-      /^([^，。；;,\s]{1,16})\s*(?:是|等于)\s*([A-Ga-g]\d{1,2})$/
-    ]
-    for (let i: number = 0; i < patterns.length; i++) {
-      const m: RegExpMatchArray | null = src.match(patterns[i])
-      if (!m || m.length < 3) continue
-      const name: string = m[1].trim()
-      const destNodeId: string = m[2].trim().toUpperCase()
-      if (!GridIdCodec.isValidId(destNodeId)) return `"${destNodeId}" 不是合法点位，别名学习失败。`
-      if (name.length <= 0) return '别名为空，学习失败。'
-      let replaced: boolean = false
-      const next: Array<Page4AliasItem> = []
-      for (let k: number = 0; k < this.aliasDict.length; k++) {
-        const cur: Page4AliasItem = this.aliasDict[k]
-        if (cur.name === name) {
-          replaced = true
-          next.push({ name, destNodeId, tsMs: Date.now() })
-        } else {
-          next.push(cur)
-        }
-      }
-      if (!replaced) next.push({ name, destNodeId, tsMs: Date.now() })
-      this.aliasDict = next
-      return replaced ? `已更新别名：${name} -> ${destNodeId}` : `已学习别名：${name} -> ${destNodeId}`
-    }
-    return ''
+    const rs = Page4LocalIntentModule.learnAliasFromText(text, this.aliasDict)
+    this.aliasDict = rs.aliasDict
+    return rs.message
   }
 
   private resolveAliasNode(text: string): string {
-    const src: string = text.trim()
-    if (src.length <= 0) return ''
-    for (let i: number = 0; i < this.aliasDict.length; i++) {
-      const item: Page4AliasItem = this.aliasDict[i]
-      if (item.name.length <= 0) continue
-      if (src.indexOf(item.name) >= 0) return item.destNodeId
-      if (this.normalizePlaceInput(src).indexOf(this.normalizePlaceInput(item.name)) >= 0) return item.destNodeId
-    }
-    return ''
+    return Page4LocalIntentModule.resolveAliasNode(
+      text,
+      this.aliasDict,
+      (x: string): string => this.normalizePlaceInput(x)
+    )
   }
 
   private resolveContextDestNode(input: string): string {
-    const x: string = input.trim()
-    if (x.length <= 0) return ''
-    if (!GridIdCodec.isValidId(this.lastDestNodeId)) return ''
-    if (this.containsAny(x, ['那里', '那儿', '刚才那个点', '上一目的地', '上一个目的地', '原目的地'])) {
-      return this.lastDestNodeId
-    }
-    return ''
+    return Page4LocalIntentModule.resolveContextDestNode(input, this.lastDestNodeId)
   }
 
   private rememberSafePointFromStore(): void {
@@ -1221,18 +707,18 @@ export struct Page4View {
   private applyAdaptiveStrategy(forceNotify: boolean = false): void {
     const weak: boolean = this.isNightOrWeakNetwork()
     if (weak) {
-      videoStore.setRecognizeIntervalMs(450)
-      videoStore.switchCooldownMs = 4000
-      this.adaptiveOpenClawConnectTimeoutMs = 10000
-      this.adaptiveOpenClawReadTimeoutMs = 60000
+      videoStore.setRecognizeIntervalMs(ADAPTIVE_WEAK_RECOG_INTERVAL_MS)
+      videoStore.switchCooldownMs = ADAPTIVE_WEAK_SWITCH_COOLDOWN_MS
+      this.adaptiveOpenClawConnectTimeoutMs = ADAPTIVE_WEAK_CONNECT_TIMEOUT_MS
+      this.adaptiveOpenClawReadTimeoutMs = ADAPTIVE_WEAK_READ_TIMEOUT_MS
       this.queuedPromptCap = this.weakNetQueuedPromptCap
       if (forceNotify) {
         this.pushAssistant('已启用夜间/弱网策略：低频识别、延长超时、队列上限收紧。')
       }
       return
     }
-    videoStore.setRecognizeIntervalMs(220)
-    videoStore.switchCooldownMs = 2500
+    videoStore.setRecognizeIntervalMs(ADAPTIVE_NORMAL_RECOG_INTERVAL_MS)
+    videoStore.switchCooldownMs = ADAPTIVE_NORMAL_SWITCH_COOLDOWN_MS
     this.adaptiveOpenClawConnectTimeoutMs = this.openClawRetryConnectTimeoutMs
     this.adaptiveOpenClawReadTimeoutMs = this.openClawRetryReadTimeoutMs
     this.queuedPromptCap = this.normalQueuedPromptCap
@@ -1527,17 +1013,17 @@ export struct Page4View {
     if (name === 'set_adaptive_strategy') {
       const mode: string = String(args['mode'] ?? '').trim().toLowerCase()
       if (mode === 'weak' || mode === 'night') {
-        videoStore.setRecognizeIntervalMs(450)
-        videoStore.switchCooldownMs = 4000
-        this.adaptiveOpenClawConnectTimeoutMs = 10000
-        this.adaptiveOpenClawReadTimeoutMs = 60000
+        videoStore.setRecognizeIntervalMs(ADAPTIVE_WEAK_RECOG_INTERVAL_MS)
+        videoStore.switchCooldownMs = ADAPTIVE_WEAK_SWITCH_COOLDOWN_MS
+        this.adaptiveOpenClawConnectTimeoutMs = ADAPTIVE_WEAK_CONNECT_TIMEOUT_MS
+        this.adaptiveOpenClawReadTimeoutMs = ADAPTIVE_WEAK_READ_TIMEOUT_MS
         this.queuedPromptCap = this.weakNetQueuedPromptCap
         out.push(this.buildReceipt('策略已切换为弱网/夜间', true, true))
         return out
       }
       if (mode === 'normal') {
-        videoStore.setRecognizeIntervalMs(220)
-        videoStore.switchCooldownMs = 2500
+        videoStore.setRecognizeIntervalMs(ADAPTIVE_NORMAL_RECOG_INTERVAL_MS)
+        videoStore.switchCooldownMs = ADAPTIVE_NORMAL_SWITCH_COOLDOWN_MS
         this.adaptiveOpenClawConnectTimeoutMs = this.openClawRetryConnectTimeoutMs
         this.adaptiveOpenClawReadTimeoutMs = this.openClawRetryReadTimeoutMs
         this.queuedPromptCap = this.normalQueuedPromptCap
@@ -2006,222 +1492,84 @@ export struct Page4View {
         }
       }
       return out
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, 'mapOpenClawPlan JSON解析失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return []
     }
   }
 
   private async planTasksByOpenClaw(input: string): Promise<Array<Page4PlannedTask>> {
-    const tokenCandidates: Array<string> = resolveOpenClawTokenCandidates()
-    if (tokenCandidates.length <= 0) return []
-    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
-    const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
-    if (hosts.length <= 0) return []
-
-    const messages: Array<OpenClawChatMessage> = [
-      {
-        role: 'system',
-        content:
-          '你是无人物流车任务解析器。把用户一句话解析为任务数组，输出严格 JSON：' +
-          '{"tasks":[{"type":"route","dest":"B2"},{"type":"method","name":"set_auto_follow","args":{"enabled":true}}]}。' +
-          'type 允许 route/action/auto_follow/send_mode/capture_frame/undo/query_status/query_vision/query_comm/query_video/method。' +
-          'route.dest 必须是 A1-G7 这样的点位；action 仅 GO/BACK/LEFT/RIGHT/UTURN/STOP/SCRAM；' +
-          'auto_follow 使用 enabled=true/false；send_mode 使用 mode=REAL_SEND/DRY_RUN。' +
-          'method.name 仅允许 start_manual_route/send_action/set_auto_follow/set_send_mode/speak_text/undo_to_safe_point/get_camera_frame/query_status/query_vision/query_comm/query_video/read_file/process_list/exec_cmd/set_recognition/set_auto_report/set_vision_mode/set_adaptive_strategy/tablet_set_alarm/tablet_open_app/tablet_list_alarm/tablet_start_ability/tablet_open_url。' +
-          'method.args: start_manual_route 传 dest; send_action 传 action; set_auto_follow 传 enabled; set_send_mode 传 mode; speak_text 传 text; read_file 传 path; exec_cmd 传 cmd; set_recognition 传 enabled; set_auto_report 传 enabled; set_vision_mode 传 mode=traffic|barrier; set_adaptive_strategy 传 mode=normal|weak; tablet_set_alarm 传 hour/minute/label; tablet_open_app 传 bundleName; tablet_start_ability 传 bundleName/abilityName/parameters; tablet_open_url 传 url。' +
-          '请按物流场景理解用户意图（如去装货点、去卸货点、返仓、暂停、急停），但输出字段必须严格符合上述枚举与格式。' +
-          '注意：对于 get_camera_frame 方法，系统会自动获取摄像头画面。你只需要返回标准的JSON任务数组即可。' +
-          '不要输出任何解释文本。'
+    return await Page4OpenClawTaskPlannerModule.planTasksByOpenClaw(input, {
+      resolveTokenCandidates: (): Array<string> => resolveOpenClawTokenCandidates(),
+      resolveHosts: (): Array<string> => this.rankOpenClawHosts(resolveOpenClawHostCandidates(deviceNetworkResolver.resolveGatewayIp())),
+      gatewayState: (): {
+        lastGoodOpenClawHost: string,
+        openClawHostCooldownUntilMs: Record<string, number>,
+        openClawHostCooldownMs: number
+      } => ({
+        lastGoodOpenClawHost: this.lastGoodOpenClawHost,
+        openClawHostCooldownUntilMs: this.openClawHostCooldownUntilMs,
+        openClawHostCooldownMs: this.openClawHostCooldownMs
+      }),
+      applyGatewayState: (state): void => {
+        this.lastGoodOpenClawHost = state.lastGoodOpenClawHost
+        this.openClawHostCooldownUntilMs = state.openClawHostCooldownUntilMs
       },
-      {
-        role: 'system',
-        content: this.buildOpenClawRuntimeContextPrompt()
-      },
-      {
-        role: 'user',
-        content: input
-      }
-    ]
-
-    for (let i: number = 0; i < hosts.length; i++) {
-      const host: string = hosts[i]
-      for (let k: number = 0; k < tokenCandidates.length; k++) {
-        const token: string = tokenCandidates[k]
-        const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-          endpoint: buildOpenClawChatCompletionsUrl(host),
-          bearerToken: token,
-          model: OPENCLAW_CHAT_MODEL,
-          connectTimeoutMs: Math.min(10000, this.adaptiveOpenClawConnectTimeoutMs),
-          readTimeoutMs: Math.min(60000, this.adaptiveOpenClawReadTimeoutMs)
-        })
-        try {
-          const result = await client.complete(messages)
-          if (!result.ok) {
-            continue
-          }
-          const planned: Array<Page4PlannedTask> = this.mapOpenClawPlan(result.text)
-          if (planned.length > 0) {
-            this.markOpenClawHostSuccess(host)
-            return planned
-          }
-        } catch (e) {
-          continue
-        }
-      }
-      this.markOpenClawHostFail(host)
-    }
-    return []
+      mapOpenClawPlan: (text: string): Array<Page4PlannedTask> => this.mapOpenClawPlan(text),
+      buildRuntimePrompt: (): string => this.buildOpenClawRuntimeContextPrompt(),
+      connectTimeoutMs: (): number => Math.min(10000, this.adaptiveOpenClawConnectTimeoutMs),
+      readTimeoutMs: (): number => Math.min(60000, this.adaptiveOpenClawReadTimeoutMs),
+      model: OPENCLAW_CHAT_MODEL
+    })
   }
 
   private async executePlannedTasks(tasks: Array<Page4PlannedTask>): Promise<void> {
-    if (tasks.length <= 0) return
-    const receipts: Array<Page4ExecutionReceipt> = []
-    for (let i: number = 0; i < tasks.length; i++) {
-      const t: Page4PlannedTask = tasks[i]
-      try {
-        if (t.kind === 'route') {
-          const dest: string = String(t.destNodeId ?? '').trim().toUpperCase()
-          if (!GridIdCodec.isValidId(dest)) {
-            receipts.push(this.buildReceipt(`跳过无效点位:${dest}`, false, false))
-            continue
-          }
-          const routeReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(dest)
-          for (let j: number = 0; j < routeReceipts.length; j++) receipts.push(routeReceipts[j])
-          continue
-        }
-        if (t.kind === 'action') {
-          if (typeof t.action === 'undefined') continue
-          this.rememberSafePointFromStore()
-          await page1Coordinator.onAction(t.action)
-          this.lastAction = t.action
-          receipts.push(this.buildReceipt(this.actionName(t.action), true, true))
-          continue
-        }
-        if (t.kind === 'auto_follow') {
-          const enabled: boolean = !!t.enabled
-          this.store.autoFollowEnabled = enabled
-          this.store.pushLog(`info assistant.autoFollow set=${enabled ? 'ON' : 'OFF'}`)
-          receipts.push(this.buildReceipt(enabled ? '自动跟随开启' : '自动跟随关闭', true, true))
-          continue
-        }
-        if (t.kind === 'send_mode') {
-          const mode: string = String(t.mode ?? '')
-          if (mode === 'REAL_SEND') {
-            this.store.setRealSendEnabled(true)
-            receipts.push(this.buildReceipt('真车模式', true, true))
-          } else if (mode === 'DRY_RUN') {
-            this.store.setRealSendEnabled(false)
-            receipts.push(this.buildReceipt('仿真模式', true, true))
-          }
-          continue
-        }
-        if (t.kind === 'method') {
-          const one: Array<Page4ExecutionReceipt> = await this.executeRegistryMethod(t)
-          for (let j: number = 0; j < one.length; j++) receipts.push(one[j])
-          continue
-        }
-        if (t.kind === 'capture_frame') {
-          receipts.push(this.buildReceipt(this.buildCameraFrameSummaryText(), true, true))
-          continue
-        }
-        if (t.kind === 'undo') {
-          let stopOk: boolean = false
-          try {
-            await page1Coordinator.onAction(Page1Action.STOP)
-            this.lastAction = Page1Action.STOP
-            receipts.push(this.buildReceipt('撤销-停止', true, true))
-            stopOk = true
-          } catch (e) {
-            const msg: string = e instanceof Error ? e.message : 'stop failed'
-            receipts.push(this.buildReceipt(`撤销-停止失败(${msg})`, false, false))
-          }
-          const target: string = GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId
-          if (stopOk && GridIdCodec.isValidId(target)) {
-            const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
-            for (let j: number = 0; j < backReceipts.length; j++) receipts.push(backReceipts[j])
-          } else if (stopOk) {
-            receipts.push(this.buildReceipt('撤销-回安全点(未记录安全点)', false, false))
-          }
-          continue
-        }
-        if (t.kind === 'query_status') {
-          receipts.push(this.buildReceipt(this.buildStatusSummaryText(), true, true))
-          continue
-        }
-        if (t.kind === 'query_vision') {
-          receipts.push(this.buildReceipt(this.buildVisionSummaryText(), true, true))
-          continue
-        }
-        if (t.kind === 'query_comm') {
-          receipts.push(this.buildReceipt(
-            `通信=${commStore.commStateText} connected=${commStore.commConnected} reconnect=${commStore.commReconnectCount}`,
-            true,
-            true
-          ))
-          continue
-        }
-        if (t.kind === 'query_video') {
-          receipts.push(this.buildReceipt(`视频=${videoStore.rtspStateText} fps=${videoStore.diagVideoFps}`, true, true))
-          continue
-        }
-      } catch (e) {
-        const msg: string = e instanceof Error ? e.message : '任务失败'
-        receipts.push(this.buildReceipt(`失败:${msg}`, false, false))
-      }
-    }
+    const receipts = await Page4TaskExecutionModule.executePlannedTasks(tasks, {
+      isValidGridId: (id: string): boolean => GridIdCodec.isValidId(id),
+      routeWithReplanAndWaitArrival: async (dest: string): Promise<Array<Page4ExecutionReceipt>> => await this.routeWithReplanAndWaitArrival(dest),
+      rememberSafePointFromStore: (): void => this.rememberSafePointFromStore(),
+      onAction: async (action: Page1Action): Promise<void> => await page1Coordinator.onAction(action),
+      setLastAction: (action: Page1Action): void => { this.lastAction = action },
+      actionName: (action: Page1Action): string => this.actionName(action),
+      setAutoFollowEnabled: (enabled: boolean): void => {
+        this.store.autoFollowEnabled = enabled
+        this.store.pushLog(`info assistant.autoFollow set=${enabled ? 'ON' : 'OFF'}`)
+      },
+      setRealSendEnabled: (enabled: boolean): void => this.store.setRealSendEnabled(enabled),
+      executeRegistryMethod: async (task: Page4PlannedTask): Promise<Array<Page4ExecutionReceipt>> => await this.executeRegistryMethod(task),
+      getUndoTarget: (): string => GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId,
+      buildCameraFrameSummaryText: (): string => this.buildCameraFrameSummaryText(),
+      buildStatusSummaryText: (): string => this.buildStatusSummaryText(),
+      buildVisionSummaryText: (): string => this.buildVisionSummaryText(),
+      buildCommSummaryText: (): string =>
+        `通信=${commStore.commStateText} connected=${commStore.commConnected} reconnect=${commStore.commReconnectCount}`,
+      buildVideoSummaryText: (): string => `视频=${videoStore.rtspStateText} fps=${videoStore.diagVideoFps}`,
+      buildReceipt: (taskText: string, sent: boolean, done: boolean): Page4ExecutionReceipt => this.buildReceipt(taskText, sent, done)
+    })
     if (receipts.length > 0) {
       this.pushAssistant(`执行回执：${this.renderReceiptsSummary(receipts)}`)
     }
   }
 
   private setManagedTimeout(cb: () => void, delayMs: number): number {
-    let timerId: number = -1
-    timerId = setTimeout((): void => {
-      this.managedTimerIds.delete(timerId)
-      cb()
-    }, Math.max(0, Math.trunc(delayMs))) as unknown as number
-    this.managedTimerIds.add(timerId)
-    return timerId
+    return Page4TimerModule.setManagedTimeout(this.managedTimerIds, cb, delayMs)
   }
 
   private clearManagedTimer(timerId: number): number {
-    if (timerId < 0) return -1
-    try { clearTimeout(timerId) } catch (_) {}
-    this.managedTimerIds.delete(timerId)
-    return -1
+    return Page4TimerModule.clearManagedTimer(this.managedTimerIds, timerId)
   }
 
   private clearAllManagedTimers(): void {
-    if (this.managedTimerIds.size <= 0) return
-    const ids: Array<number> = []
-    this.managedTimerIds.forEach((id: number): void => {
-      ids.push(id)
-    })
-    for (let i: number = 0; i < ids.length; i++) {
-      try { clearTimeout(ids[i]) } catch (_) {}
-      this.managedTimerIds.delete(ids[i])
-    }
+    Page4TimerModule.clearAllManagedTimers(this.managedTimerIds)
   }
 
   private mapPoiNameToNode(input: string): string {
-    /*先清洗输入，去掉头尾空格，降低脏数据干扰*/
-    const s: string = input.trim()
-    /*输入直接返回，避免无效匹配*/
-    if (s.length <= 0) return ''
-    const normalized: string = this.normalizePlaceInput(s)
-    /*加载地名到节点的映射词典*/
-    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
-    for (let i: number = 0; i < mappings.length; i++) {
-      const item = mappings[i]
-      for (let j: number = 0; j < item.aliases.length; j++) {
-        const alias: string = item.aliases[j]
-        /*命中别名就立即返回节点ID，供导航模块直接使用*/
-        if (s.indexOf(alias) >= 0) return item.node
-        if (normalized.indexOf(this.normalizePlaceInput(alias)) >= 0) return item.node
-      }
-    }
-    /*未命中时显式返回空，交给上层做兜底处理*/
-    return ''
+    return Page4PoiBindingModule.mapPoiNameToNode(
+      input,
+      this.getPoiMappings(),
+      (text: string): string => this.normalizePlaceInput(text)
+    )
   }
 
   private getPoiMappings(): Array<{ node: string, aliases: Array<string> }> {
@@ -2260,87 +1608,39 @@ export struct Page4View {
   }
 
   private buildPoiMappingSummaryText(): string {
-    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
-    const merged: Record<string, Array<string>> = {}
-    for (let i: number = 0; i < mappings.length; i++) {
-      const one = mappings[i]
-      const node: string = one.node.trim().toUpperCase()
-      if (!GridIdCodec.isValidId(node)) continue
-      if (!merged[node]) merged[node] = []
-      for (let j: number = 0; j < one.aliases.length; j++) {
-        const alias: string = one.aliases[j].trim()
-        if (alias.length <= 0) continue
-        let exists: boolean = false
-        for (let k: number = 0; k < merged[node].length; k++) {
-          if (merged[node][k] === alias) {
-            exists = true
-            break
-          }
-        }
-        if (!exists) merged[node].push(alias)
-      }
-    }
-
-    const nodes: Array<string> = Object.keys(merged).sort()
-    const lines: Array<string> = []
-    for (let i: number = 0; i < nodes.length; i++) {
-      const node: string = nodes[i]
-      lines.push(`${node}: ${merged[node].join(' / ')}`)
-    }
-
-    const dynamicAliases: Array<string> = []
-    for (let i: number = 0; i < this.aliasDict.length; i++) {
-      const one: Page4AliasItem = this.aliasDict[i]
-      if (one.name === '物流中心' || one.name === '快递点') continue
-      if (!GridIdCodec.isValidId(one.destNodeId)) continue
-      dynamicAliases.push(`${one.name}->${one.destNodeId}`)
-    }
-    const extraText: string = dynamicAliases.length > 0 ? `；自定义别名=${dynamicAliases.join('，')}` : ''
-    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n物流中心/快递点：${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}${extraText}`
+    return Page4PoiBindingModule.buildPoiMappingSummaryText(
+      this.getPoiMappings(),
+      this.aliasDict,
+      (id: string): boolean => GridIdCodec.isValidId(id),
+      (role: Page4PlaceRole): string => this.formatPlaceBinding(role)
+    )
   }
 
   private exportPoiMappingsToFile(): { ok: boolean, path: string, error: string } {
     this.ensurePlaceBindingsLoaded()
-    let f: fs.File | undefined = undefined
-    try {
-      const payload: Record<string, Object | string | number | boolean | Array<Object | string | number | boolean>> = {
-        generatedAtMs: Date.now(),
-        homeNodeId: this.homeNodeId,
-        companyNodeId: this.companyNodeId,
-        mappings: this.getPoiMappings() as unknown as Array<Object>,
-        aliases: this.aliasDict as unknown as Array<Object>
-      }
-      const txt: string = JSON.stringify(payload, null, 2)
-      try { fs.unlinkSync(PAGE4_POI_EXPORT_PATH) } catch (_) {}
-      f = fs.openSync(PAGE4_POI_EXPORT_PATH, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
-      fs.writeSync(f.fd, txt)
-      return { ok: true, path: PAGE4_POI_EXPORT_PATH, error: '' }
-    } catch (e) {
-      const msg: string = e instanceof Error ? e.message : 'write failed'
-      return { ok: false, path: PAGE4_POI_EXPORT_PATH, error: msg }
-    } finally {
-      if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
-      }
-    }
+    const exportPath: string = `${this.getFilesDir()}/${PAGE4_POI_EXPORT_FILE}`
+    return Page4PoiBindingModule.exportPoiMappingsToFile(
+      exportPath,
+      this.homeNodeId,
+      this.companyNodeId,
+      this.getPoiMappings(),
+      this.aliasDict
+    )
   }
 
   private buildOpenClawRuntimeContextPrompt(): string {
     const mappingText: string = this.buildPoiMappingSummaryText()
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return `系统上下文：默认地址=江西省南昌市；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n语义约定：home=物流中心，company=快递点。`
+    return Page4PromptContextModule.buildOpenClawRuntimeContextPrompt(mode, this.store.autoFollowEnabled, mappingText)
   }
 
   private buildOpenClawRuntimeContextPromptLite(): string {
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return `系统上下文：默认地址=江西省南昌市；当前模式=${mode}；自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'}；链路=${this.connStateText()}。`
+    return Page4PromptContextModule.buildOpenClawRuntimeContextPromptLite(mode, this.store.autoFollowEnabled, this.connStateText())
   }
 
   private normalizePlaceInput(text: string): string {
-    return text
-      .trim()
-      .toUpperCase()
-      .replace(/[，。！？、；：,.!?\-_/\\()\[\]\s]/g, '')
+    return Page4PromptContextModule.normalizePlaceInput(text)
   }
 
   private extractDestNode(input: string): string {
@@ -2435,72 +1735,10 @@ export struct Page4View {
     mode: 'all' | 'earliest' | 'latest' = 'all',
     statusFilter: string = ''
   ): string {
-    const q: string = queryText.trim().toUpperCase()
-    const statusNeed: string = statusFilter.trim()
-    const matched: Array<OutboundOrder> = []
-    for (let i: number = 0; i < this.outboundOrders.length; i++) {
-      const one: OutboundOrder = this.outboundOrders[i]
-      if (statusNeed.length > 0 && one.status !== statusNeed) continue
-      if (q.length <= 0) {
-        matched.push(one)
-        continue
-      }
-      const idUp: string = one.orderId.toUpperCase()
-      const skuUp: string = one.skuCode.toUpperCase()
-      const productUp: string = one.productName.toUpperCase()
-      if (idUp.indexOf(q) >= 0 || skuUp.indexOf(q) >= 0 || productUp.indexOf(q) >= 0) {
-        matched.push(one)
-      }
-    }
-    if (matched.length <= 0) {
-      if (statusNeed.length > 0) {
-        return `订单查询：未找到匹配记录（状态=${statusNeed}，关键词=${queryText}）`
-      }
-      return `订单查询：未找到匹配记录（关键词=${queryText}）`
-    }
-
-    const parseRecordTimeMs = (x: OutboundOrder): number => {
-      const recordIso: string = x.createTime.replace(' ', 'T')
-      const recordMs: number = Date.parse(recordIso)
-      return Number.isFinite(recordMs) ? recordMs : 0
-    }
-    const sorted: Array<OutboundOrder> = []
-    for (let i: number = 0; i < matched.length; i++) sorted.push(matched[i])
-    sorted.sort((a: OutboundOrder, b: OutboundOrder): number => parseRecordTimeMs(a) - parseRecordTimeMs(b))
-
-    let out: Array<OutboundOrder> = []
-    if (mode === 'earliest') {
-      out = [sorted[0]]
-    } else if (mode === 'latest') {
-      out = [sorted[sorted.length - 1]]
-    } else {
-      out = sorted
-    }
-
-    let pendingPick: number = 0
-    let picking: number = 0
-    let pendingCheck: number = 0
-    let shipped: number = 0
-    for (let i: number = 0; i < matched.length; i++) {
-      const s: string = matched[i].status
-      if (s === '待拣货') pendingPick += 1
-      if (s === '拣货中') picking += 1
-      if (s === '待复核') pendingCheck += 1
-      if (s === '已出库' || s === '已发货') shipped += 1
-    }
-
-    let title: string = '订单查询结果'
-    if (mode === 'earliest') title = '订单查询结果（最早）'
-    if (mode === 'latest') title = '订单查询结果（最新）'
-    if (statusNeed.length > 0) title = `${title}（状态=${statusNeed}）`
-    let body: string = `${title}(${out.length}条，匹配总数=${matched.length})：待拣货=${pendingPick}，拣货中=${picking}，待复核=${pendingCheck}，已出库/已发货=${shipped}\n`
-    for (let i: number = 0; i < out.length; i++) {
-      const one: OutboundOrder = out[i]
-      const idx: number = i + 1
-      body += `${idx}. ${one.orderId} | SKU=${one.skuCode} | ${one.productName} | 数量=${one.quantity} | 区域=${one.zone} | 状态=${one.status} | 创建=${one.createTime}`
-      if (i < out.length - 1) body += '\n'
-    }
-    return body
+    void queryText
+    void mode
+    void statusFilter
+    return '暂无订单数据，请接入真实数据源'
   }
 
   private looksLikeOrderQueryIntent(text: string, lower: string): boolean {
@@ -2563,39 +1801,8 @@ export struct Page4View {
     const lastOkMs: number = Math.max(0, Math.trunc(videoStore.lastOkFrameTimeMs))
     const ageText: string = lastOkMs > 0 ? `${Math.max(0, nowMs - lastOkMs)}ms` : '未知'
     const frameText: string = hasFrame ? '已获取当前摄像头画面' : '当前暂无可用摄像头画面'
-    
-    // 如果有画面，尝试保存图片
-    if (hasFrame && videoStore.livePixelMap) {
-      this.saveCameraFrameToFile(videoStore.livePixelMap).then((savedPath: string) => {
-        hilog.info(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, `摄像头画面已保存到: ${savedPath}`)
-      }).catch((e: Error) => {
-        hilog.error(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, `保存摄像头画面失败: ${e.message}`)
-      })
-    }
-    
+
     return `${frameText} | 模式=${this.displayModeText(videoStore.displayMode)} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | 最近画面年龄=${ageText}`
-  }
-  
-  private async saveCameraFrameToFile(pixelMap: image.PixelMap): Promise<string> {
-    try {
-      // 注意：HarmonyOS的ImageSource不能直接从PixelMap创建
-      // 这里我们使用一个简单的方法：将PixelMap保存为临时文件
-      // 实际上，在HarmonyOS中，PixelMap可以直接保存为图片文件
-      
-      // 创建文件路径
-      const timestamp: number = Date.now()
-      const fileName: string = `camera_frame_${timestamp}.jpg`
-      const filePath: string = `/data/storage/el2/base/haps/entry/files/${fileName}`
-      
-      // 在实际实现中，需要使用HarmonyOS的图片保存API
-      // 这里我们先记录日志，实际实现需要根据HarmonyOS的API调整
-      hilog.info(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, `准备保存摄像头画面到: ${filePath}`)
-      
-      // 返回文件路径（实际保存逻辑需要根据HarmonyOS API实现）
-      return filePath
-    } catch (e) {
-      throw new Error(`保存图片失败: ${e.message}`)
-    }
   }
 
   private buildExampleText(): string {
@@ -2603,97 +1810,38 @@ export struct Page4View {
   }
 
   private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
-    const out: Array<OpenClawChatMessage> = []
-    out.push({
-      role: 'system',
-      content: this.openClawSystemPrompt
-    })
-    out.push({
-      role: 'system',
-      content: this.buildOpenClawRuntimeContextPromptLite()
-    })
-
-    const begin: number = this.messages.length > maxHistory ? this.messages.length - maxHistory : 0
-    for (let i: number = begin; i < this.messages.length; i++) {
-      const msg: AssistantMessage = this.messages[i]
-      const text: string = msg.text.trim()
-      if (text.length <= 0) continue
-      out.push({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: text
-      })
-    }
-    return out
+    return Page4PromptContextModule.buildOpenClawMessages(
+      this.messages,
+      this.openClawSystemPrompt,
+      this.buildOpenClawRuntimeContextPromptLite(),
+      maxHistory
+    )
   }
 
   private async answerByOpenClaw(): Promise<void> {
-    const tokenCandidates: Array<string> = resolveOpenClawTokenCandidates()
-    if (tokenCandidates.length <= 0) {
-      this.pushAssistant('OpenClaw token 为空，请在 DeviceNetworkConfig.ets 配置 OPENCLAW_GATEWAY_TOKEN。')
-      return
-    }
-
-    const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
-    const hosts: Array<string> = this.rankOpenClawHosts(resolveOpenClawHostCandidates(gatewayIp))
-    if (hosts.length <= 0) {
-      this.pushAssistant('未检测到 OpenClaw 主机地址。请在 DeviceNetworkConfig.ets 设置 OPENCLAW_GATEWAY_HOST。')
-      return
-    }
-
-    const reqMessages: Array<OpenClawChatMessage> = this.buildOpenClawMessages()
-    this.assistantBusy = true
-    const timeoutId: number = this.setManagedTimeout((): void => {
-      this.assistantBusy = false
-      this.pushAssistant('查询超时（45秒），请稍后重试。')
-    }, 60000)
-
-    try {
-      const errs: Array<string> = []
-      for (let i: number = 0; i < hosts.length; i++) {
-        const host: string = hosts[i]
-        const endpoint: string = buildOpenClawChatCompletionsUrl(host)
-        
-        // 增加连接和读取超时时间
-        const connectTimeoutMs: number = Math.min(12000, this.adaptiveOpenClawConnectTimeoutMs)
-        const readTimeoutMs: number = Math.min(60000, this.adaptiveOpenClawReadTimeoutMs)
-        
-        for (let k: number = 0; k < tokenCandidates.length; k++) {
-          const token: string = tokenCandidates[k]
-          const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-            endpoint,
-            bearerToken: token,
-            model: OPENCLAW_CHAT_MODEL,
-            connectTimeoutMs,
-            readTimeoutMs
-          })
-
-          this.logInfo('sendOpenClawRequest', `host=${host}, model=${OPENCLAW_CHAT_MODEL}, messages=${reqMessages.length}, ct=${connectTimeoutMs}, rt=${readTimeoutMs}, tk=${k + 1}`)
-          const result = await client.complete(reqMessages)
-          if (result.ok) {
-            this.clearManagedTimer(timeoutId)
-            this.markOpenClawHostSuccess(host)
-            this.logInfo('sendOpenClawSuccess', `host=${host}, chars=${result.text.length}`)
-            this.assistantBusy = false
-            this.pushAssistant(result.text, true)
-            return
-          }
-
-          const codeText: string = result.responseCode > 0 ? `HTTP ${result.responseCode}` : 'NETWORK'
-          const errText: string = this.normalizeGatewayErrorText(result.errorText)
-          this.logError('sendOpenClawFail', `host=${host}, code=${codeText}, reason=${errText}`)
-          errs.push(`${host}/${k + 1} ${codeText} ${errText}`)
-        }
-        this.markOpenClawHostFail(host)
-      }
-      const merged: string = errs.length > 0 ? errs.join(' || ') : 'unknown'
-      this.logError('sendOpenClawAllFailed', merged)
-    } catch (e) {
-      const msg: string = e instanceof Error ? e.message : 'unknown error'
-      this.logError('sendOpenClawException', msg)
-    } finally {
-      this.clearManagedTimer(timeoutId)
-      this.assistantBusy = false
-    }
+    await Page4OpenClawChatModule.answerByOpenClaw({
+      resolveTokenCandidates: (): Array<string> => resolveOpenClawTokenCandidates(),
+      resolveHosts: (): Array<string> => this.rankOpenClawHosts(resolveOpenClawHostCandidates(deviceNetworkResolver.resolveGatewayIp())),
+      buildOpenClawMessages: (): Array<OpenClawChatMessage> => this.buildOpenClawMessages(),
+      gatewayState: (): { lastGoodOpenClawHost: string, openClawHostCooldownUntilMs: Record<string, number>, openClawHostCooldownMs: number } => ({
+        lastGoodOpenClawHost: this.lastGoodOpenClawHost,
+        openClawHostCooldownUntilMs: this.openClawHostCooldownUntilMs,
+        openClawHostCooldownMs: this.openClawHostCooldownMs
+      }),
+      applyGatewayState: (state): void => {
+        this.lastGoodOpenClawHost = state.lastGoodOpenClawHost
+        this.openClawHostCooldownUntilMs = state.openClawHostCooldownUntilMs
+      },
+      setAssistantBusy: (busy: boolean): void => { this.assistantBusy = busy },
+      setManagedTimeout: (cb: () => void, delayMs: number): number => this.setManagedTimeout(cb, delayMs),
+      clearManagedTimer: (id: number): number => this.clearManagedTimer(id),
+      connectTimeoutMs: (): number => Math.min(12000, this.adaptiveOpenClawConnectTimeoutMs),
+      readTimeoutMs: (): number => Math.min(60000, this.adaptiveOpenClawReadTimeoutMs),
+      model: OPENCLAW_CHAT_MODEL,
+      pushAssistant: (text: string, typed?: boolean): void => this.pushAssistant(text, typed),
+      logInfo: (name: string, message: string): void => this.logInfo(name, message),
+      logError: (name: string, message: string): void => this.logError(name, message)
+    })
   }
 
   private rankOpenClawHosts(inputHosts: Array<string>): Array<string> {
@@ -3003,8 +2151,9 @@ export struct Page4View {
 
     let f: fs.File | undefined = undefined
     try {
-      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
-      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
+      const bindingPath: string = `${this.getFilesDir()}/${PAGE4_PLACE_BINDING_FILE}`
+      f = fs.openSync(bindingPath, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(bindingPath)
       const size: number = Number(st.size)
       if (!Number.isFinite(size) || size <= 0 || size > 4096) {
         return
@@ -3021,12 +2170,14 @@ export struct Page4View {
       const company: string = String(parsed.companyNodeId ?? '').trim().toUpperCase()
       this.homeNodeId = GridIdCodec.isValidId(home) ? home : ''
       this.companyNodeId = GridIdCodec.isValidId(company) ? company : ''
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '加载点位绑定失败，使用空配置: %{public}s',
+        e instanceof Error ? e.message : String(e))
       this.homeNodeId = ''
       this.companyNodeId = ''
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
@@ -3040,75 +2191,49 @@ export struct Page4View {
         companyNodeId: this.companyNodeId
       }
       const txt: string = JSON.stringify(payload)
-      try { fs.unlinkSync(PAGE4_PLACE_BINDING_PATH) } catch (_) {}
-      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+      const bindingPath: string = `${this.getFilesDir()}/${PAGE4_PLACE_BINDING_FILE}`
+      try { fs.unlinkSync(bindingPath) } catch (_) { /* 资源释放失败可安全忽略 */ }
+      f = fs.openSync(bindingPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
       fs.writeSync(f.fd, txt)
       return true
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '写入点位绑定失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return false
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
 
 
   private parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
-    const token: string = raw.trim()
-    if (token === 'home' || token === '物流中心') return 'home'
-    if (token === 'company' || token === '快递点' || token === '公司仓库') return 'company'
-    return ''
+    return Page4PoiBindingModule.parsePlaceRoleToken(raw)
   }
 
   private placeRoleText(role: '' | Page4PlaceRole): string {
-    if (role === 'home') return '物流中心'
-    if (role === 'company') return '快递点'
-    return '未指定点位'
+    return Page4PoiBindingModule.placeRoleText(role)
   }
 
   private parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
-    const src: string = text.trim()
-    if (src.length <= 0) return undefined
-
-    const p1: RegExpMatchArray | null = src.match(/(?:把|将)\s*(.+?)\s*(?:设置为|设为|记为|定义为)\s*(物流中心|快递点|公司仓库)/)
-    if (p1 && p1.length >= 3) {
-      const placeText: string = p1[1].trim()
-      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p1[2])
-      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
-    }
-
-    const p2: RegExpMatchArray | null = src.match(/^(物流中心|快递点|公司仓库)\s*(?:设置为|设为|是)\s*(.+)$/)
-    if (p2 && p2.length >= 3) {
-      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p2[1])
-      const placeText: string = p2[2].trim()
-      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
-    }
-
-    const p3: RegExpMatchArray | null = src.match(/(?:设置|设定)\s*(物流中心|快递点|公司仓库)\s*(?:为|到)?\s*(.+)$/)
-    if (p3 && p3.length >= 3) {
-      const role: '' | Page4PlaceRole = this.parsePlaceRoleToken(p3[1])
-      const placeText: string = p3[2].trim()
-      if ((role === 'home' || role === 'company') && placeText.length > 0) return { role, placeText }
-    }
-
-    return undefined
+    return Page4PoiBindingModule.parsePlaceBindingRequest(text)
   }
 
   private wantsPlaceBindingQuery(rawLower: string): { askHome: boolean, askCompany: boolean } | undefined {
-    const askHome: boolean = rawLower.indexOf('物流中心') >= 0
-    const askCompany: boolean = rawLower.indexOf('快递点') >= 0 || rawLower.indexOf('公司仓库') >= 0
-    if (!askHome && !askCompany) return undefined
-    const hasQueryWord: boolean = this.containsAny(rawLower, ['映射', '点位', '查询', '查看', '有没有', '是否', '在哪', '哪里'])
-    if (!hasQueryWord) return undefined
-    return { askHome, askCompany }
+    return Page4PoiBindingModule.wantsPlaceBindingQuery(
+      rawLower,
+      (text: string, keys: Array<string>): boolean => this.containsAny(text, keys)
+    )
   }
 
   private formatPlaceBinding(role: Page4PlaceRole): string {
-    const roleText: string = this.placeRoleText(role)
     const node: string = role === 'home' ? this.homeNodeId : this.companyNodeId
-    if (GridIdCodec.isValidId(node)) return `${roleText}=${node}`
-    return `${roleText}=未设置`
+    return Page4PoiBindingModule.formatPlaceBinding(
+      role,
+      node,
+      (id: string): boolean => GridIdCodec.isValidId(id)
+    )
   }
 
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
@@ -3161,39 +2286,11 @@ export struct Page4View {
   }
 
   private parsePlaceBindingPlanText(text: string): Page4PlaceBindingPlan | undefined {
-    const body: string = text.trim()
-    if (body.length <= 0) return undefined
-    const normalized: string = this.stripJsonCodeFence(body)
-    let obj: Record<string, Object | string | number | boolean | undefined> | undefined = undefined
-    try {
-      obj = JSON.parse(normalized) as Record<string, Object | string | number | boolean | undefined>
-    } catch (_) {
-      return undefined
-    }
-    if (!obj) return undefined
-
-    const roleRaw: string = String(obj['role'] ?? '').trim().toLowerCase()
-    let role: Page4PlaceRole | '' = ''
-    if (roleRaw === 'home' || roleRaw === '物流中心') role = 'home'
-    if (roleRaw === 'company' || roleRaw === '快递点' || roleRaw === '公司仓库') role = 'company'
-    if (role.length <= 0) return undefined
-
-    const placeText: string = String(obj['place'] ?? obj['target'] ?? obj['location'] ?? '').trim()
-    if (placeText.length <= 0) return undefined
-    if (role === 'home') return { role: 'home', placeText }
-    if (role === 'company') return { role: 'company', placeText }
-    return undefined
+    return Page4OpenClawChatModule.parsePlaceBindingPlanText(text)
   }
 
   private stripJsonCodeFence(text: string): string {
-    let s: string = text.trim()
-    if (!s.startsWith('```')) return s
-    const firstLf: number = s.indexOf('\n')
-    if (firstLf < 0) return s
-    s = s.substring(firstLf + 1)
-    const endFence: number = s.lastIndexOf('```')
-    if (endFence >= 0) s = s.substring(0, endFence)
-    return s.trim()
+    return Page4OpenClawChatModule.stripJsonCodeFence(text)
   }
 
   private async parsePlaceBindingByOpenClaw(input: string): Promise<Page4PlaceBindingPlan | undefined> {
@@ -3244,6 +2341,9 @@ export struct Page4View {
             return plan
           }
         } catch (e) {
+          hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG,
+            'parsePlaceBindingByOpenClaw 候选失败 host=%{public}s: %{public}s',
+            host, e instanceof Error ? e.message : String(e))
           continue
         }
       }
@@ -3252,3 +2352,4 @@ export struct Page4View {
     return undefined
   }
 }
+

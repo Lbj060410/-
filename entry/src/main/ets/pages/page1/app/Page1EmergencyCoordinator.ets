@@ -185,7 +185,6 @@ export class Page1EmergencyCoordinator {
     this.ctx.cancelParkingSequence()
     this.ctx.resetGarageFlowState()
     this.ctx.resetAutoActionDedupState()
-    this.ctx.resetPathAckState()
     this.ctx.stopActiveMotion()
     this.ctx.actionScheduler.reset()
     this.setMotionCommandBlock(reason, safeHoldMs)

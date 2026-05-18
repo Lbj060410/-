@@ -70,6 +70,7 @@ export class VideoStore {
   // ==== Page2 自动预览（来自 Page4），与业务快照解耦 ====
   page2AutoPreviewPixelMap?: PixelMap
   page2AutoPreviewAtMs: number = 0
+  private _page2UpdateToken: number = 0
   private readonly pinnedPixelMaps: Set<PixelMap> = new Set<PixelMap>()
 
   // ==== 识别调度预留 ====
@@ -95,10 +96,6 @@ export class VideoStore {
   }
 
   setDisplayMode(mode: DisplayMode, reason: string): void {
-    if (mode === DisplayMode.RTSP) {
-      this.markSwitch(DisplayMode.HTTP, `${reason} (RTSP disabled)`)
-      return
-    }
     this.markSwitch(mode, reason)
   }
 
@@ -128,8 +125,7 @@ export class VideoStore {
     this.page2AutoPreviewPixelMap = pm
     this.page2AutoPreviewAtMs = Date.now()
     if (old && old !== pm) this.releasePixelMapLater(old)
-    // 强制触发状态更新
-    this.statusText = `Page2已更新 ${this.page2AutoPreviewAtMs}`
+    this._page2UpdateToken += 1
   }
 
   private releasePixelMapLater(pm: PixelMap): void {

@@ -9,6 +9,7 @@
 import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
 import fs from '@ohos.file.fs'
+import hilog from '@ohos.hilog'
 
 import { RecogStore } from '../../state/RecogStore'
 import { videoStore } from '../../state/VideoStore'
@@ -36,6 +37,9 @@ import {
 import { RecognitionReportService } from './RecognitionReportService'
 import { CarTaskSnapshotArchiveService } from './CarTaskSnapshotArchiveService'
 import { replayArchiveService } from '../replay/ReplayArchiveService'
+
+const LOG_DOMAIN: number = 0xFF24
+const LOG_TAG: string = 'RecogScheduler'
 
 class CancelledError extends Error {
   constructor() {
@@ -264,7 +268,7 @@ export class RecognitionScheduler {
       this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.DONE, 'DROPPED'))
       this.dropLive('page2 live busy')
       if (releaseAfterUse) {
-        try { pm.release() } catch (e) {}
+        try { pm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
       return id
     }
@@ -578,8 +582,8 @@ export class RecognitionScheduler {
       try {
         await this.reporter.maybeAutoReport(result)
       } catch (e) {
-        void e
-        // 回传失败不影响任务主流程
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '自动回传失败(不影响主流程): %{public}s',
+          e instanceof Error ? e.message : String(e))
       }
 
       this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.DONE, result.ok ? 'SUCCESS' : 'FAILED'))
@@ -724,7 +728,7 @@ export class RecognitionScheduler {
         videoStore.unpinPixelMap(pinnedSharedPm)
       }
       if (releaseAfterUse) {
-        try { pm.release() } catch (e) {}
+        try { pm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
@@ -790,7 +794,7 @@ export class RecognitionScheduler {
 
   private releaseLiveFrameIfOwned(pm: PixelMap, releaseAfterUse: boolean): void {
     if (!releaseAfterUse) return
-    try { pm.release() } catch (e) {}
+    try { pm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
   }
 
   private releaseTaskInputIfOwned(task: RecognitionTask): void {
@@ -799,7 +803,7 @@ export class RecognitionScheduler {
     const pm: PixelMap | undefined = task.input.pixelMap
     if (!pm) return
     task.input.pixelMap = undefined
-    try { pm.release() } catch (_) {}
+    try { pm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
   }
 
   private clearQueuedTasks(): void {
@@ -828,7 +832,8 @@ export class RecognitionScheduler {
         const jpeg: ArrayBuffer = await this.snapshot.fetchJpeg(url, 1500)
         snapPm = await this.jpegToPixelMap(jpeg)
       } catch (e) {
-        void e
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '抓取车端快照失败，继续降级路径: %{public}s',
+          e instanceof Error ? e.message : String(e))
       }
     }
 
@@ -846,7 +851,7 @@ export class RecognitionScheduler {
         this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.PREPROCESS, 'car snapshot save failed'))
       }
     } finally {
-      try { snapPm.release() } catch (e) {}
+      try { snapPm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -927,7 +932,7 @@ export class RecognitionScheduler {
     try {
       return await src.createPixelMap()
     } finally {
-      try { src.release() } catch (e) {}
+      try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -937,10 +942,11 @@ export class RecognitionScheduler {
       const data: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 92 })
       return await this.jpegToPixelMap(data)
     } catch (e) {
-      void e
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '克隆PixelMap失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
-      try { packer.release() } catch (e) {}
+      try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -957,7 +963,8 @@ export class RecognitionScheduler {
       const region: image.Region = this.roiToRegion(roi, w, h)
       await pm.crop(region)
     } catch (e) {
-      void e
+      hilog.warn(LOG_DOMAIN, LOG_TAG, 'ROI裁剪失败(不阻断推理): %{public}s',
+        e instanceof Error ? e.message : String(e))
       // ROI crop failure should not block inference.
     }
   }
@@ -994,10 +1001,10 @@ export class RecognitionScheduler {
       }, timeoutMs) as number
 
       p.then((v: T) => {
-        try { clearTimeout(id) } catch (e) {}
+        try { clearTimeout(id) } catch (_) { /* 资源释放失败可安全忽略 */ }
         resolve(v)
       }).catch((err: object) => {
-        try { clearTimeout(id) } catch (e) {}
+        try { clearTimeout(id) } catch (_) { /* 资源释放失败可安全忽略 */ }
         reject(err)
       })
     })
@@ -1021,14 +1028,23 @@ export class RecognitionScheduler {
 
     pushUnique(raw)
     pushUnique(noQuery)
-    try { pushUnique(decodeURIComponent(raw)) } catch (_) {}
-    try { pushUnique(decodeURIComponent(noQuery)) } catch (_) {}
+    try { pushUnique(decodeURIComponent(raw)) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '解析URI解码候选失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
+    try { pushUnique(decodeURIComponent(noQuery)) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '解析无query URI解码候选失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
 
     const lower: string = noQuery.toLowerCase()
     if (lower.startsWith('file://')) {
       const pathRaw: string = noQuery.substring('file://'.length)
       pushUnique(pathRaw)
-      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '解析file URI解码候选失败: %{public}s',
+          e instanceof Error ? e.message : String(e))
+      }
     }
 
     for (let i: number = 0; i < candidates.length; i++) {
@@ -1060,7 +1076,7 @@ export class RecognitionScheduler {
         if (firstErr.length <= 0) firstErr = this.errorToText(e)
       } finally {
         if (f) {
-          try { fs.closeSync(f.fd) } catch (_) {}
+          try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
         }
       }
     }
@@ -1080,14 +1096,16 @@ export class RecognitionScheduler {
       if (srcByFd) {
         return await srcByFd.createPixelMap()
       }
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '按文件描述符解码gallery图片失败，尝试后备路径: %{public}s',
+        e instanceof Error ? e.message : String(e))
       // fallback below
     } finally {
       if (srcByFd) {
-        try { srcByFd.release() } catch (_) {}
+        try { srcByFd.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
 
@@ -1096,7 +1114,7 @@ export class RecognitionScheduler {
     try {
       return await src.createPixelMap()
     } finally {
-      try { src.release() } catch (_) {}
+      try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -1114,7 +1132,9 @@ export class RecognitionScheduler {
     try {
       const txt: string = JSON.stringify(e)
       return txt.length > 0 ? txt : 'unknown error'
-    } catch (_) {
+    } catch (err) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '序列化错误对象失败: %{public}s',
+        err instanceof Error ? err.message : String(err))
       return 'unknown error'
     }
   }

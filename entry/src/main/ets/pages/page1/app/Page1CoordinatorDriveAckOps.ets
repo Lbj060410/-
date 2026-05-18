@@ -1,9 +1,21 @@
 ﻿import { Page1Action } from '../types/Page1Types'
-import { P1C, PendingAckMotion } from './Page1CoordinatorDefs'
+import { P1C, IPage1CoordinatorOps } from './Page1CoordinatorDefs'
 import { MotionTimingProfile } from './ActionTimingRegistry'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
+import { Page1UiStore } from './Page1UiStore'
 
-function kickTcpConnectForRealSendIfNeeded(ctx: any, s: any): void {
+interface PendingAckMotion {
+  action: Page1Action
+  fromId: string
+  toId: string
+  nextAction?: Page1Action
+  motionMs: number
+  advancePathOnFinish: boolean
+  useReverseSpeed: boolean
+  customLogTag: string
+}
+
+function kickTcpConnectForRealSendIfNeeded(ctx: IPage1CoordinatorOps, s: Page1UiStore): void {
   if (!s || !s.realSendEnabled) return
   const connState: number = Number(s.connState)
   if (connState === 1 || connState === 2 || connState === 3) return
@@ -15,11 +27,11 @@ function kickTcpConnectForRealSendIfNeeded(ctx: any, s: any): void {
   if (typeof ctx.connectTcp === 'function') void ctx.connectTcp(s.connIp, s.connPort)
 }
 
-function isStaleByEmergencySeq(ctx: any, seq: number): boolean {
+function isStaleByEmergencySeq(ctx: IPage1CoordinatorOps, seq: number): boolean {
   return (Number(ctx.emergencyCommandSeq) || 0) !== seq
 }
 
-export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<boolean> {
+export async function sendDriveActionDirect(ctx: IPage1CoordinatorOps, a: Page1Action): Promise<boolean> {
   const s = ctx.store
   if (!s) return false
   if (typeof ctx.acquireMotionDispatch === 'function') await ctx.acquireMotionDispatch(`AUTO:${Page1Action[a]}`)
@@ -30,7 +42,8 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
     const blockedMotion: boolean =
       a === Page1Action.GO || a === Page1Action.BACK || a === Page1Action.LEFT ||
       a === Page1Action.RIGHT || a === Page1Action.LEFT_HALF || a === Page1Action.RIGHT_HALF || a === Page1Action.UTURN
-    if (blockedMotion && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'AUTO_SIM')) return false
+    const needMotionGate: boolean = blockedMotion && ctx.canRealSend()
+    if (needMotionGate && typeof ctx.canSendMotionCommand === 'function' && !ctx.canSendMotionCommand(Page1Action[a], 'AUTO_SIM')) return false
 
     let actionText: string = ''
     if (a === Page1Action.GO) actionText = '前进'
@@ -55,7 +68,7 @@ export async function sendDriveActionDirect(ctx: any, a: Page1Action): Promise<b
   }
 }
 
-export function buildAutoActionFingerprint(ctx: any, action: Page1Action): string {
+export function buildAutoActionFingerprint(ctx: IPage1CoordinatorOps, action: Page1Action): string {
   const s = ctx.store
   if (!s) return `${action}|NO_STORE`
   const idx: number = s.pathIndex
@@ -72,7 +85,7 @@ export function buildAutoActionFingerprint(ctx: any, action: Page1Action): strin
   return `${action}|plan=${s.lastPlannedAtMs}|idx=${idx}/${len}|cur=${curId}|edge=${fromId}->${toId}|motion=${motionFrom}->${motionTo}`
 }
 
-export function shouldSkipDuplicateAutoAction(ctx: any, action: Page1Action, actionText: string): boolean {
+export function shouldSkipDuplicateAutoAction(ctx: IPage1CoordinatorOps, action: Page1Action, actionText: string): boolean {
   const s = ctx.store
   const fp: string = buildAutoActionFingerprint(ctx, action)
   if (fp !== ctx.lastAutoActionFingerprint) {
@@ -98,51 +111,12 @@ export function isMoveAction(a: Page1Action | undefined): boolean {
   return a === Page1Action.GO || a === Page1Action.BACK
 }
 
-export function resetRouteVoiceFlags(ctx: any): void { ctx.routeStartVoicePlayed = false }
-export function resetAutoActionDedupState(ctx: any): void { ctx.lastAutoActionFingerprint = ''; ctx.lastAutoActionDedupLogAtMs = 0 }
-
-export function resetPathAckState(ctx: any): void {
-  ctx.pathAckFirstCommandSent = false
-  ctx.pathAckAwaitingComplete = false
-  ctx.pathAckBlocked = false
-  ctx.pathAckLastSendAtMs = 0
-  ctx.pathAckLastStatusCode = 0
-  ctx.pathAckLastStatusAtMs = 0
-  ctx.pathAckLastCommandText = ''
-  ctx.pathAckLastWaitLogAtMs = 0
-  ctx.pathAckRetrySentCount = 0
-  ctx.pathAckCommandKey = ''
-  ctx.pathAckCommandSeq = Number(ctx.emergencyCommandSeq) || 0
-  ctx.pathAckCommandToken = 0
-  ctx.pathAckSeen01Token = 0
-  ctx.pathAckSeen02Token = 0
-  ctx.pathAckSeen02AtMs = 0
-  ctx.pathAckSeen02PromoteTimerId = -1
-  ctx.pathAckRetryGraceToken = 0
-  ctx.pathAckRetryGraceAtMs = 0
-  ctx.pendingAckMotion = undefined
-  ctx.suppressNextAckCompleteMotion = false
-  ctx.suppressAckCompleteEdgeId = ''
-  ctx.pendingDrivingUltrasonicObstacleEdgeId = ''
-  ctx.pendingDrivingUltrasonicObstacleAtMs = 0
-}
+export function resetRouteVoiceFlags(ctx: IPage1CoordinatorOps): void { ctx.routeStartVoicePlayed = false }
+export function resetAutoActionDedupState(ctx: IPage1CoordinatorOps): void { ctx.lastAutoActionFingerprint = ''; ctx.lastAutoActionDedupLogAtMs = 0 }
 
 export function isPathMotionAction(action: Page1Action): boolean {
   return action === Page1Action.GO || action === Page1Action.BACK || action === Page1Action.LEFT || action === Page1Action.RIGHT || action === Page1Action.LEFT_HALF || action === Page1Action.RIGHT_HALF || action === Page1Action.UTURN
 }
-
-export function canSendPathCommandNow(_ctx: any, _nextActionText: string): boolean { return true }
-
-export function markPathCommandSent(ctx: any, actionText: string): void {
-  ctx.pathAckFirstCommandSent = true
-  ctx.pathAckAwaitingComplete = false
-  ctx.pathAckBlocked = false
-  ctx.pathAckLastSendAtMs = Date.now()
-  ctx.pathAckLastStatusCode = 0x02
-  ctx.pathAckLastCommandText = actionText
-}
-
-export function onPathAckFrame(_ctx: any, _f: any): void {}
 
 export function pathDotMotionTimingMs(suggestedMs?: number): number {
   const base: number = suggestedMs !== undefined ? suggestedMs : P1C.PATH_DOT_MOTION_MS
@@ -154,16 +128,7 @@ export function pathDotMotionTiming(suggestedMs?: number): MotionTimingProfile {
   return { preMs: 0, activeMs: ms, postMs: 0, sendGapMs: ms }
 }
 
-export async function waitForCurrentPathAckComplete(_ctx: any, _maxWaitMs: number, _waitTag: string): Promise<boolean> {
-  return true
-}
-
-export function stageMotionWaitAckComplete(ctx: any, req: PendingAckMotion): void {
-  ctx.pendingAckMotion = req
-  ctx.pendingAckMotionToken = Number(ctx.pathAckCommandToken) || 0
-}
-
-export function startMotionNow(ctx: any, req: PendingAckMotion): void {
+export function startMotionNow(ctx: IPage1CoordinatorOps, req: PendingAckMotion): void {
   ctx.actionScheduler.beginMotionOnlyWithTiming({
     action: req.action,
     fromId: req.fromId,
@@ -176,14 +141,7 @@ export function startMotionNow(ctx: any, req: PendingAckMotion): void {
   }, ctx.schedulerDeps())
 }
 
-export function startPendingAckMotionOnComplete(ctx: any): void {
-  const req: PendingAckMotion | undefined = ctx.pendingAckMotion
-  if (!req) return
-  ctx.pendingAckMotion = undefined
-  startMotionNow(ctx, req)
-}
-
-export function queueDrivingUltrasonicObstacle(ctx: any, nowMs: number): void {
+export function queueDrivingUltrasonicObstacle(ctx: IPage1CoordinatorOps, nowMs: number): void {
   const s = ctx.store
   if (!s) return
   const edgeId: string = ctx.frontRouteEdgeIdForDriving()
@@ -192,4 +150,5 @@ export function queueDrivingUltrasonicObstacle(ctx: any, nowMs: number): void {
   ctx.maybeHandleDrivingUltrasonicObstacle(nowMs, edgeId)
 }
 
-export function flushDrivingUltrasonicObstacleAfterAck(_ctx: any): void {}
+
+

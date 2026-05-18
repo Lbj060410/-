@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 代码指南：
  * 文件：pages/page1/components/CarStatusCard.ets
  * 用途：仅限 Page1 视觉组件（地图/状态/控制渲染）。
@@ -11,6 +11,7 @@ import { page1Store, Page1UiStore, RiskLevel, CarConnState } from '../app/Page1U
 import { PoseSource } from '../types/PoseTypes'
 import { GridIdCodec, GridCoord } from '../app/PathPlannerAStar'
 import { Page1Theme } from '../Page1Theme'
+import { CARD_ACCENT, PATH_CARD, STATUS, CARD } from '../Page1Styles'
 
 @Component
 export struct CarStatusCard {
@@ -56,7 +57,7 @@ export struct CarStatusCard {
 
       // 动作和队列卡片
       Column({ space: 8 }) {
-        Text('PATH NODES QUEUE')
+        Text('路径节点队列')
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
           .fontColor(Page1Theme.TEXT_TERTIARY)
@@ -65,15 +66,15 @@ export struct CarStatusCard {
         Text(this.pathText())
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
-          .fontColor(Page1Theme.TEXT_PRIMARY)
-          .padding(12)
-          .backgroundColor('#F8FAFC')
-          .borderRadius(12)
+          .fontColor(PATH_CARD.TEXT_COLOR)
+          .padding(PATH_CARD.PADDING)
+          .backgroundColor(PATH_CARD.BG)
+          .borderRadius(PATH_CARD.RADIUS)
           .width('100%')
-          .border({ width: 1, color: Page1Theme.BORDER })
+          .border({ width: 1, color: PATH_CARD.BORDER_COLOR })
 
         Row() {
-          Text('CURRENT ACTION')
+          Text('当前动作')
             .fontSize(12)
             .fontWeight(FontWeight.Bold)
             .fontColor(Page1Theme.TEXT_TERTIARY)
@@ -81,7 +82,7 @@ export struct CarStatusCard {
           Text(this.store.actionText)
             .fontSize(13)
             .fontWeight(FontWeight.Bold)
-            .fontColor(Page1Theme.PRIMARY)
+            .fontColor(STATUS.ACTION)
         }
         .width('100%')
         .padding({ top: 8 })
@@ -132,48 +133,35 @@ export struct CarStatusCard {
   private speedCard(): void {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        // 顶部渐变强调线（使用细矩形或边框顶部模拟）
-        Row().width('100%').height(2).backgroundColor('#2F6BFF').opacity(0.8)
-          .borderRadius({ topLeft: Page1Theme.RADIUS_M, topRight: Page1Theme.RADIUS_M })
+        Row().width('100%').height(CARD.ACCENT_HEIGHT).backgroundColor(CARD_ACCENT.SPEED).opacity(0.8)
+          .borderRadius({ topLeft: 6, topRight: 6 })
           .position({ x: 0, y: 0 })
 
         Column() {
           Row() {
-            Text('SPEED')
-              .fontSize(11)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Page1Theme.TEXT_TERTIARY)
+            Text('速度').fontSize(CARD.LABEL_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
             Blank()
-            // 图标背景
             Stack() {
-              Circle({ width: 32, height: 32 }).fill('#EEF3FF')
-              // 暂时使用文字图标代替
-              Text('•').fontColor('#2F6BFF').fontSize(16)
+              Circle({ width: CARD.ICON_SIZE, height: CARD.ICON_SIZE }).fill(CARD_ACCENT.SPEED_BG)
+              Text('•').fontColor(CARD_ACCENT.SPEED).fontSize(16)
             }
           }
           .width('100%')
           .margin({ bottom: 12 })
 
-          Text(this.speedText)
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Page1Theme.TEXT_PRIMARY)
-
-          Text('cm/s')
-            .fontSize(11)
-            .fontColor(Page1Theme.TEXT_TERTIARY)
-            .margin({ top: 4 })
+          Text(this.speedText).fontSize(CARD.VALUE_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
+          Text('cm/s').fontSize(CARD.LABEL_FONT).fontColor(CARD.TEXT_COLOR).margin({ top: 4 })
         }
-        .padding(16)
+        .padding(CARD.PADDING)
         .width('100%')
         .height('100%')
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Page1Theme.CARD)
-      .borderRadius(Page1Theme.RADIUS_L)
-      .shadow({ radius: 24, color: '#0000000B', offsetX: 0, offsetY: 4 })
-      .border({ width: 1, color: Page1Theme.BORDER })
+      .backgroundColor(CARD.BG)
+      .borderRadius(CARD.RADIUS)
+      .shadow({ radius: CARD.SHADOW.radius, color: CARD.SHADOW.color, offsetX: 0, offsetY: CARD.SHADOW.offsetY })
+      .border({ width: 1, color: CARD.BG })
       .clip(true)
     }
     .width('100%')
@@ -184,42 +172,35 @@ export struct CarStatusCard {
   private headingCard(): void {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        Row().width('100%').height(2).backgroundColor('#7C3AED').opacity(0.8)
-          .borderRadius({ topLeft: Page1Theme.RADIUS_M, topRight: Page1Theme.RADIUS_M })
+        Row().width('100%').height(CARD.ACCENT_HEIGHT).backgroundColor(CARD_ACCENT.HEADING).opacity(0.8)
+          .borderRadius({ topLeft: 6, topRight: 6 })
           .position({ x: 0, y: 0 })
 
         Column() {
           Row() {
-            Text('HEADING').fontSize(11).fontWeight(FontWeight.Bold).fontColor(Page1Theme.TEXT_TERTIARY)
+            Text('方向').fontSize(CARD.LABEL_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
             Blank()
             Stack() {
-              Circle({ width: 32, height: 32 }).fill('#F3EEFF')
-              Text('•').fontColor('#7C3AED').fontSize(16)
+              Circle({ width: CARD.ICON_SIZE, height: CARD.ICON_SIZE }).fill(CARD_ACCENT.HEADING_BG)
+              Text('•').fontColor(CARD_ACCENT.HEADING).fontSize(16)
             }
           }
           .width('100%')
           .margin({ bottom: 12 })
 
-          Text(this.headingText)
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Page1Theme.TEXT_PRIMARY)
-
-          Text(this.headingDir)
-            .fontSize(11)
-            .fontColor(Page1Theme.TEXT_TERTIARY)
-            .margin({ top: 4 })
+          Text(this.headingText).fontSize(CARD.VALUE_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
+          Text(this.headingDir).fontSize(CARD.LABEL_FONT).fontColor(CARD.TEXT_COLOR).margin({ top: 4 })
         }
-        .padding(16)
+        .padding(CARD.PADDING)
         .width('100%')
         .height('100%')
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Page1Theme.CARD)
-      .borderRadius(Page1Theme.RADIUS_L)
-      .shadow({ radius: 24, color: '#0000000B', offsetX: 0, offsetY: 4 })
-      .border({ width: 1, color: Page1Theme.BORDER })
+      .backgroundColor(CARD.BG)
+      .borderRadius(CARD.RADIUS)
+      .shadow({ radius: CARD.SHADOW.radius, color: CARD.SHADOW.color, offsetX: 0, offsetY: CARD.SHADOW.offsetY })
+      .border({ width: 1, color: CARD.BG })
       .clip(true)
     }
     .width('100%')
@@ -230,42 +211,35 @@ export struct CarStatusCard {
   private distanceCard(): void {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        Row().width('100%').height(2).backgroundColor('#0891B2').opacity(0.8)
-          .borderRadius({ topLeft: Page1Theme.RADIUS_M, topRight: Page1Theme.RADIUS_M })
+        Row().width('100%').height(CARD.ACCENT_HEIGHT).backgroundColor(CARD_ACCENT.DISTANCE).opacity(0.8)
+          .borderRadius({ topLeft: 6, topRight: 6 })
           .position({ x: 0, y: 0 })
 
         Column() {
           Row() {
-            Text('DISTANCE').fontSize(11).fontWeight(FontWeight.Bold).fontColor(Page1Theme.TEXT_TERTIARY)
+            Text('距离').fontSize(CARD.LABEL_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
             Blank()
             Stack() {
-              Circle({ width: 32, height: 32 }).fill('#ECFBFF')
-              Text('•').fontColor('#0891B2').fontSize(16)
+              Circle({ width: CARD.ICON_SIZE, height: CARD.ICON_SIZE }).fill(CARD_ACCENT.DISTANCE_BG)
+              Text('•').fontColor(CARD_ACCENT.DISTANCE).fontSize(16)
             }
           }
           .width('100%')
           .margin({ bottom: 12 })
 
-          Text(this.distanceText)
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Page1Theme.TEXT_PRIMARY)
-
-          Text('cm (front)')
-            .fontSize(11)
-            .fontColor(Page1Theme.TEXT_TERTIARY)
-            .margin({ top: 4 })
+          Text(this.distanceText).fontSize(CARD.VALUE_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
+          Text('km').fontSize(CARD.LABEL_FONT).fontColor(CARD.TEXT_COLOR).margin({ top: 4 })
         }
-        .padding(16)
+        .padding(CARD.PADDING)
         .width('100%')
         .height('100%')
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Page1Theme.CARD)
-      .borderRadius(Page1Theme.RADIUS_L)
-      .shadow({ radius: 24, color: '#0000000B', offsetX: 0, offsetY: 4 })
-      .border({ width: 1, color: Page1Theme.BORDER })
+      .backgroundColor(CARD.BG)
+      .borderRadius(CARD.RADIUS)
+      .shadow({ radius: CARD.SHADOW.radius, color: CARD.SHADOW.color, offsetX: 0, offsetY: CARD.SHADOW.offsetY })
+      .border({ width: 1, color: CARD.BG })
       .clip(true)
     }
     .width('100%')
@@ -276,42 +250,35 @@ export struct CarStatusCard {
   private lightCard(): void {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        Row().width('100%').height(2).backgroundColor('#059669').opacity(0.8)
-          .borderRadius({ topLeft: Page1Theme.RADIUS_M, topRight: Page1Theme.RADIUS_M })
+        Row().width('100%').height(CARD.ACCENT_HEIGHT).backgroundColor(CARD_ACCENT.LIGHT).opacity(0.8)
+          .borderRadius({ topLeft: 6, topRight: 6 })
           .position({ x: 0, y: 0 })
 
         Column() {
           Row() {
-            Text('SENSORS').fontSize(11).fontWeight(FontWeight.Bold).fontColor(Page1Theme.TEXT_TERTIARY)
+            Text('光照强度').fontSize(CARD.LABEL_FONT).fontWeight(FontWeight.Bold).fontColor(CARD.TEXT_COLOR)
             Blank()
             Stack() {
-              Circle({ width: 32, height: 32 }).fill('#ECFDF5')
-              Text('•').fontColor('#059669').fontSize(16)
+              Circle({ width: CARD.ICON_SIZE, height: CARD.ICON_SIZE }).fill(CARD_ACCENT.LIGHT_BG)
+              Text('•').fontColor(CARD_ACCENT.LIGHT).fontSize(16)
             }
           }
           .width('100%')
           .margin({ bottom: 12 })
 
-          Text(this.lightText)
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor('#059669')
-
-          Text('lux (light)')
-            .fontSize(11)
-            .fontColor(Page1Theme.TEXT_TERTIARY)
-            .margin({ top: 4 })
+          Text(this.lightText).fontSize(CARD.VALUE_FONT).fontWeight(FontWeight.Bold).fontColor(CARD_ACCENT.LIGHT)
+          Text('lux').fontSize(CARD.LABEL_FONT).fontColor(CARD.TEXT_COLOR).margin({ top: 4 })
         }
-        .padding(16)
+        .padding(CARD.PADDING)
         .width('100%')
         .height('100%')
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Page1Theme.CARD)
-      .borderRadius(Page1Theme.RADIUS_L)
-      .shadow({ radius: 24, color: '#0000000B', offsetX: 0, offsetY: 4 })
-      .border({ width: 1, color: Page1Theme.BORDER })
+      .backgroundColor(CARD.BG)
+      .borderRadius(CARD.RADIUS)
+      .shadow({ radius: CARD.SHADOW.radius, color: CARD.SHADOW.color, offsetX: 0, offsetY: CARD.SHADOW.offsetY })
+      .border({ width: 1, color: CARD.BG })
       .clip(true)
     }
     .width('100%')

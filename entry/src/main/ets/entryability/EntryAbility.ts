@@ -28,7 +28,9 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
-    // no-op
+    page1Coordinator.stop().catch((): void => {})
+    page2Coordinator.stop()
+    shutdownRecognitionCenter()
   }
 
   onBackground(): void {

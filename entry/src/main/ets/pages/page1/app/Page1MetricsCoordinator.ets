@@ -1,5 +1,4 @@
 import { GridIdCodec } from './PathPlannerAStar'
-import { PendingAckMotion } from './Page1CoordinatorDefs'
 import { Page1UiStore } from './Page1UiStore'
 
 export class Page1MetricsCoordinator {
@@ -61,16 +60,6 @@ export class Page1MetricsCoordinator {
     return 57
   }
 
-  pendingAckDistanceInfo(): { key: string, segCm: number } | undefined {
-    const req: PendingAckMotion | undefined = this.ctx.pendingAckMotion
-    if (!req) return undefined
-    const fromId: string = req.fromId.trim().toUpperCase()
-    const toId: string = req.toId.trim().toUpperCase()
-    if (!GridIdCodec.isValidId(fromId) || !GridIdCodec.isValidId(toId)) return undefined
-    const segCm: number = this.edgeDistanceCm(fromId, toId)
-    return { key: `${fromId}->${toId}`, segCm: segCm }
-  }
-
   startMetricDistanceAckRise(key: string, segCm: number): void {
     const s: Page1UiStore | undefined = this.ctx.store as Page1UiStore | undefined
     if (!s) return
@@ -106,13 +95,7 @@ export class Page1MetricsCoordinator {
   finalizeMetricDistanceAck(): void {
     const s: Page1UiStore | undefined = this.ctx.store as Page1UiStore | undefined
     if (!s) return
-    if (this.ctx.metricDistanceAckKey.length <= 0) {
-      const info = this.pendingAckDistanceInfo()
-      if (!info) return
-      this.ctx.metricDistanceTotalCm += info.segCm
-      s.setMetricDistanceCm(this.ctx.metricDistanceTotalCm)
-      return
-    }
+    if (this.ctx.metricDistanceAckKey.length <= 0) return
     this.clearMetricDistanceAckAnimation()
     this.ctx.metricDistanceTotalCm = this.ctx.metricDistanceAckTargetCm
     s.setMetricDistanceCm(this.ctx.metricDistanceTotalCm)

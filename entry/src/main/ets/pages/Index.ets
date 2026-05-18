@@ -16,7 +16,7 @@ import fs from '@ohos.file.fs'
 import util from '@ohos.util'
 import hilog from '@ohos.hilog'
 
-const PAGE4_PLACE_BINDING_PATH: string = '/data/storage/el2/base/haps/entry/files/page4_place_bindings.json'
+const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
 const BENGKUI_LOG_DOMAIN: number = 0xFF0B
 const BENGKUI_LOG_TAG: string = 'bengkui'
 const SPLASH_SLOGAN: string = '为让物流运输更高效，更安全，更智能，让每一次物流运输都智行无忧'
@@ -111,10 +111,11 @@ struct Index {
     let company: string = ''
     let f: fs.File | undefined = undefined
     try {
-      this.logBengkui(`restore begin path=${PAGE4_PLACE_BINDING_PATH}`)
-      f = fs.openSync(PAGE4_PLACE_BINDING_PATH, fs.OpenMode.READ_ONLY)
+      const bindingPath: string = `${getContext(this).filesDir}/${PAGE4_PLACE_BINDING_FILE}`
+      this.logBengkui(`restore begin path=${bindingPath}`)
+      f = fs.openSync(bindingPath, fs.OpenMode.READ_ONLY)
       this.logBengkui('restore openSync ok')
-      const st: fs.Stat = fs.statSync(PAGE4_PLACE_BINDING_PATH)
+      const st: fs.Stat = fs.statSync(bindingPath)
       const size: number = Number(st.size)
       this.logBengkui(`restore stat size=${size}`)
       if (Number.isFinite(size) && size > 0 && size <= 4096) {

@@ -6,9 +6,6 @@ export interface TimingState {
   lastVisionLogAtMs: number
   manualGoLastSentAtMs: number
   lastMotionCompleteAtMs: number
-  pathAckLastSendAtMs: number
-  pathAckLastStatusAtMs: number
-  pathAckLastWaitLogAtMs: number
   pendingDrivingUltrasonicObstacleAtMs: number
   lightMetricLastQueryAtMs: number
   realSendConnectKickAtMs: number
@@ -23,9 +20,6 @@ export function createTimingState(): TimingState {
     lastVisionLogAtMs: 0,
     manualGoLastSentAtMs: 0,
     lastMotionCompleteAtMs: 0,
-    pathAckLastSendAtMs: 0,
-    pathAckLastStatusAtMs: 0,
-    pathAckLastWaitLogAtMs: 0,
     pendingDrivingUltrasonicObstacleAtMs: 0,
     lightMetricLastQueryAtMs: 0,
     realSendConnectKickAtMs: 0

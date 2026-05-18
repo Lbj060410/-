@@ -42,7 +42,17 @@ export class RtspPlayerService {
   }
 
   setSurfaceId(surfaceId: string): void {
-    this.surfaceId = surfaceId
+    this.surfaceId = surfaceId.trim()
+    if (!this.player || this.surfaceId.length <= 0) return
+    try {
+      this.player.surfaceId = this.surfaceId
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  hasSurfaceId(): boolean {
+    return this.surfaceId.length > 0
   }
 
   async playRtsp(url: string): Promise<boolean> {

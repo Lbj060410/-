@@ -76,6 +76,13 @@ export interface MapGaragePoint {
   yNorm: number
 }
 
+export interface MapWarehousePoint {
+  id: string
+  nodeId: string
+  xNorm: number
+  yNorm: number
+}
+
 // 为与协调器交通闸门流程兼容而保留；地图侧编辑 UI 已移除。
 
 interface RouteSegProjection {
@@ -122,6 +129,7 @@ export class Page1UiStore {
   gateEditEnabled: boolean = false
   specialRoadEditEnabled: boolean = false
   garageEditEnabled: boolean = false
+  warehouseEditEnabled: boolean = false
   targetPickEnabled: boolean = false
   // 地图点选目标后，等待“再次点击目标按钮”确认发送
   mapTargetPendingSend: boolean = false
@@ -142,6 +150,7 @@ export class Page1UiStore {
   gatePoints: Array<MapGatePoint> = []
   specialRoadPoints: Array<MapSpecialRoadPoint> = []
   garagePoints: Array<MapGaragePoint> = []
+  warehousePoints: Array<MapWarehousePoint> = []
 
   /**
    * 障碍编辑模式开关：
@@ -155,6 +164,7 @@ export class Page1UiStore {
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
       this.garageEditEnabled = false
+      this.warehouseEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -168,6 +178,7 @@ export class Page1UiStore {
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
       this.garageEditEnabled = false
+      this.warehouseEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -181,6 +192,7 @@ export class Page1UiStore {
       this.trafficLightEditEnabled = false
       this.specialRoadEditEnabled = false
       this.garageEditEnabled = false
+      this.warehouseEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -194,6 +206,7 @@ export class Page1UiStore {
       this.trafficLightEditEnabled = false
       this.gateEditEnabled = false
       this.garageEditEnabled = false
+      this.warehouseEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
@@ -207,10 +220,25 @@ export class Page1UiStore {
       this.trafficLightEditEnabled = false
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
+      this.warehouseEditEnabled = false
       this.targetPickEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`车库设置：${this.garageEditEnabled ? 'ON' : 'OFF'}`)
+  }
+
+  toggleWarehouseEdit(): void {
+    this.warehouseEditEnabled = !this.warehouseEditEnabled
+    if (this.warehouseEditEnabled) {
+      this.obstacleEditEnabled = false
+      this.trafficLightEditEnabled = false
+      this.gateEditEnabled = false
+      this.specialRoadEditEnabled = false
+      this.garageEditEnabled = false
+      this.targetPickEnabled = false
+      this.mapTargetPendingSend = false
+    }
+    this.pushLog(`仓库设置：${this.warehouseEditEnabled ? 'ON' : 'OFF'}`)
   }
 
   toggleTargetPick(): void {
@@ -221,6 +249,7 @@ export class Page1UiStore {
       this.gateEditEnabled = false
       this.specialRoadEditEnabled = false
       this.garageEditEnabled = false
+      this.warehouseEditEnabled = false
       this.mapTargetPendingSend = false
     }
     this.pushLog(`目标点选：${this.targetPickEnabled ? 'ON' : 'OFF'}`)
@@ -319,6 +348,42 @@ export class Page1UiStore {
     // 全图最多一个车库：新设置直接覆盖旧设置
     this.garagePoints = [{ id: id, nodeId: id, xNorm: n.xNorm, yNorm: n.yNorm }]
     this.pushLog(`车库设置：node=${id}`)
+    return true
+  }
+
+  clearWarehousePoints(): void {
+    if (this.warehousePoints.length <= 0) return
+    this.warehousePoints = []
+    this.pushLog('仓库清空')
+  }
+
+  upsertWarehousePoint(nodeId: string): boolean {
+    const id: string = nodeId.trim().toUpperCase()
+    const n: GridNode | undefined = this.findGridNodeById(id)
+    if (!n) return false
+
+    let existed: boolean = false
+    const next: Array<MapWarehousePoint> = []
+    for (let i: number = 0; i < this.warehousePoints.length; i++) {
+      const one: MapWarehousePoint = this.warehousePoints[i]
+      if (one.nodeId === id) {
+        next.push({ id: id, nodeId: id, xNorm: n.xNorm, yNorm: n.yNorm })
+        existed = true
+      } else {
+        next.push(one)
+      }
+    }
+
+    if (!existed) {
+      if (this.warehousePoints.length >= 7) {
+        this.pushLog('仓库设置失败：最多7个')
+        return false
+      }
+      next.push({ id: id, nodeId: id, xNorm: n.xNorm, yNorm: n.yNorm })
+    }
+
+    this.warehousePoints = next
+    this.pushLog(`仓库设置：node=${id} (${this.warehousePoints.length}/7)`)
     return true
   }
 
@@ -934,14 +999,16 @@ export class Page1UiStore {
     this.gatePoints = []
     this.specialRoadPoints = []
     this.garagePoints = []
+    this.warehousePoints = []
     this.obstacleEditEnabled = false
     this.trafficLightEditEnabled = false
     this.gateEditEnabled = false
     this.specialRoadEditEnabled = false
     this.garageEditEnabled = false
+    this.warehouseEditEnabled = false
     this.targetPickEnabled = false
     this.mapTargetPendingSend = false
-    this.pushLog('清图：地图配置已清空（障碍/红绿灯/道闸/特殊路段）')
+    this.pushLog('清图：地图配置已清空（障碍/红绿灯/道闸/特殊路段/车库/仓库）')
   }
 
   /**
@@ -963,25 +1030,25 @@ export class Page1UiStore {
         const th: number = this.snapThresholdForNode(nearest)
         const th2: number = th * th
         if (d2 <= th2) {
-          this.carX = nearest.xNorm
-          this.carY = nearest.yNorm
           this.currentSnapNodeId = nearest.id
           this.pushLog(`地图点选：吸附到节点 ${nearest.id}`)
 
           const headingDeg: number = this.preferredHeadingForPlacement(nearest.yNorm, this.pose.headingDeg)
-          this.applyManualPlacementPose(nearest.xNorm, nearest.yNorm, headingDeg)
+          this.slideCarToPose(nearest.xNorm, nearest.yNorm, headingDeg, this.carSlideDurationMs, (): void => {
+            this.applyManualPlacementPose(nearest.xNorm, nearest.yNorm, headingDeg)
+          })
           return
         }
       }
     }
 
-    this.carX = nx
-    this.carY = ny
     this.currentSnapNodeId = ''
-    this.pushLog(`地图点选：自由移动 car=(${this.carX.toFixed(3)},${this.carY.toFixed(3)})`)
+    this.pushLog(`地图点选：自由移动 car=(${nx.toFixed(3)},${ny.toFixed(3)})`)
 
-    const headingDeg: number = this.preferredHeadingForPlacement(this.carY, this.pose.headingDeg)
-    this.applyManualPlacementPose(this.carX, this.carY, headingDeg)
+    const headingDeg: number = this.preferredHeadingForPlacement(ny, this.pose.headingDeg)
+    this.slideCarToPose(nx, ny, headingDeg, this.carSlideDurationMs, (): void => {
+      this.applyManualPlacementPose(nx, ny, headingDeg)
+    })
   }
 
   carDotPos(): XYPos {
@@ -1122,15 +1189,108 @@ export class Page1UiStore {
     this.telemetry = t
   }
 
+  private carAnimTimerId: number = -1
+  private carAnimFromX: number = 0
+  private carAnimFromY: number = 0
+  private carAnimToX: number = 0
+  private carAnimToY: number = 0
+  private carAnimStartTime: number = 0
+  private carAnimFromHeading: number = 0
+  private carAnimToHeading: number = 0
+  private readonly carSlideDurationMs: number = 400
+  private readonly carSlideFrameMs: number = 16
+
+  private stopCarSlide(): void {
+    if (this.carAnimTimerId >= 0) {
+      clearInterval(this.carAnimTimerId)
+      this.carAnimTimerId = -1
+    }
+  }
+
+  private setVisualPoseState(xNorm: number, yNorm: number, headingDeg: number): void {
+    const sx: number = this.clamp01(xNorm)
+    const sy: number = this.clamp01(yNorm)
+    const sh: number = this.normHeadingDeg(headingDeg)
+    this.carX = sx
+    this.carY = sy
+    this.pose = {
+      ...this.pose,
+      tsMs: Date.now(),
+      xNorm: sx,
+      yNorm: sy,
+      headingDeg: sh
+    }
+  }
+
+  private slideCarToPose(
+    toXNorm: number,
+    toYNorm: number,
+    toHeadingDeg: number,
+    durationMs: number,
+    onDone?: () => void
+  ): void {
+    const targetX: number = this.clamp01(toXNorm)
+    const targetY: number = this.clamp01(toYNorm)
+    const targetHeading: number = this.normHeadingDeg(toHeadingDeg)
+    const fromX: number = this.carX
+    const fromY: number = this.carY
+    const fromHeading: number = this.normHeadingDeg(this.pose.headingDeg)
+
+    this.stopCarSlide()
+
+    this.carAnimFromX = fromX
+    this.carAnimFromY = fromY
+    this.carAnimToX = targetX
+    this.carAnimToY = targetY
+    this.carAnimFromHeading = fromHeading
+    this.carAnimToHeading = targetHeading
+    this.carAnimStartTime = Date.now()
+
+    const safeDurationMs: number = Math.max(60, Math.round(durationMs))
+    if (safeDurationMs <= 60) {
+      this.setVisualPoseState(targetX, targetY, targetHeading)
+      if (onDone) onDone()
+      return
+    }
+
+    this.carAnimTimerId = setInterval((): void => {
+      const elapsed: number = Date.now() - this.carAnimStartTime
+      if (elapsed >= safeDurationMs) {
+        this.setVisualPoseState(this.carAnimToX, this.carAnimToY, this.carAnimToHeading)
+        this.stopCarSlide()
+        if (onDone) onDone()
+        return
+      }
+
+      const t: number = elapsed / safeDurationMs
+      const easeT: number = this.easeInOutSine(t)
+      const cx: number = this.carAnimFromX + (this.carAnimToX - this.carAnimFromX) * easeT
+      const cy: number = this.carAnimFromY + (this.carAnimToY - this.carAnimFromY) * easeT
+      const ch: number = this.lerpHeading(this.carAnimFromHeading, this.carAnimToHeading, easeT)
+      this.setVisualPoseState(cx, cy, ch)
+    }, this.carSlideFrameMs) as number
+  }
+
   updateCurrentNodePose(nodeId: string, headingDeg: number): void {
     const id: string = (nodeId || '').trim().toUpperCase()
     if (id.length !== 2) return
     const n: GridNode | undefined = this.findGridNodeById(id)
     if (!n) return
     this.currentSnapNodeId = id
-    this.carX = n.xNorm
-    this.carY = n.yNorm
-    this.applyManualPlacementPose(n.xNorm, n.yNorm, headingDeg)
+    this.slideCarToPose(n.xNorm, n.yNorm, headingDeg, this.carSlideDurationMs, (): void => {
+      this.applyManualPlacementPose(n.xNorm, n.yNorm, headingDeg)
+    })
+  }
+
+  private lerpHeading(from: number, to: number, t: number): number {
+    let diff = to - from
+    if (diff > 180) diff -= 360
+    if (diff < -180) diff += 360
+    return from + diff * t
+  }
+
+  private easeInOutSine(t: number): number {
+    return -(Math.cos(Math.PI * t) - 1) / 2
   }
 
   // ===== 状态栏显示（与底层遥测解耦）=====

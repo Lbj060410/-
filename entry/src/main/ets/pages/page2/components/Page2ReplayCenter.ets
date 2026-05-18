@@ -1,4 +1,5 @@
 import { Page1Theme } from '../../page1/Page1Theme'
+import { PAGE2_BUTTON, PAGE2_MODAL, PAGE2_REPLAY, page2BtnBg, page2BtnBorder, page2BtnFg } from '../Page2Styles'
 import {
   page2ReplayService,
   Page2ReplayService,
@@ -68,12 +69,13 @@ export struct Page2ReplayCenter {
       Blank()
       if (this.inObstacleDetail() || this.inGalleryDetail()) {
         Button('Close Detail')
-          .height(30)
+          .height(PAGE2_MODAL.CLOSE_HEIGHT)
           .padding({ left: 12, right: 12 })
-          .borderRadius(12)
-          .backgroundColor('#EEF3FF')
-          .fontColor(Page1Theme.PRIMARY)
-          .fontSize(12)
+          .borderRadius(PAGE2_MODAL.CLOSE_RADIUS)
+          .backgroundColor(PAGE2_MODAL.CLOSE_BG)
+          .fontColor(PAGE2_MODAL.CLOSE_FG)
+          .fontSize(PAGE2_MODAL.CLOSE_FONT_SIZE)
+          .border({ width: 1, color: PAGE2_MODAL.CLOSE_BORDER })
           .onClick((): void => {
             this.stopPlaying()
             this.obstacleDetailId = ''
@@ -81,13 +83,14 @@ export struct Page2ReplayCenter {
           })
       }
       Button('Close')
-        .height(30)
+        .height(PAGE2_MODAL.CLOSE_HEIGHT)
         .padding({ left: 12, right: 12 })
-        .borderRadius(12)
-        .backgroundColor('#F1F5F9')
-        .fontColor(Page1Theme.TEXT_SECONDARY)
-        .fontSize(12)
+        .borderRadius(PAGE2_MODAL.CLOSE_RADIUS)
+        .backgroundColor(PAGE2_MODAL.CLOSE_BG)
+        .fontColor(PAGE2_MODAL.CLOSE_FG)
+        .fontSize(PAGE2_MODAL.CLOSE_FONT_SIZE)
         .margin({ left: 8 })
+        .border({ width: 1, color: PAGE2_MODAL.CLOSE_BORDER })
         .onClick((): void => {
           this.stopPlaying()
           this.onClose()
@@ -110,7 +113,8 @@ export struct Page2ReplayCenter {
         .height(320)
         .justifyContent(FlexAlign.Center)
         .borderRadius(10)
-        .backgroundColor('#F8FAFC')
+        .backgroundColor(PAGE2_REPLAY.EMPTY_BG)
+        .border({ width: 1, color: PAGE2_REPLAY.CARD_BORDER })
       } else {
         Scroll() {
           Grid() {
@@ -119,11 +123,12 @@ export struct Page2ReplayCenter {
                 Button(name)
                   .width('100%')
                   .height('100%')
-                  .borderRadius(10)
-                  .backgroundColor(this.activeButtonIndex === idx ? '#DBEAFE' : '#FFFFFF')
-                  .fontColor(this.activeButtonIndex === idx ? '#1D4ED8' : Page1Theme.TEXT_PRIMARY)
+                  .borderRadius(PAGE2_BUTTON.RADIUS)
+                  .backgroundColor(page2BtnBg(this.activeButtonIndex === idx))
+                  .fontColor(page2BtnFg(this.activeButtonIndex === idx))
                   .fontSize(11)
-                  .border({ width: 1, color: this.activeButtonIndex === idx ? '#3B82F6' : '#E2E8F0' })
+                  .fontWeight(FontWeight.Bold)
+                  .border({ width: 1, color: page2BtnBorder(this.activeButtonIndex === idx) })
                   .onClick((): void => {
                     this.activeButtonIndex = idx
                     this.openDetailByIndex(idx)
@@ -163,12 +168,12 @@ export struct Page2ReplayCenter {
     Button(text)
       .layoutWeight(1)
       .height(36)
-      .borderRadius(10)
-      .backgroundColor(active ? '#2563EB' : '#FFFFFF')
-      .fontColor(active ? '#FFFFFF' : '#111111')
-      .fontSize(13)
+      .borderRadius(PAGE2_BUTTON.RADIUS)
+      .backgroundColor(page2BtnBg(active))
+      .fontColor(page2BtnFg(active))
+      .fontSize(PAGE2_BUTTON.FONT_SIZE_MD)
       .fontWeight(FontWeight.Bold)
-      .border({ width: 1, color: active ? '#1D4ED8' : '#E2E8F0' })
+      .border({ width: 1, color: page2BtnBorder(active) })
       .onClick(onClick)
   }
 
@@ -203,7 +208,8 @@ export struct Page2ReplayCenter {
       .height(520)
       .borderRadius(10)
       .clip(true)
-      .backgroundColor('#0B1220')
+      .backgroundColor(PAGE2_REPLAY.DETAIL_BG)
+      .border({ width: 1, color: PAGE2_REPLAY.DETAIL_BORDER })
 
       Column({ space: 8 }) {
         this.detailLine('Time', this.formatTime(item.tsMs))
@@ -230,15 +236,16 @@ export struct Page2ReplayCenter {
             .width('100%')
             .height(180)
             .objectFit(ImageFit.Contain)
-            .backgroundColor('#F8FAFC')
+            .backgroundColor(PAGE2_REPLAY.EMPTY_BG)
             .borderRadius(8)
         }
       }
       .width('35%')
       .height(520)
       .padding(8)
-      .backgroundColor('#FFFFFF')
       .borderRadius(10)
+      .backgroundColor(PAGE2_REPLAY.CARD_BG)
+      .border({ width: 1, color: PAGE2_REPLAY.CARD_BORDER })
     }
     .width('100%')
   }
@@ -264,7 +271,7 @@ export struct Page2ReplayCenter {
           .width(GALLERY_BOX_CANVAS_W)
           .height(GALLERY_BOX_CANVAS_H)
           .objectFit(ImageFit.Contain)
-          .backgroundColor('#F8FAFC')
+          .backgroundColor(PAGE2_REPLAY.EMPTY_BG)
           .borderRadius(8)
         Text('Box Overlay')
           .fontSize(12)
@@ -328,7 +335,7 @@ export struct Page2ReplayCenter {
       }
       .width(GALLERY_BOX_CANVAS_W)
       .height(GALLERY_BOX_CANVAS_H)
-      .backgroundColor('#F8FAFC')
+      .backgroundColor(PAGE2_REPLAY.EMPTY_BG)
       .borderRadius(8)
       .clip(true)
     }

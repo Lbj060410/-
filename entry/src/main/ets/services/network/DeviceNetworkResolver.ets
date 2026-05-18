@@ -10,6 +10,8 @@ import wifi from '@ohos.wifi'
 import {
   CAR_CAMERA_HTTP_PORT,
   CAR_CAMERA_IP,
+  CAR_CAMERA_PASS,
+  CAR_CAMERA_USER,
   CAR_DEVICE_IP,
   CAR_RTSP_PORT,
   defaultCameraHost,
@@ -56,7 +58,9 @@ export class DeviceNetworkResolver {
   }
 
   buildRtspUrl(ip: string): string {
-    return ip.length > 0 ? `rtsp://${ip}:${CAR_RTSP_PORT}/stream` : defaultRtspUrl()
+    return ip.length > 0
+      ? `rtsp://${CAR_CAMERA_USER}:${CAR_CAMERA_PASS}@${ip}:${CAR_RTSP_PORT}/tcp/av0_0`
+      : defaultRtspUrl()
   }
 
   private ipv4NumberToString(ipNum: number): string {
@@ -96,4 +100,3 @@ export class DeviceNetworkResolver {
 }
 
 export const deviceNetworkResolver: DeviceNetworkResolver = new DeviceNetworkResolver()
-

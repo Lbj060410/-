@@ -1,6 +1,10 @@
-﻿// @ts-nocheck
+﻿
 import { CarTcpService } from './CarTcpService'
 import { commStore } from '../../state/CommStore'
+import hilog from '@ohos.hilog'
+
+const PROTOCOL_LOG_DOMAIN = 0xFF01
+const PROTOCOL_LOG_TAG = 'CarProtocol'
 
 export enum CarSendMode {
   DRY_RUN = 0,
@@ -253,7 +257,7 @@ export class CarProtocolService {
     return await this.Send0C(0x0A, undefined, false)
   }
   //继续任务
-  async pauseTask(): Promise<number> {
+  async resumeTask(): Promise<number> {
     return await this.Send0C(0x0B, undefined, false)
   }
 
@@ -311,6 +315,18 @@ export class CarProtocolService {
   async clearTrafficLightNode(): Promise<number> {
     return await this.Send0C(0x0F, undefined, false)
   }
+  //设置仓库点位
+  async setWarehouseNode(nodeId: string): Promise<number> {
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return 0
+    const ext: Uint8Array = new Uint8Array([id.charCodeAt(0) & 0xFF, id.charCodeAt(1) & 0xFF])
+    return await this.Send0C(0x10, ext, true)
+  }
+  //清除仓库点位
+  async clearWarehouseNode(): Promise<number> {
+    return await this.Send0C(0x11, undefined, false)
+  }
+
   // 一键清图
   async  resetNetworkMap(): Promise<number> {
     return await this.Send0C(0xF0, undefined, false)
@@ -403,6 +419,9 @@ export class CarProtocolService {
     const p = this.pending.get(seq)
     if (!p) return
     if (p.retries >= this.ackMaxRetries) {
+      const warnText: string = `[WARN][CarProtocol] ACK超时丢帧 seq=${seq} tag=${p.tag} retries=${p.retries} reason=达到最大重试次数(${this.ackMaxRetries})`
+      hilog.warn(PROTOCOL_LOG_DOMAIN, PROTOCOL_LOG_TAG, '%{public}s', warnText)
+      commStore.bumpAckDrop()
       this.clearPendingBySeq(seq)
       return
     }

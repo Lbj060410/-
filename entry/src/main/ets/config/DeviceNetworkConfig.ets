@@ -7,8 +7,9 @@
  */
 export const CAR_DEVICE_IP: string = '192.168.156.254'
 export const CAR_CAMERA_IP: string = '192.168.156.90'
+// RTSP 摄像头与 HTTP 摄像头为同一台设备，统一使用上方 IP
 export const CAR_CAMERA_HTTP_PORT: number = 81
-export const CAR_RTSP_PORT: number = 554
+export const CAR_RTSP_PORT: number = 10554
 export const CAR_TCP_PORT: number = 60000
 export const CAR_CAMERA_USER: string = 'admin'
 export const CAR_CAMERA_PASS: string = '888888'
@@ -20,8 +21,7 @@ export const CAR_CAMERA_PASS: string = '888888'
 export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.101'
 export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '172.18.65.43'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
-export const OPENCLAW_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'  // 使用具备 operator.read/operator.write 的令牌
-// 可选：放置具备 operator.read/operator.write 的节点令牌作为回退，避免 scope 不匹配导致能力受限。
+export const OPENCLAW_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
 export const OPENCLAW_CHAT_MODEL: string = 'deepseek/deepseek-chat'
 export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 12000
@@ -53,7 +53,12 @@ export function defaultCameraHost(): string {
 }
 
 export function defaultRtspUrl(): string {
-  return `rtsp://${CAR_CAMERA_IP}:${CAR_RTSP_PORT}/stream`
+  const user: string = CAR_CAMERA_USER.trim()
+  const pass: string = CAR_CAMERA_PASS.trim()
+  if (user.length > 0 && pass.length > 0) {
+    return `rtsp://${user}:${pass}@${CAR_CAMERA_IP}:${CAR_RTSP_PORT}/tcp/av0_0`
+  }
+  return `rtsp://${CAR_CAMERA_IP}:${CAR_RTSP_PORT}/tcp/av0_0`
 }
 
 export function buildCameraSnapshotUrl(cameraHost: string, user: string = 'admin', pass: string = ''): string {

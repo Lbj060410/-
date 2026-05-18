@@ -8,6 +8,7 @@
 import { CameraPtzService, PtzResult } from '../../../services/control/CameraPtzService'
 import { videoStore } from '../../../state/VideoStore'
 import { Page1Theme } from '../../page1/Page1Theme'
+import { PAGE2_BUTTON, page2BtnBg, page2BtnBorder, page2BtnFg } from '../Page2Styles'
 
 @Component
 export struct PtzControlPanel {
@@ -86,16 +87,15 @@ export struct PtzControlPanel {
 
   @Builder
   private ptzBtn(label: string, action: () => void): void {
-    Button() {
-      Text(label).fontSize(20).fontWeight(FontWeight.Bold).fontColor(Page1Theme.TEXT_SECONDARY)
-    }
+    Button(label)
     .width('100%')
     .height('100%')
-    .borderRadius(12)
-    .backgroundColor(Page1Theme.CARD)
-    .border({ width: 1, color: '#E5E7EB' })
-    .shadow({ radius: 4, color: '#0000000A', offsetX: 0, offsetY: 2 })
+    .borderRadius(PAGE2_BUTTON.RADIUS)
+    .backgroundColor(page2BtnBg(false))
+    .fontColor(page2BtnFg(false))
+    .fontSize(PAGE2_BUTTON.FONT_SIZE_MD)
+    .fontWeight(FontWeight.Bold)
+    .border({ width: 1, color: page2BtnBorder(false) })
     .onClick(action)
   }
 }
-

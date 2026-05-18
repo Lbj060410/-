@@ -237,7 +237,7 @@ export class CarTcpService {
     if (this.state === CarConnectionState.CONNECTED ||
       this.state === CarConnectionState.CONNECTING ||
       this.state === CarConnectionState.RECONNECTING) {
-      this.logError(TAG_CONNECTSS, '已连接或连接中，无需重复调用')
+      this.logInfo(TAG_CONNECTSS, '已连接或连接中，无需重复调用')
       return
     }
 
@@ -246,7 +246,7 @@ export class CarTcpService {
     this.reconnectCount = 0
     this.lastErrorText = ''
 
-    this.logError(TAG_CONNECTSS, `连接`)
+    this.logInfo(TAG_CONNECTSS, `连接`)
     await this.connectInternal()
   }
 
@@ -261,7 +261,7 @@ export class CarTcpService {
     this.manualDisconnect = false
     this.stopHeartbeat()
     this.updateState(CarConnectionState.CONNECTING, `连接中... ${this.currentIp}:${this.currentPort}`)
-    this.logError(TAG_CONNECTSS, `开始连接，目标IP：${this.currentIp}:${this.currentPort}`)
+    this.logInfo(TAG_CONNECTSS, `开始连接，目标IP：${this.currentIp}:${this.currentPort}`)
 
     await this.disposeSocket()
 
@@ -280,7 +280,7 @@ export class CarTcpService {
       // 连接成功后立即启动心跳与可选参数应用
       this.reconnectCount = 0
       this.updateState(CarConnectionState.CONNECTED, `连接成功 ${this.currentIp}:${this.currentPort}`)
-      this.logError(TAG_CONNECTSS, '连接成功')
+      this.logInfo(TAG_CONNECTSS, '连接成功')
       void this.applyExtraOptions(tcp)
       this.startHeartbeat()
     })
@@ -291,19 +291,19 @@ export class CarTcpService {
         return
       }
 
-      this.logError(TAG_CONNECTSS, '连接关闭事件触发')
+      this.logInfo(TAG_CONNECTSS, '连接关闭事件触发')
       this.stopHeartbeat()
       void this.disposeSocket(tcp)
 
       // 被动断开：触发重连；主动断开：只回到 IDLE
       if (this.manualDisconnect) {
         this.updateState(CarConnectionState.IDLE, '已断开')
-        this.logError(TAG_CONNECTSS, '主动断开连接')
+        this.logInfo(TAG_CONNECTSS, '主动断开连接')
         return
       }
 
       this.updateState(CarConnectionState.IDLE, '连接关闭')
-      this.logError(TAG_CONNECTSS, '服务器关闭连接或连接已断开，准备重连')
+      this.logInfo(TAG_CONNECTSS, '服务器关闭连接或连接已断开，准备重连')
       this.tryReconnect()
     })
 
@@ -317,7 +317,7 @@ export class CarTcpService {
 
       if (this.manualDisconnect) {
         this.updateState(CarConnectionState.IDLE, '已断开')
-        this.logError(TAG_CONNECTSS, '主动断开后的 error 事件，忽略重连')
+        this.logInfo(TAG_CONNECTSS, '主动断开后的 error 事件，忽略重连')
         return
       }
 
@@ -342,7 +342,7 @@ export class CarTcpService {
         return
       }
 
-      this.logError(TAG_CONNECTSS, '进入 message 回调，开始持续读取数据')
+      this.logInfo(TAG_CONNECTSS, '进入 message 回调，开始持续读取数据')
       this.logRxFrame(data)
 
       // 仅负责把原始字节上抛，不在 TCP 层做协议解析
@@ -399,12 +399,12 @@ export class CarTcpService {
   async disconnect(): Promise<void> {
     // 标记为主动断连，防止 close/error 触发自动重连
     this.manualDisconnect = true
-    this.logError(TAG_CONNECTSS, 'disconnect 主动断开开始')
+    this.logInfo(TAG_CONNECTSS, 'disconnect 主动断开开始')
     this.stopHeartbeat()
     this.cancelReconnect()
     await this.disposeSocket()
     this.updateState(CarConnectionState.IDLE, '已断开')
-    this.logError(TAG_CONNECTSS, 'disconnect 主动断开完成')
+    this.logInfo(TAG_CONNECTSS, 'disconnect 主动断开完成')
   }
 
   /**
@@ -508,7 +508,7 @@ export class CarTcpService {
     const delay: number = this.computeReconnectDelayMs(this.reconnectCount)
 
     this.updateState(CarConnectionState.RECONNECTING, `重连中(${this.reconnectCount})`)
-    this.logError(TAG_CONNECTSS, `第${this.reconnectCount}次重连（指数退避，延迟${delay}ms），目标IP：${this.currentIp}`)
+    this.logInfo(TAG_CONNECTSS, `第${this.reconnectCount}次重连（指数退避，延迟${delay}ms），目标IP：${this.currentIp}`)
 
     this.reconnectTimerId = setTimeout(() => {
       this.reconnectTimerId = -1
@@ -570,8 +570,9 @@ export class CarTcpService {
         OOBInline: true,
         TCPNoDelay: true,
         socketLinger: { on: true, linger: 10 },
-        receiveBufferSize: 1000,
-        sendBufferSize: 1000,
+        // 8192 bytes: 支持连续多帧突发，避免 1000 bytes 默认值导致缓冲阻塞
+        receiveBufferSize: 8192,
+        sendBufferSize: 8192,
         reuseAddress: true,
         // socketTimeout:
         // - 调大：弱网容忍更强，但失败感知更慢
@@ -599,7 +600,7 @@ export class CarTcpService {
 
     try {
       await target.close()
-      this.logError(TAG_SENDAMSTER, '连接资源已彻底释放')
+      this.logInfo(TAG_SENDAMSTER, '连接资源已彻底释放')
     } catch (e) {
       const errText: string = this.formatSocketError(e, '关闭资源失败')
       this.logError(TAG_SENDAMSTER, errText)

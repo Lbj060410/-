@@ -10,6 +10,7 @@ import resourceManager from '@ohos.resourceManager'
 import image from '@ohos.multimedia.image'
 import picker from '@ohos.file.picker'
 import fs from '@ohos.file.fs'
+import hilog from '@ohos.hilog'
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
 import type common from '@ohos.app.ability.common'
 import { Page1Theme } from '../page1/Page1Theme'
@@ -25,10 +26,14 @@ import {
   RoiNorm
 } from '../../services/recognition/RecognitionTask'
 import { page2Coordinator, Page2Coordinator } from './Page2Coordinator'
+import { PAGE2_BUTTON, PAGE2_MODAL, page2BtnBg, page2BtnBorder, page2BtnFg } from './Page2Styles'
 import { PtzControlPanel } from './components/PtzControlPanel'
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
 import { Page2ReplayCenter } from './components/Page2ReplayCenter'
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
+
+const LOG_DOMAIN: number = 0xFF23
+const LOG_TAG: string = 'Page2View'
 
 interface OverlayBoxViewModel {
   key: string
@@ -55,6 +60,7 @@ export struct Page2View {
   @State private showDiag: boolean = false
   @State private showReplay: boolean = false
   @State private galleryOriginalUri: string = ''
+  @State private currentDisplayMode: DisplayMode = DisplayMode.HTTP
 
   // 视频显示区域的实际尺寸，由 onAreaChange 更新，用于识别框映射到 UI 坐标
   @State private videoAreaWidth: number = 0
@@ -125,11 +131,12 @@ export struct Page2View {
               Blank()
 
               Button('关闭')
-                .height(32)
+                .height(PAGE2_MODAL.CLOSE_HEIGHT)
                 .padding({ left: 16, right: 16 })
-                .borderRadius(16)
-                .backgroundColor('#F1F5F9')
-                .fontColor(Page1Theme.TEXT_SECONDARY)
+                .borderRadius(PAGE2_MODAL.CLOSE_RADIUS)
+                .backgroundColor(PAGE2_MODAL.CLOSE_BG)
+                .fontColor(PAGE2_MODAL.CLOSE_FG)
+                .fontSize(PAGE2_MODAL.CLOSE_FONT_SIZE)
                 .onClick((): void => {
                   this.showDiag = false
                 })
@@ -187,14 +194,29 @@ export struct Page2View {
     Column() {
       Stack() {
         Column().width('100%').height('100%').backgroundColor('#000000')
+        if (this.videoStore.displayMode === DisplayMode.RTSP) {
+          XComponent({
+            id: 'page2_rtsp_surface',
+            type: 'surface',
+            controller: this.xCtrl
+          })
+            .width('100%')
+            .height('100%')
+            .onLoad((): void => {
+              const sid: string = this.xCtrl.getXComponentSurfaceId()
+              if (sid.length > 0) {
+                this.c.onVideoSurfaceReady(sid)
+              }
+            })
+        }
 
-        if (this.videoStore.livePixelMap) {
+        if (this.videoStore.displayMode !== DisplayMode.RTSP && this.videoStore.livePixelMap) {
           Image(this.videoStore.livePixelMap)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Contain)
             .backgroundColor('#00000000')
-        } else {
+        } else if (this.videoStore.displayMode !== DisplayMode.RTSP) {
           Column({ space: 8 }) {
             LoadingProgress()
               .width(40)
@@ -280,45 +302,61 @@ export struct Page2View {
       .width('100%')
       .padding({ top: 8, bottom: 8 })
 
-      // 第2行：切换识别、复盘、重启
+      // 第2行：识别、切换视频源、复盘、重启
       Row({ space: 8 }) {
         Button(this.videoStore.recognitionEnabled ? '识别：开' : '识别：关')
-          .layoutWeight(2)
+          .layoutWeight(1)
           .height(40)
-          .borderRadius(6)
-          .backgroundColor(this.videoStore.recognitionEnabled ? '#ECFDF5' : '#F8FAFC')
-          .fontColor(this.videoStore.recognitionEnabled ? '#059669' : Page1Theme.TEXT_SECONDARY)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(this.videoStore.recognitionEnabled))
+          .fontColor(page2BtnFg(this.videoStore.recognitionEnabled))
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.videoStore.recognitionEnabled ? '#D1FAE5' : 'transparent' })
+          .border({ width: 1, color: page2BtnBorder(this.videoStore.recognitionEnabled) })
           .onClick((): void => {
             this.videoStore.setRecognitionEnabled(!this.videoStore.recognitionEnabled)
             this.videoStore.setStatus(`识别${this.videoStore.recognitionEnabled ? '开启' : '关闭'}`)
           })
 
-        Button('复盘')
-          .layoutWeight(1.5)
+        Button(this.currentDisplayMode === DisplayMode.RTSP ? 'RTSP' : 'HTTP')
+          .layoutWeight(1)
           .height(40)
-          .borderRadius(6)
-          .backgroundColor('#FFFFFF')
-          .fontColor(Page1Theme.TEXT_SECONDARY)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(this.currentDisplayMode === DisplayMode.RTSP))
+          .fontColor(page2BtnFg(this.currentDisplayMode === DisplayMode.RTSP))
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#E2E8F0' })
-          .shadow({ radius: 4, color: '#00000005', offsetX: 0, offsetY: 1 })
+          .border({ width: 1, color: page2BtnBorder(this.currentDisplayMode === DisplayMode.RTSP) })
+          .onClick((): void => {
+            const next: DisplayMode = this.currentDisplayMode === DisplayMode.RTSP
+              ? DisplayMode.HTTP
+              : DisplayMode.RTSP
+            this.currentDisplayMode = next
+            void this.c.switchVideoLink(next)
+          })
+
+        Button('复盘')
+          .layoutWeight(1)
+          .height(40)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(false))
+          .fontColor(page2BtnFg(false))
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .border({ width: 1, color: page2BtnBorder(false) })
           .onClick((): void => {
             this.showReplay = true
           })
 
         Button('重启')
-          .layoutWeight(1.5)
+          .layoutWeight(1)
           .height(40)
-          .borderRadius(6)
-          .backgroundColor('#FEF2F2')
-          .fontColor('#EF4444')
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(false))
+          .fontColor(page2BtnFg(false))
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#FEE2E2' })
+          .border({ width: 1, color: page2BtnBorder(false) })
           .onClick((): void => {
             this.c.stop()
             void this.c.start()
@@ -330,39 +368,25 @@ export struct Page2View {
         Button('选图')
           .layoutWeight(1)
           .height(36)
-          .borderRadius(6)
-          .backgroundColor('#FFFFFF')
-          .fontColor(Page1Theme.PRIMARY)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(false))
+          .fontColor(page2BtnFg(false))
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#DBEAFE' })
+          .border({ width: 1, color: page2BtnBorder(false) })
           .onClick((): void => {
             void this.pickImageFromGallery()
-          })
-
-        Button('切换源')
-          .layoutWeight(1)
-          .height(36)
-          .borderRadius(6)
-          .backgroundColor('#FFFFFF')
-          .fontColor(Page1Theme.TEXT_SECONDARY)
-          .fontSize(12)
-          .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#E2E8F0' })
-          .onClick((): void => {
-            this.videoStore.setDisplayMode(DisplayMode.HTTP, 'manual switch')
-            this.videoStore.setStatus('当前设备仅启用 HTTP 预览')
           })
 
         Button(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '开障' : '关障')
           .layoutWeight(1)
           .height(36)
-          .borderRadius(6)
-          .backgroundColor(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#EFF6FF' : '#F8FAFC')
-          .fontColor(this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#1D4ED8' : Page1Theme.TEXT_SECONDARY)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(this.videoStore.page2Yolov26BarrierExperimentalEnabled))
+          .fontColor(page2BtnFg(this.videoStore.page2Yolov26BarrierExperimentalEnabled))
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.videoStore.page2Yolov26BarrierExperimentalEnabled ? '#BFDBFE' : '#E2E8F0' })
+          .border({ width: 1, color: page2BtnBorder(this.videoStore.page2Yolov26BarrierExperimentalEnabled) })
           .onClick((): void => {
             this.videoStore.setPage2Yolov26BarrierEnabled(!this.videoStore.page2Yolov26BarrierExperimentalEnabled)
             this.c.onModelSwitchChanged()
@@ -371,12 +395,12 @@ export struct Page2View {
         Button(this.videoStore.page2TrafficEnabled ? '灯开' : '灯关')
           .layoutWeight(1)
           .height(36)
-          .borderRadius(6)
-          .backgroundColor(this.videoStore.page2TrafficEnabled ? '#ECFDF5' : '#F8FAFC')
-          .fontColor(this.videoStore.page2TrafficEnabled ? '#059669' : Page1Theme.TEXT_SECONDARY)
+          .borderRadius(PAGE2_BUTTON.RADIUS)
+          .backgroundColor(page2BtnBg(this.videoStore.page2TrafficEnabled))
+          .fontColor(page2BtnFg(this.videoStore.page2TrafficEnabled))
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.videoStore.page2TrafficEnabled ? '#BBF7D0' : '#E2E8F0' })
+          .border({ width: 1, color: page2BtnBorder(this.videoStore.page2TrafficEnabled) })
           .onClick((): void => {
             const nextEnabled: boolean = !this.videoStore.page2TrafficEnabled
             this.videoStore.setPage2TrafficEnabled(nextEnabled)
@@ -401,13 +425,12 @@ export struct Page2View {
     Button(label)
       .layoutWeight(1)
       .height(48)
-      .borderRadius(6)
-      .backgroundColor('#FFFFFF')
-      .fontColor(Page1Theme.TEXT_PRIMARY)
-      .fontSize(14)
+      .borderRadius(PAGE2_BUTTON.RADIUS)
+      .backgroundColor(page2BtnBg(false))
+      .fontColor(page2BtnFg(false))
+      .fontSize(PAGE2_BUTTON.FONT_SIZE_MD)
       .fontWeight(FontWeight.Bold)
-      .border({ width: 1, color: '#E2E8F0' })
-      .shadow({ radius: 4, color: '#00000005', offsetX: 0, offsetY: 1 })
+      .border({ width: 1, color: page2BtnBorder(false) })
       .onClick(action)
   }
 
@@ -600,7 +623,8 @@ export struct Page2View {
         .width(48)
         .height(24)
         .borderRadius(12)
-        .backgroundColor(this.recogStore.recogBusy ? '#059669' : '#E5E7EB')
+        .backgroundColor(page2BtnBg(this.recogStore.recogBusy))
+        .border({ width: 1, color: page2BtnBorder(this.recogStore.recogBusy) })
         .onClick((): void => {
           // toggle logic here if applicable, or visual only
         })
@@ -680,8 +704,8 @@ export struct Page2View {
       }
       .width('100%')
       .padding(16)
-      .backgroundColor('#F8FAFC')
-      .borderRadius(16)
+      .backgroundColor(Page1Theme.SURFACE)
+      .borderRadius(Page1Theme.RADIUS_L)
       .border({ width: 1, color: Page1Theme.BORDER })
     }
     .width('100%')
@@ -1116,10 +1140,10 @@ export struct Page2View {
         const inferPm: image.PixelMap | undefined = await this.createPixelMapFromJpeg(jpeg)
         if (!previewPm || !inferPm) {
           if (previewPm) {
-            try { previewPm.release() } catch (_) {}
+            try { previewPm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
           }
           if (inferPm) {
-            try { inferPm.release() } catch (_) {}
+            try { inferPm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
           }
           throw new Error('Capture decode failed')
         }
@@ -1130,7 +1154,7 @@ export struct Page2View {
       } finally {
         try {
           packer.release()
-        } catch (_) {}
+        } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     } catch (e) {
       const errMsg: string = e instanceof Error ? e.message : 'Capture failed'
@@ -1176,7 +1200,9 @@ export struct Page2View {
           RecognitionSubtype.YOLOV26BARRIER,
           true
         )
-      } catch (_) {
+      } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '选图本地解码路径失败，回退URI识别: %{public}s',
+          e instanceof Error ? e.message : String(e))
         taskId = this.c.enqueueSnapshotRecognitionFromGalleryUri(
           selectedUri,
           RecognitionSubtype.YOLOV26BARRIER
@@ -1200,7 +1226,9 @@ export struct Page2View {
       const result = await atManager.requestPermissionsFromUser(ctx, perms)
       if (!result || !Array.isArray(result.authResults) || result.authResults.length <= 0) return false
       return result.authResults[0] === 0
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '申请媒体读取权限失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return false
     }
   }
@@ -1228,12 +1256,21 @@ export struct Page2View {
     }
     pushUnique(raw)
     pushUnique(noQuery)
-    try { pushUnique(decodeURIComponent(raw)) } catch (_) {}
-    try { pushUnique(decodeURIComponent(noQuery)) } catch (_) {}
+    try { pushUnique(decodeURIComponent(raw)) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '解析URI解码候选失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
+    try { pushUnique(decodeURIComponent(noQuery)) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '解析无query URI解码候选失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
     if (noQuery.toLowerCase().startsWith('file://')) {
       const pathRaw: string = noQuery.substring('file://'.length)
       pushUnique(pathRaw)
-      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '解析file URI解码候选失败: %{public}s',
+          e instanceof Error ? e.message : String(e))
+      }
     }
 
     let firstErr: string = ''
@@ -1247,7 +1284,7 @@ export struct Page2View {
         if (firstErr.length <= 0) firstErr = this.errorToText(e)
       } finally {
         if (src) {
-          try { src.release() } catch (_) {}
+          try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
         }
       }
     }
@@ -1265,14 +1302,16 @@ export struct Page2View {
       src = image.createImageSource(f.fd)
       if (!src) return undefined
       return await src.createPixelMap()
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '通过文件描述符解码图片失败 uri=%{public}s: %{public}s',
+        uri, e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
       if (src) {
-        try { src.release() } catch (_) {}
+        try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
@@ -1297,7 +1336,9 @@ export struct Page2View {
     try {
       const txt: string = JSON.stringify(e)
       return txt.length > 0 ? txt : 'unknown error'
-    } catch (_) {
+    } catch (err) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '序列化错误对象失败: %{public}s',
+        err instanceof Error ? err.message : String(err))
       return 'unknown error'
     }
   }
@@ -1309,13 +1350,17 @@ export struct Page2View {
         return await src.createPixelMap({
           desiredPixelFormat: image.PixelMapFormat.RGBA_8888
         } as Object)
-      } catch (_) {
+      } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '按RGBA_8888创建PixelMap失败，回退默认格式: %{public}s',
+          e instanceof Error ? e.message : String(e))
         return await src.createPixelMap()
       }
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '从JPEG创建PixelMap失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
-      try { src.release() } catch (_) {}
+      try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -1324,10 +1369,12 @@ export struct Page2View {
     try {
       const jpeg: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 92 })
       return await this.createPixelMapFromJpeg(jpeg)
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '克隆PixelMap失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
-      try { packer.release() } catch (_) {}
+      try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 

@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+﻿
 /**
  * 代码指南：
  * 文件：pages/page1/app/Page1Coordinator.ets
@@ -49,10 +49,10 @@ import {
   EdgeSide,
   NormPoint,
   P1C,
-  PendingAckMotion,
   SegmentPlanDecision,
   SegmentPoseMatch,
-  VisionLabelKind
+  VisionLabelKind,
+  IPage1CoordinatorOps
 } from './Page1CoordinatorDefs'
 import { Page1CoordinatorGridUtils } from './Page1CoordinatorGridUtils'
 import {
@@ -81,18 +81,9 @@ import {
   animateMapPoseTransition
 } from './Page1CoordinatorMapObstacleOps'
 import {
-  actionForHeadingTransition,
-  buildPathViaWaypoint,
-  canSendNextCommand,
-  followPathOnce,
-  isParkingInnerRowNode,
   normToCardinal,
-  peekNextActionAfterCurrentStep,
-  predictActionForPair,
-  predictedHeadingAfterAction,
   resolveStartNodeId,
   segmentHeadingDeg,
-  sendAutoActionWithTiming,
   syncLogicalHeadingWithCurrentState
 } from './Page1CoordinatorPathOps'
 import {
@@ -114,25 +105,16 @@ import {
 } from './Page1CoordinatorControlTcpOps'
 import {
   buildAutoActionFingerprint as buildAutoActionFingerprintOp,
-  canSendPathCommandNow as canSendPathCommandNowOp,
-  flushDrivingUltrasonicObstacleAfterAck as flushDrivingUltrasonicObstacleAfterAckOp,
   isMoveAction as isMoveActionOp,
   isPathMotionAction as isPathMotionActionOp,
   isTurnAction as isTurnActionOp,
-  markPathCommandSent as markPathCommandSentOp,
-  onPathAckFrame as onPathAckFrameOp,
   pathDotMotionTiming as pathDotMotionTimingOp,
   pathDotMotionTimingMs as pathDotMotionTimingMsOp,
   queueDrivingUltrasonicObstacle as queueDrivingUltrasonicObstacleOp,
   resetAutoActionDedupState as resetAutoActionDedupStateOp,
-  resetPathAckState as resetPathAckStateOp,
   resetRouteVoiceFlags as resetRouteVoiceFlagsOp,
   sendDriveActionDirect as sendDriveActionDirectOp,
-  shouldSkipDuplicateAutoAction as shouldSkipDuplicateAutoActionOp,
-  stageMotionWaitAckComplete as stageMotionWaitAckCompleteOp,
-  startMotionNow as startMotionNowOp,
-  startPendingAckMotionOnComplete as startPendingAckMotionOnCompleteOp,
-  waitForCurrentPathAckComplete as waitForCurrentPathAckCompleteOp
+  shouldSkipDuplicateAutoAction as shouldSkipDuplicateAutoActionOp
 } from './Page1CoordinatorDriveAckOps'
 import {
   maybeHandleMotionArrive as maybeHandleMotionArriveOp,
@@ -150,80 +132,60 @@ import hilog from '@ohos.hilog'
 
 const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 2500
 
-export class Page1Coordinator {
-  private store?: Page1UiStore
+export class Page1Coordinator implements IPage1CoordinatorOps {
+  store?: Page1UiStore
 
-  private readonly tcp: CarTcpService = new CarTcpService()
-  private readonly proto: CarProtocolService = new CarProtocolService()
-  private readonly timingRegistry: ActionTimingRegistry = new ActionTimingRegistry()
-  private readonly motionPlayer: VehicleMotionPlayer = new VehicleMotionPlayer(this.timingRegistry)
-  private readonly actionScheduler: VehicleActionScheduler = new VehicleActionScheduler()
+  readonly tcp: CarTcpService = new CarTcpService()
+  readonly proto: CarProtocolService = new CarProtocolService()
+  readonly timingRegistry: ActionTimingRegistry = new ActionTimingRegistry()
+  readonly motionPlayer: VehicleMotionPlayer = new VehicleMotionPlayer(this.timingRegistry)
+  readonly actionScheduler: VehicleActionScheduler = new VehicleActionScheduler()
   private readonly timerManager: TimerManager = new TimerManager()
 
   private connectDeferredTimerId: number = -1
-  private frameDestApplyTimerId: number = -1
-  private pendingFrameDestNodeId: string = ''
+  frameDestApplyTimerId: number = -1
+  pendingFrameDestNodeId: string = ''
 
-  private readonly rxDecoder: CarProtoStreamDecoder = new CarProtoStreamDecoder()
+  readonly rxDecoder: CarProtoStreamDecoder = new CarProtoStreamDecoder()
+  rawNoFrameLastLogAtMs: number = 0
 
-  private parkingInProgress: boolean = false
+  parkingInProgress: boolean = false
   private parkingSequenceToken: number = 0
-  private readonly parkingLock: object = {}
 
-  private pauseUntilMs: number = 0
-  private lastReplanAtMs: number = 0
-  private lastYoloTriggerAtMs: number = 0
-  private aheadVisionPending: boolean = false
-  private aheadVisionReadyAtMs: number = 0
-  private aheadVisionEdgeId: string = ''
-  private lastVisionLogAtMs: number = 0
+  pauseUntilMs: number = 0
+  lastReplanAtMs: number = 0
+  lastYoloTriggerAtMs: number = 0
+  aheadVisionPending: boolean = false
+  aheadVisionReadyAtMs: number = 0
+  aheadVisionEdgeId: string = ''
+  lastVisionLogAtMs: number = 0
 
 
   private manualGoToken: number = 0
   private manualGoActive: boolean = false
-  private manualGoLastSentAtMs: number = 0
+  manualGoLastSentAtMs: number = 0
 
-  private routeStartVoicePlayed: boolean = false
+  routeStartVoicePlayed: boolean = false
 
-  private logicalHeadingDeg: number = 0
-  private logicalHeadingInited: boolean = false
+  logicalHeadingDeg: number = 0
+  logicalHeadingInited: boolean = false
 
-  private destFromFrame: boolean = false
+  destFromFrame: boolean = false
+
+  carAstarMode: boolean = false
 
   private lastUltrasonicP1: number = -1
   private lastUltrasonicAtMs: number = 0
-  private parkingUltrasonicPending: boolean = false
-  private parkingUltrasonicRequestAtMs: number = 0
-  private parkingUltrasonicExpireAtMs: number = 0
+  parkingUltrasonicPending: boolean = false
+  parkingUltrasonicRequestAtMs: number = 0
+  parkingUltrasonicExpireAtMs: number = 0
   private parkingUltrasonicDecisionBusy: boolean = false
-  private lastAutoActionFingerprint: string = ''
-  private lastAutoActionDedupLogAtMs: number = 0
-  private lastSchedulerSnapshot?: SchedulerSnapshot = undefined
+  lastAutoActionFingerprint: string = ''
+  lastAutoActionDedupLogAtMs: number = 0
+  lastSchedulerSnapshot?: SchedulerSnapshot = undefined
   private lastMotionSnapshot?: MotionStateSnapshot = undefined
   private lastMotionCompleteAtMs: number = 0
   private mapPoseAnimToken: number = 0
-  private pathAckFirstCommandSent: boolean = false
-  private pathAckAwaitingComplete: boolean = false
-  private pathAckBlocked: boolean = false
-  private pathAckLastSendAtMs: number = 0
-  private pathAckLastStatusCode: number = 0
-  private pathAckLastStatusAtMs: number = 0
-  private pathAckLastCommandText: string = ''
-  private pathAckLastWaitLogAtMs: number = 0
-  private pathAckRetryTimerId: number = -1
-  private pathAckRetrySentCount: number = 0
-  private pathAckRetryEpoch: number = 0
-  private pathAckCommandKey: string = ''
-  private pathAckCommandSeq: number = 0
-  private pathAckCommandToken: number = 0
-  private pathAckSeen01Token: number = 0
-  private pathAckSeen02Token: number = 0
-  private pathAckSeen02PromoteTimerId: number = -1
-  private pendingAckMotion?: PendingAckMotion = undefined
-  private suppressNextAckCompleteMotion: boolean = false
-  private suppressAckCompleteEdgeId: string = ''
-  private pendingDrivingUltrasonicObstacleEdgeId: string = ''
-  private pendingDrivingUltrasonicObstacleAtMs: number = 0
   private motionCommandBlockUntilMs: number = 0
   private motionCommandBlockReason: string = ''
   private motionCommandBlockLastLogAtMs: number = 0
@@ -238,7 +200,7 @@ export class Page1Coordinator {
   private yolov26barrierEmergencyBusy: boolean = false
   private emergencyRecoverBypassUntilMs: number = 0
   private emergencyMotionCommandLocked: boolean = false
-  private emergencyCommandSeq: number = 0
+  emergencyCommandSeq: number = 0
   private emergencyPendingReplan: boolean = false
   private emergencyPendingBlockedEdgeId: string = ''
   private metricSpeedAnimTimerId: number = -1
@@ -253,7 +215,7 @@ export class Page1Coordinator {
   private metricDistanceAckTargetCm: number = 0
   private metricDistanceMotionKey: string = ''
   private metricDistanceMotionBaseCm: number = 0
-  private realSendConnectKickAtMs: number = 0
+  realSendConnectKickAtMs: number = 0
   private simLightBaseLux: number = 0
   private lastRxFrameDedupKey: string = ''
   private lastRxFrameDedupAtMs: number = 0
@@ -273,6 +235,8 @@ export class Page1Coordinator {
   private lastYolov26BarrierEmergencyTsMs: number = 0
   private started: boolean = false
   private starting: boolean = false
+  private runtimeTimerId: number = -1
+  private runtimeTickBusy: boolean = false
 
   constructor() {
     this.actionScheduler.setCallbacks({
@@ -331,94 +295,6 @@ export class Page1Coordinator {
       clearTimeout(this.metricDistanceAckAnimTimerId)
       this.metricDistanceAckAnimTimerId = -1
     }
-  }
-
-  private edgeDistanceCm(fromId: string, toId: string): number {
-    const a: string = fromId.trim().toUpperCase()
-    const b: string = toId.trim().toUpperCase()
-    const ac = GridIdCodec.parse(a)
-    const bc = GridIdCodec.parse(b)
-    if (!ac || !bc) return 57
-
-    const rowA: number = Number.parseInt(a.slice(1), 10)
-    const rowB: number = Number.parseInt(b.slice(1), 10)
-    const colA: string = a[0]
-    const colB: string = b[0]
-
-    if (ac.col === bc.col) {
-      const topBottom: boolean =
-        (rowA === 1 && rowB === 2) || (rowA === 2 && rowB === 1) ||
-        (rowA === 7 && rowB === 6) || (rowA === 6 && rowB === 7)
-      return topBottom ? 37 : 57
-    }
-
-    if (ac.row === bc.row) {
-      const sideEdge: boolean =
-        (colA === 'A' && colB === 'B') || (colA === 'B' && colB === 'A') ||
-        (colA === 'G' && colB === 'F') || (colA === 'F' && colB === 'G')
-      return sideEdge ? 47 : 71
-    }
-    return 57
-  }
-
-  private pendingAckDistanceInfo(): { key: string, segCm: number } | undefined {
-    const req: PendingAckMotion | undefined = this.pendingAckMotion
-    if (!req) return undefined
-    const fromId: string = req.fromId.trim().toUpperCase()
-    const toId: string = req.toId.trim().toUpperCase()
-    if (!GridIdCodec.isValidId(fromId) || !GridIdCodec.isValidId(toId)) return undefined
-    const segCm: number = this.edgeDistanceCm(fromId, toId)
-    return { key: `${fromId}->${toId}`, segCm: segCm }
-  }
-
-  private startMetricDistanceAckRise(key: string, segCm: number): void {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    if (segCm <= 0) return
-    if (this.metricDistanceAckKey === key && this.metricDistanceAckAnimTimerId >= 0) return
-
-    this.clearMetricDistanceAckAnimation()
-    this.metricDistanceAckKey = key
-    this.metricDistanceAckTargetCm = this.metricDistanceTotalCm + segCm
-    const token: number = this.metricDistanceAckAnimToken
-    const startAtMs: number = Date.now()
-    const durationMs: number = 900
-    const startCm: number = this.metricDistanceTotalCm
-
-    const tick = (): void => {
-      if (token !== this.metricDistanceAckAnimToken) return
-      const ss: Page1UiStore | undefined = this.store
-      if (!ss) return
-      const tRaw: number = (Date.now() - startAtMs) / durationMs
-      const t: number = tRaw < 0 ? 0 : (tRaw > 1 ? 1 : tRaw)
-      const cur: number = startCm + (this.metricDistanceAckTargetCm - startCm) * t
-      ss.setMetricDistanceCm(cur)
-      if (t >= 1) {
-        this.metricDistanceAckAnimTimerId = -1
-        return
-      }
-      this.metricDistanceAckAnimTimerId = setTimeout(tick, 40) as number
-    }
-
-    tick()
-  }
-
-  private finalizeMetricDistanceAck(): void {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    if (this.metricDistanceAckKey.length <= 0) {
-      const info = this.pendingAckDistanceInfo()
-      if (!info) return
-      this.metricDistanceTotalCm += info.segCm
-      s.setMetricDistanceCm(this.metricDistanceTotalCm)
-      return
-    }
-
-    this.clearMetricDistanceAckAnimation()
-    this.metricDistanceTotalCm = this.metricDistanceAckTargetCm
-    s.setMetricDistanceCm(this.metricDistanceTotalCm)
-    this.metricDistanceAckKey = ''
-    this.metricDistanceAckTargetCm = this.metricDistanceTotalCm
   }
 
   private normToEightHeading(v: number): number {
@@ -488,33 +364,6 @@ export class Page1Coordinator {
     }
 
     this.metricHeadingAnimTimerId = setTimeout(tick, 40) as number
-  }
-
-  private onPathAckStatusForDashboard(status: number): void {
-    const s: Page1UiStore | undefined = this.store
-    if (!s) return
-    if (!s.realSendEnabled) {
-      s.setMetricSpeedCms(0)
-      s.setMetricDistanceCm(0)
-      return
-    }
-    const cmd: string = this.pathAckLastCommandText
-    const isMoveCmd: boolean = cmd === '前进' || cmd === '后退'
-    const isTurnCmd: boolean =
-      cmd === '左转' || cmd === '右转' || cmd === '左半转' || cmd === '右半转' || cmd === '掉头'
-    if (!isMoveCmd && !isTurnCmd) return
-
-    if (status === 0x01) {
-      this.startMetricSpeedRiseAndHoldFromAck01(isMoveCmd ? 20 : 10)
-      const info = this.pendingAckDistanceInfo()
-      if (isMoveCmd && info) this.startMetricDistanceAckRise(info.key, info.segCm)
-      return
-    }
-    if (status === 0x02) {
-      this.clearMetricSpeedAnimation()
-      s.setMetricSpeedCms(0)
-      if (isMoveCmd) this.finalizeMetricDistanceAck()
-    }
   }
 
   private initialHeadingByPoseAndPath(s: Page1UiStore): number {
@@ -651,16 +500,17 @@ export class Page1Coordinator {
         this.connectDeferredTimerId = -1
         void this.connectTcp(s.connIp, s.connPort)
       }, P1C.START_CONNECT_DEFER_MS) as number
+      this.startRuntimeLoop()
       this.started = true
     } finally {
       this.starting = false
     }
   }
 
-  async stop(): Promise<void> {
-    replayArchiveService.closeActive('Page1 stop')
+  private resetCoordinatorState(): void {
     this.starting = false
     this.started = false
+    this.stopRuntimeLoop()
     this.clearDeferredConnect()
     this.cancelMapPoseAnimation()
     this.cancelParkingSequence()
@@ -669,7 +519,6 @@ export class Page1Coordinator {
     this.manualGoToken += 1
     this.manualGoActive = false
     this.resetAutoActionDedupState()
-    this.resetPathAckState()
     this.resetGarageFlowState()
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
@@ -685,7 +534,6 @@ export class Page1Coordinator {
     this.lastBdLogCount = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
-    this.realSendConnectKickAtMs = 0
     this.simLightBaseLux = 0
     if (this.store) {
       this.store.setMetricSpeedCms(0)
@@ -699,50 +547,20 @@ export class Page1Coordinator {
     this.stopActiveMotion()
     this.actionScheduler.reset()
     this.rxDecoder.reset()
+  }
+
+  async stop(): Promise<void> {
+    replayArchiveService.closeActive('Page1 stop')
+    await this.resetNetworkMap()
+    this.resetCoordinatorState()
+    // 保持与原 stop() 行为一致：pausePage() 之前并不会清零该节流时间戳。
+    this.realSendConnectKickAtMs = 0
     await this.disconnectTcp()
   }
 
   pausePage(): void {
     replayArchiveService.closeActive('Page1 pause')
-    this.starting = false
-    this.started = false
-    this.clearDeferredConnect()
-    this.cancelMapPoseAnimation()
-    this.cancelParkingSequence()
-    this.clearPendingFrameDestApply()
-    this.clearAheadVisionReplanState()
-    this.manualGoToken += 1
-    this.manualGoActive = false
-    this.resetAutoActionDedupState()
-    this.resetPathAckState()
-    this.resetGarageFlowState()
-    this.clearMetricSpeedAnimation()
-    this.clearMetricHeadingAnimation()
-    this.clearMetricDistanceAckAnimation()
-    this.lightMetricQueryEnabled = false
-    this.lastRxFrameDedupKey = ''
-    this.lastRxFrameDedupAtMs = 0
-    this.lastRxDupCountKey = ''
-    this.lastRxDupCount = 1
-    this.lastRxMergeLogAtMs = 0
-    this.lastBdLogStatus = -1
-    this.lastBdLogAtMs = 0
-    this.lastBdLogCount = 0
-    this.lightMetricReady = false
-    this.lightMetricLastQueryAtMs = 0
-    this.simLightBaseLux = 0
-    if (this.store) {
-      this.store.setMetricSpeedCms(0)
-      this.store.setMetricLightLux(0)
-      this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
-    }
-    this.clearEmergencyAlarmTimer()
-    this.clearEmergencyAutoRecoverTimer()
-    this.timerManager.clearAll()
-    this.clearMotionCommandBlock()
-    this.stopActiveMotion()
-    this.actionScheduler.reset()
-    this.rxDecoder.reset()
+    this.resetCoordinatorState()
     void this.disconnectTcp()
   }
 
@@ -756,6 +574,84 @@ export class Page1Coordinator {
     if (this.connectDeferredTimerId >= 0) {
       clearTimeout(this.connectDeferredTimerId)
       this.connectDeferredTimerId = -1
+    }
+  }
+
+  private startRuntimeLoop(): void {
+    if (this.runtimeTimerId >= 0) return
+    this.runtimeTickBusy = false
+    this.runtimeTimerId = setInterval((): void => {
+      if (this.runtimeTickBusy) return
+      this.runtimeTickBusy = true
+      const nowMs: number = Date.now()
+      void this.onRuntimeTick(nowMs).catch((e: Object): void => {
+        const s: Page1UiStore | undefined = this.store
+        if (s) {
+          const msg: string = e instanceof Error ? e.message : String(e)
+          s.pushLog(`RUNTIME_TICK_ERR: ${msg}`)
+        }
+      }).finally((): void => {
+        this.runtimeTickBusy = false
+      })
+    }, P1C.SIM_TICK_MS) as number
+  }
+
+  private stopRuntimeLoop(): void {
+    if (this.runtimeTimerId >= 0) {
+      clearInterval(this.runtimeTimerId)
+      this.runtimeTimerId = -1
+    }
+    this.runtimeTickBusy = false
+  }
+
+  private async onRuntimeTick(nowMs: number): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+
+    await this.updateMotionTimeline(nowMs)
+
+    // 模拟模式下，由上位机本地驱动路线自动跟随。
+    if (s.realSendEnabled) return
+    await this.runDryAutoFollowStep(nowMs)
+  }
+
+  private async runDryAutoFollowStep(nowMs: number): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (!s.canAutoFollow(nowMs)) return
+    if (this.motionRunning()) return
+    if (!this.actionScheduler.canSendNextCommand(nowMs, this.motionRunning())) return
+    if (s.pathIndex < 0 || s.pathIndex >= s.pathNodes.length - 1) return
+
+    const fromId: string = s.pathNodes[s.pathIndex].trim().toUpperCase()
+    const toId: string = s.pathNodes[s.pathIndex + 1].trim().toUpperCase()
+    if (!GridIdCodec.isValidId(fromId) || !GridIdCodec.isValidId(toId)) return
+
+    const desiredHeadingDeg: number = this.segmentHeadingDeg(fromId, toId)
+    const curHeadingDeg: number = this.logicalHeadingInited
+      ? this.normToCardinal(this.logicalHeadingDeg)
+      : this.normToCardinal(s.pose.headingDeg)
+    const deltaDeg: number = this.headingErrorDeg(curHeadingDeg, desiredHeadingDeg)
+
+    let action: Page1Action = Page1Action.GO
+    if (Math.abs(deltaDeg) >= 135) action = Page1Action.UTURN
+    else if (deltaDeg > 20) action = Page1Action.RIGHT
+    else if (deltaDeg < -20) action = Page1Action.LEFT
+
+    const sent: boolean = await this.actionScheduler.sendAutoActionWithTiming({
+      action: action,
+      fromId: fromId,
+      toId: toId,
+      customTiming: action === Page1Action.GO ? this.pathDotMotionTiming() : undefined,
+      advancePathOnFinish: action === Page1Action.GO,
+      useReverseSpeed: false,
+      customLogTag: 'AUTO_DRY_FOLLOW'
+    }, this.schedulerDeps())
+
+    if (!sent) return
+    s.markAutoFollow(nowMs)
+    if (action !== Page1Action.GO) {
+      s.pushLog(`AUTO_DRY_ALIGN: ${fromId}->${toId} heading=${Math.round(curHeadingDeg)}=>${Math.round(desiredHeadingDeg)} action=${Page1Action[action]}`)
     }
   }
 
@@ -774,7 +670,6 @@ export class Page1Coordinator {
     this.manualGoToken += 1
     this.manualGoActive = false
     this.resetAutoActionDedupState()
-    this.resetPathAckState()
     this.resetGarageFlowState()
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
@@ -841,29 +736,24 @@ export class Page1Coordinator {
     s.pushLog(`EMERGENCY_FRESH_RESET: reason=${reason} keepPosOnly=${keepPositionOnly ? 1 : 0}`)
   }
 
-  async stepFollowOnce(): Promise<void> {
-    const now: number = Date.now()
-    await this.followPathOnce(now, true)
-  }
-
   private bindTcpCallbacks(): void {
-    bindTcpCallbacksOp(this as object)
+    bindTcpCallbacksOp(this)
   }
 
   private onTcpState(state: CarConnectionState, text: string): void {
-    onTcpStateOp(this as object, state, text)
+    onTcpStateOp(this, state, text)
   }
 
   private onTcpData(data: Uint8Array): void {
-    onTcpDataOp(this as object, data)
+    onTcpDataOp(this, data)
   }
 
   private clearPendingFrameDestApply(): void {
-    clearPendingFrameDestApplyOp(this as object)
+    clearPendingFrameDestApplyOp(this)
   }
 
   private scheduleFrameDestApply(destNodeId: string): void {
-    scheduleFrameDestApplyOp(this as object, destNodeId)
+    scheduleFrameDestApplyOp(this, destNodeId)
   }
 
   private byteToHex(v: number): string {
@@ -875,35 +765,35 @@ export class Page1Coordinator {
   }
 
   private markParkingUltrasonicRequest(nowMs: number): void {
-    markParkingUltrasonicRequestOp(this as object, nowMs)
+    markParkingUltrasonicRequestOp(this, nowMs)
   }
 
   private clearParkingUltrasonicRequest(): void {
-    clearParkingUltrasonicRequestOp(this as object)
+    clearParkingUltrasonicRequestOp(this)
   }
 
   private isParkingUltrasonicResponseContext(nowMs: number): boolean {
-    return isParkingUltrasonicResponseContextOp(this as object, nowMs)
+    return isParkingUltrasonicResponseContextOp(this, nowMs)
   }
 
-  private async connectTcp(ip: string, port: number): Promise<void> {
-    await connectTcpOp(this as object, ip, port)
+   async connectTcp(ip: string, port: number): Promise<void> {
+    await connectTcpOp(this, ip, port)
   }
 
   private async disconnectTcp(): Promise<void> {
-    await disconnectTcpOp(this as object)
+    await disconnectTcpOp(this)
   }
 
-  private canRealSend(): boolean {
-    return canRealSendOp(this as object)
+   canRealSend(): boolean {
+    return canRealSendOp(this)
   }
 
   private async sendManualGoCommand(actionText: string): Promise<void> {
-    await sendManualGoCommandOp(this as object, actionText, this.emergencyCommandSeq)
+    await sendManualGoCommandOp(this, actionText, this.emergencyCommandSeq)
   }
 
   async onAction(a: Page1Action): Promise<void> {
-    await onActionOp(this as object, a)
+    await onActionOp(this, a)
   }
 
   async sendCustomControl0A(code: number): Promise<void> {
@@ -1172,6 +1062,35 @@ export class Page1Coordinator {
     }
   }
 
+  async setWarehouseByMapNode(nodeId: string): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    const id: string = (nodeId || '').trim().toUpperCase()
+    if (id.length !== 2) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.setWarehouseNode(id)
+      s.pushLog(`设置仓库(CCF5): node=${id} seq=${seq}`)
+    } else {
+      s.pushLog(`设置仓库(DRY_RUN): node=${id}`)
+    }
+  }
+
+  async clearWarehouseByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    s.clearWarehousePoints()
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.clearWarehouseNode()
+      s.pushLog(`清除仓库(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('清除仓库(DRY_RUN)')
+    }
+  }
+
   async stopTaskByUi(): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
@@ -1191,26 +1110,26 @@ export class Page1Coordinator {
     this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
     if (this.canRealSend()) {
       s.bumpTx()
-      const seq: number = await this.proto.pauseTask()
+      const seq: number = await this.proto.resumeTask()
       s.pushLog(`继续任务(CCF5): seq=${seq}`)
     } else {
       s.pushLog('继续任务(DRY_RUN)')
     }
   }
 
-  private async sendDriveActionDirect(a: Page1Action): Promise<boolean> {
-    return await sendDriveActionDirectOp(this as object, a)
+   async sendDriveActionDirect(a: Page1Action): Promise<boolean> {
+    return await sendDriveActionDirectOp(this, a)
   }
 
   private buildAutoActionFingerprint(action: Page1Action): string {
-    return buildAutoActionFingerprintOp(this as object, action)
+    return buildAutoActionFingerprintOp(this, action)
   }
 
   private shouldSkipDuplicateAutoAction(action: Page1Action, actionText: string): boolean {
-    return shouldSkipDuplicateAutoActionOp(this as object, action, actionText)
+    return shouldSkipDuplicateAutoActionOp(this, action, actionText)
   }
 
-  private isTurnAction(a: Page1Action | undefined): boolean {
+   isTurnAction(a: Page1Action | undefined): boolean {
     return isTurnActionOp(a)
   }
 
@@ -1218,35 +1137,19 @@ export class Page1Coordinator {
     return isMoveActionOp(a)
   }
 
-  private resetRouteVoiceFlags(): void {
-    resetRouteVoiceFlagsOp(this as object)
+   resetRouteVoiceFlags(): void {
+    resetRouteVoiceFlagsOp(this)
   }
 
   private resetAutoActionDedupState(): void {
-    resetAutoActionDedupStateOp(this as object)
-  }
-
-  private resetPathAckState(): void {
-    resetPathAckStateOp(this as object)
+    resetAutoActionDedupStateOp(this)
   }
 
   private isPathMotionAction(action: Page1Action): boolean {
     return isPathMotionActionOp(action)
   }
 
-  private canSendPathCommandNow(nextActionText: string): boolean {
-    return canSendPathCommandNowOp(this as object, nextActionText)
-  }
-
-  private markPathCommandSent(actionText: string): void {
-    markPathCommandSentOp(this as object, actionText)
-  }
-
-  private onPathAckFrame(f: any): void {
-    onPathAckFrameOp(this as object, f)
-  }
-
-  private pathDotMotionTimingMs(suggestedMs?: number): number {
+   pathDotMotionTimingMs(suggestedMs?: number): number {
     return pathDotMotionTimingMsOp(suggestedMs)
   }
 
@@ -1254,31 +1157,11 @@ export class Page1Coordinator {
     return pathDotMotionTimingOp(suggestedMs)
   }
 
-  private async waitForCurrentPathAckComplete(maxWaitMs: number, waitTag: string): Promise<boolean> {
-    return await waitForCurrentPathAckCompleteOp(this as object, maxWaitMs, waitTag)
-  }
-
-  private stageMotionWaitAckComplete(req: PendingAckMotion): void {
-    stageMotionWaitAckCompleteOp(this as object, req)
-  }
-
-  private startMotionNow(req: PendingAckMotion): void {
-    startMotionNowOp(this as object, req)
-  }
-
-  private startPendingAckMotionOnComplete(): void {
-    startPendingAckMotionOnCompleteOp(this as object)
-  }
-
   private queueDrivingUltrasonicObstacle(nowMs: number): void {
-    queueDrivingUltrasonicObstacleOp(this as object, nowMs)
+    queueDrivingUltrasonicObstacleOp(this, nowMs)
   }
 
-  private flushDrivingUltrasonicObstacleAfterAck(): void {
-    flushDrivingUltrasonicObstacleAfterAckOp(this as object)
-  }
-
-  private async maybePlayRouteStartVoice(): Promise<void> {
+   async maybePlayRouteStartVoice(): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
     if (this.routeStartVoicePlayed) return
@@ -1291,27 +1174,27 @@ export class Page1Coordinator {
     s.pushLog('VOICE: 已注释出发语音发送')
   }
 
-  private stopActiveMotion(): void {
+   stopActiveMotion(): void {
     this.motionPlayer.reset()
   }
 
-  private motionRunning(): boolean {
+   motionRunning(): boolean {
     return this.motionPlayer.running()
   }
 
   private motionHooks(): VehicleMotionHooks {
-    return motionHooksOp(this as object) as VehicleMotionHooks
+    return motionHooksOp(this)
   }
 
-  private schedulerDeps(): VehicleActionSchedulerDeps {
-    return schedulerDepsOp(this as object) as VehicleActionSchedulerDeps
+   schedulerDeps(): VehicleActionSchedulerDeps {
+    return schedulerDepsOp(this)
   }
 
-  private async maybeHandleMotionArrive(toId: string): Promise<void> {
-    await maybeHandleMotionArriveOp(this as object, toId)
+   async maybeHandleMotionArrive(toId: string): Promise<void> {
+    await maybeHandleMotionArriveOp(this, toId)
   }
 
-  private uploadTrajectoryNode(nodeId: string): void {
+   uploadTrajectoryNode(nodeId: string): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
     const id: string = nodeId.trim().toUpperCase()
@@ -1330,12 +1213,12 @@ export class Page1Coordinator {
       })
   }
 
-  private setTrajectoryPlanEndpoints(startPoint: string, endPoint: string): void {
+   setTrajectoryPlanEndpoints(startPoint: string, endPoint: string): void {
     this.trajectoryPlanStartPoint = startPoint.trim().toUpperCase()
     this.trajectoryPlanEndPoint = endPoint.trim().toUpperCase()
   }
 
-  private updatePoseAndTelemetryForDisplay(xNorm: number, yNorm: number, headingDeg: number, speed: number): void {
+   updatePoseAndTelemetryForDisplay(xNorm: number, yNorm: number, headingDeg: number, speed: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
 
@@ -1363,7 +1246,7 @@ export class Page1Coordinator {
     this.animateMetricHeadingTo(headingDeg)
   }
 
-  private updateHeadingOnlyAtCurrentPose(headingDeg: number): void {
+   updateHeadingOnlyAtCurrentPose(headingDeg: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
 
@@ -1383,12 +1266,12 @@ export class Page1Coordinator {
     this.mapPoseAnimToken += 1
   }
 
-  private beginMapPoseAnimation(): number {
+   beginMapPoseAnimation(): number {
     this.mapPoseAnimToken += 1
     return this.mapPoseAnimToken
   }
 
-  private isMapPoseAnimationActive(token: number): boolean {
+   isMapPoseAnimationActive(token: number): boolean {
     return token === this.mapPoseAnimToken
   }
 
@@ -1397,7 +1280,7 @@ export class Page1Coordinator {
   }
 
   private syncCurrentSnapNodeByPose(xNorm: number, yNorm: number): void {
-    syncCurrentSnapNodeByPose(this as object, xNorm, yNorm)
+    syncCurrentSnapNodeByPose(this, xNorm, yNorm)
   }
 
   private async animateMapPoseTransition(
@@ -1412,7 +1295,7 @@ export class Page1Coordinator {
     token: number
   ): Promise<void> {
     await animateMapPoseTransition(
-      this as object,
+      this,
       fromXNorm,
       fromYNorm,
       toXNorm,
@@ -1425,15 +1308,15 @@ export class Page1Coordinator {
     )
   }
 
-  private previewManualActionOnMap(action: Page1Action): void {
-    previewManualActionOnMap(this as object, action)
+   previewManualActionOnMap(action: Page1Action): void {
+    previewManualActionOnMap(this, action)
   }
 
   private playMapReverseParkingAnimation(arrivedId: string, goalId: string, headingDeg: number): void {
-    playMapReverseParkingAnimation(this as object, arrivedId, goalId, headingDeg)
+    playMapReverseParkingAnimation(this, arrivedId, goalId, headingDeg)
   }
 
-  private cancelParkingSequence(): void {
+   cancelParkingSequence(): void {
     this.parkingSequenceToken += 1
     this.parkingInProgress = false
     this.parkingUltrasonicDecisionBusy = false
@@ -1469,57 +1352,57 @@ export class Page1Coordinator {
   }
 
   private maybeLogVisionTaskOrTraffic(nowMs: number): void {
-    maybeLogVisionTaskOrTraffic(this as object, nowMs)
+    maybeLogVisionTaskOrTraffic(this, nowMs)
   }
 
 
   private yoloSuggestBlockedNodeId(nowMs: number): string {
-    return yoloSuggestBlockedNodeId(this as object, nowMs)
+    return yoloSuggestBlockedNodeId(this, nowMs)
   }
 
   private maybeTriggerRoutePointObstacle(): boolean {
-    return maybeTriggerRoutePointObstacle(this as object)
+    return maybeTriggerRoutePointObstacle(this)
   }
 
-  private frontRouteEdgeIdForDriving(): string {
-    return frontRouteEdgeIdForDriving(this as object)
+   frontRouteEdgeIdForDriving(): string {
+    return frontRouteEdgeIdForDriving(this)
   }
 
   private markRouteObstaclePointOnEdge(edgeId: string, nowMs: number): void {
-    markRouteObstaclePointOnEdge(this as object, edgeId, nowMs)
+    markRouteObstaclePointOnEdge(this, edgeId, nowMs)
   }
 
   private promoteBlockedEdgePairsToBlockedNodes(): Array<string> {
-    return promoteBlockedEdgePairsToBlockedNodes(this as object)
+    return promoteBlockedEdgePairsToBlockedNodes(this)
   }
 
-  private maybeHandleDrivingUltrasonicObstacle(nowMs: number, edgeOverride: string = ''): void {
-    maybeHandleDrivingUltrasonicObstacle(this as object, nowMs, edgeOverride)
+   maybeHandleDrivingUltrasonicObstacle(nowMs: number, edgeOverride: string = ''): void {
+    maybeHandleDrivingUltrasonicObstacle(this, nowMs, edgeOverride)
   }
 
-  private maybeReplanOnObstacle(): void {
-    maybeReplanOnObstacle(this as object)
+   maybeReplanOnObstacle(): void {
+    maybeReplanOnObstacle(this)
   }
 
   private isNextNodeBlocked(): boolean {
-    return isNextNodeBlocked(this as object)
+    return isNextNodeBlocked(this)
   }
 
-  private nearestNodeIdByPose(): string {
-    return nearestNodeIdByPose(this as object)
+   nearestNodeIdByPose(): string {
+    return nearestNodeIdByPose(this)
   }
 
   private findNearestRouteSegmentByPose(): SegmentPoseMatch | undefined {
-    return findNearestRouteSegmentByPose(this as object)
+    return findNearestRouteSegmentByPose(this)
   }
 
-  private headingDegFromTo(ax: number, ay: number, bx: number, by: number): number {
+   headingDegFromTo(ax: number, ay: number, bx: number, by: number): number {
     const rad: number = Math.atan2(by - ay, bx - ax)
     const deg: number = rad * 180.0 / Math.PI
     return this.norm360(deg)
   }
 
-  private segMidMinTValue(s: Page1UiStore): number {
+   segMidMinTValue(s: Page1UiStore): number {
     const raw: number = s.segMidMinT
     if (!Number.isFinite(raw)) return 0.12
     if (raw < 0.0) return 0.0
@@ -1527,7 +1410,7 @@ export class Page1Coordinator {
     return raw
   }
 
-  private segMidMaxTValue(s: Page1UiStore): number {
+   segMidMaxTValue(s: Page1UiStore): number {
     const minT: number = this.segMidMinTValue(s)
     const raw: number = s.segMidMaxT
     let v: number = Number.isFinite(raw) ? raw : 0.88
@@ -1536,7 +1419,7 @@ export class Page1Coordinator {
     return v
   }
 
-  private segHeadingPenaltyWeightValue(s: Page1UiStore): number {
+   segHeadingPenaltyWeightValue(s: Page1UiStore): number {
     const raw: number = s.segHeadingPenaltyWeight
     if (!Number.isFinite(raw)) return 0.55
     if (raw < 0.0) return 0.0
@@ -1550,20 +1433,20 @@ export class Page1Coordinator {
     blocked: Array<string>,
     blockedEdges: Array<string>
   ): SegmentPlanDecision | undefined {
-    return chooseSegmentEndpointForGoal(this as object, seg, goal, blocked, blockedEdges)
+    return chooseSegmentEndpointForGoal(this, seg, goal, blocked, blockedEdges)
   }
 
   private tryBuildSegmentAwarePath(goal: string, blocked: Array<string>, blockedEdges: Array<string>): Array<string> | undefined {
-    return tryBuildSegmentAwarePath(this as object, goal, blocked, blockedEdges)
+    return tryBuildSegmentAwarePath(this, goal, blocked, blockedEdges)
   }
 
-  private clearAheadVisionReplanState(): void {
+   clearAheadVisionReplanState(): void {
     this.aheadVisionPending = false
     this.aheadVisionReadyAtMs = 0
     this.aheadVisionEdgeId = ''
   }
 
-  private resetGarageFlowState(): void {
+   resetGarageFlowState(): void {
     this.parkingUltrasonicDecisionBusy = false
   }
 
@@ -1575,66 +1458,41 @@ export class Page1Coordinator {
 
 
   private findPendingRouteObstacleOnEdge(edgeId: string, nowMs: number): RouteObstaclePoint | undefined {
-    return findPendingRouteObstacleOnEdge(this as object, edgeId, nowMs)
+    return findPendingRouteObstacleOnEdge(this, edgeId, nowMs)
   }
 
-  private maybeStartAheadVisionReplan(fromId: string, toId: string, nowMs: number): boolean {
-    return maybeStartAheadVisionReplan(this as object, fromId, toId, nowMs)
+   maybeStartAheadVisionReplan(fromId: string, toId: string, nowMs: number): boolean {
+    return maybeStartAheadVisionReplan(this, fromId, toId, nowMs)
   }
 
-  private maybeHandleAheadVisionReplan(nowMs: number): boolean {
-    return maybeHandleAheadVisionReplan(this as object, nowMs)
+   maybeHandleAheadVisionReplan(nowMs: number): boolean {
+    return maybeHandleAheadVisionReplan(this, nowMs)
   }
 
-  private resolveStartNodeId(): string {
-    return resolveStartNodeId(this as object)
+   resolveStartNodeId(): string {
+    return resolveStartNodeId(this)
   }
 
-  private isParkingInnerRowNode(id: string): boolean {
-    return isParkingInnerRowNode(id)
-  }
-
-
-  private buildPathViaWaypoint(
-    start: string,
-    via: string,
-    goal: string,
-    blocked: Array<string>,
-    blockedEdges: Array<string>
-  ): AStarPlanResult {
-    return buildPathViaWaypoint(this as object, start, via, goal, blocked, blockedEdges)
+   isReverseParkingGoal(id: string): boolean {
+    const p = GridIdCodec.parse(id)
+    if (!p) return false
+    return p.row === 0
   }
 
   planPath(dest: string): void {
-    planPathOp(this as object, dest)
+    planPathOp(this, dest)
   }
 
-  private syncLogicalHeadingWithCurrentState(): void {
-    syncLogicalHeadingWithCurrentState(this as object)
+   syncLogicalHeadingWithCurrentState(): void {
+    syncLogicalHeadingWithCurrentState(this)
   }
 
-  private segmentHeadingDeg(fromId: string, toId: string): number {
-    return segmentHeadingDeg(this as object, fromId, toId)
+   segmentHeadingDeg(fromId: string, toId: string): number {
+    return segmentHeadingDeg(this, fromId, toId)
   }
 
-  private normToCardinal(v: number): number {
-    return normToCardinal(this as object, v)
-  }
-
-  private actionForHeadingTransition(curDeg: number, desiredDeg: number): Page1Action | undefined {
-    return actionForHeadingTransition(this as object, curDeg, desiredDeg)
-  }
-
-  private predictActionForPair(curHeadingDeg: number, fromId: string, toId: string): Page1Action {
-    return predictActionForPair(this as object, curHeadingDeg, fromId, toId)
-  }
-
-  private predictedHeadingAfterAction(curHeadingDeg: number, action: Page1Action, fromId: string, toId: string): number {
-    return predictedHeadingAfterAction(this as object, curHeadingDeg, action, fromId, toId)
-  }
-
-  private peekNextActionAfterCurrentStep(): Page1Action | undefined {
-    return peekNextActionAfterCurrentStep(this as object)
+   normToCardinal(v: number): number {
+    return normToCardinal(this, v)
   }
 
   private clearEmergencyAlarmTimer(): void {
@@ -1851,7 +1709,6 @@ export class Page1Coordinator {
     this.cancelParkingSequence()
     this.resetGarageFlowState()
     this.resetAutoActionDedupState()
-    this.resetPathAckState()
     this.stopActiveMotion()
     this.actionScheduler.reset()
     this.setMotionCommandBlock(reason, safeHoldMs)
@@ -1892,10 +1749,6 @@ export class Page1Coordinator {
     s.pushLog(`EMERGENCY RECOVER: bypass=${Math.max(1000, Math.round(graceMs))}ms`)
   }
 
-  private canSendNextCommand(nowMs: number): boolean {
-    return canSendNextCommand(this as object, nowMs)
-  }
-
   schedulerSnapshot(nowMs: number = Date.now()): SchedulerSnapshot {
     const snap: SchedulerSnapshot = this.actionScheduler.snapshot(nowMs, this.motionRunning())
     this.lastSchedulerSnapshot = snap
@@ -1914,33 +1767,6 @@ export class Page1Coordinator {
 
   motionLastCompleteAtMs(): number {
     return this.lastMotionCompleteAtMs
-  }
-
-  private async sendAutoActionWithTiming(
-    action: Page1Action,
-    fromId: string,
-    toId: string,
-    nextAction?: Page1Action,
-    customTiming?: MotionTimingProfile,
-    advancePathOnFinish?: boolean,
-    useReverseSpeed?: boolean,
-    customLogTag?: string
-  ): Promise<boolean> {
-    return await sendAutoActionWithTiming(
-      this as object,
-      action,
-      fromId,
-      toId,
-      nextAction,
-      customTiming,
-      advancePathOnFinish,
-      useReverseSpeed,
-      customLogTag
-    )
-  }
-
-  private async followPathOnce(nowMs: number, force: boolean): Promise<void> {
-    await followPathOnce(this as object, nowMs, force)
   }
 
   private edgeSideOfNode(id: string): EdgeSide {
@@ -1966,15 +1792,15 @@ export class Page1Coordinator {
     this.lastSchedulerSnapshot = this.actionScheduler.snapshot(nowMs, this.motionRunning())
   }
 
-  private norm360(v: number): number {
+   norm360(v: number): number {
     return Page1CoordinatorGridUtils.norm360(v)
   }
 
-  private headingErrorDeg(curDeg: number, desiredDeg: number): number {
+   headingErrorDeg(curDeg: number, desiredDeg: number): number {
     return Page1CoordinatorGridUtils.headingErrorDeg(curDeg, desiredDeg)
   }
 
-  private findNode(id: string): NormPoint | undefined {
+   findNode(id: string): NormPoint | undefined {
     const s: Page1UiStore | undefined = this.store
     if (!s) return undefined
     return Page1CoordinatorGridUtils.findNode(s.gridNodes, id)
@@ -1996,7 +1822,7 @@ export class Page1Coordinator {
     return 0
   }
 
-  private async sleep(ms: number): Promise<void> {
+   async sleep(ms: number): Promise<void> {
     const waitMs: number = Math.max(0, Math.trunc(ms))
     await new Promise<void>((resolve: () => void): void => {
       setTimeout((): void => resolve(), waitMs)
@@ -2052,6 +1878,8 @@ export class Page1Coordinator {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
+
+
 
 
 

@@ -54,6 +54,7 @@ export class CommStore {
   diagReplanCount: number = 0
   diagAvoidCount: number = 0
   diagEStopCount: number = 0
+  diagAckDropCount: number = 0
 
   // ==== 帧日志 ====
   diagLogEnabled: boolean = false
@@ -118,6 +119,7 @@ export class CommStore {
   bumpReplan(): void { this.diagReplanCount += 1 }
   bumpAvoid(): void { this.diagAvoidCount += 1 }
   bumpEStop(): void { this.diagEStopCount += 1 }
+  bumpAckDrop(): void { this.diagAckDropCount += 1 }
 
   // ==== 日志 ====
   setLogEnabled(enabled: boolean): void { this.diagLogEnabled = enabled }
@@ -128,14 +130,8 @@ export class CommStore {
   }
 
   appendDiagKeyTxFrame(frame: DiagKeyTxFrame): void {
-    const next: Array<DiagKeyTxFrame> = []
     const cap: number = this.diagKeyTxFramesMax
-    const keepFrom: number = this.diagKeyTxFrames.length >= cap ? 1 : 0
-    for (let i: number = keepFrom; i < this.diagKeyTxFrames.length; i++) {
-      next.push(this.diagKeyTxFrames[i])
-    }
-    next.push(frame)
-    this.diagKeyTxFrames = next
+    this.diagKeyTxFrames = [...this.diagKeyTxFrames, frame].slice(-cap)
   }
 
   clearDiagKeyTxFrames(): void {
@@ -143,14 +139,8 @@ export class CommStore {
   }
 
   appendDiagKeyRxFrame(frame: DiagKeyRxFrame): void {
-    const next: Array<DiagKeyRxFrame> = []
     const cap: number = this.diagKeyRxFramesMax
-    const keepFrom: number = this.diagKeyRxFrames.length >= cap ? 1 : 0
-    for (let i: number = keepFrom; i < this.diagKeyRxFrames.length; i++) {
-      next.push(this.diagKeyRxFrames[i])
-    }
-    next.push(frame)
-    this.diagKeyRxFrames = next
+    this.diagKeyRxFrames = [...this.diagKeyRxFrames, frame].slice(-cap)
   }
 
   clearDiagKeyRxFrames(): void {
@@ -158,14 +148,8 @@ export class CommStore {
   }
 
   appendDiagWebTxLog(item: DiagWebTxLog): void {
-    const next: Array<DiagWebTxLog> = []
     const cap: number = this.diagWebTxLogsMax
-    const keepFrom: number = this.diagWebTxLogs.length >= cap ? 1 : 0
-    for (let i: number = keepFrom; i < this.diagWebTxLogs.length; i++) {
-      next.push(this.diagWebTxLogs[i])
-    }
-    next.push(item)
-    this.diagWebTxLogs = next
+    this.diagWebTxLogs = [...this.diagWebTxLogs, item].slice(-cap)
   }
 
   clearDiagWebTxLogs(): void {

@@ -11,9 +11,11 @@ import { page1Store, Page1UiStore, CarConnState } from '../app/Page1UiStore'
 import { Page1Action } from '../types/Page1Types'
 import { page1Coordinator } from '../app/Page1Coordinator'
 import { Page1Theme } from '../Page1Theme'
+import { CONTROL_PANEL, INPUT } from '../Page1Styles'
 
 @Component
 export struct ControlPanel {
+  @State isInputFocused: boolean = false
   @State private store: Page1UiStore = page1Store
   @State private custom0AInput: string = ''
   @State private customChainBytes: Array<number> = []
@@ -28,26 +30,26 @@ export struct ControlPanel {
       Row({ space: 8 }) {
         Button(this.store.realSendEnabled ? '真车' : '模拟')
           .layoutWeight(1)
-          .height(44)
-          .borderRadius(14)
-          .backgroundColor(this.store.realSendEnabled ? '#FEF2F2' : '#F8FAFC')
-          .fontColor(this.store.realSendEnabled ? '#EF4444' : Page1Theme.TEXT_SECONDARY)
-          .fontSize(13)
+          .height(CONTROL_PANEL.MODE_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.MODE_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(this.store.realSendEnabled))
+          .fontColor(this.trafficBtnFg(this.store.realSendEnabled))
+          .fontSize(CONTROL_PANEL.MODE_BTN_FONT_SIZE)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: this.store.realSendEnabled ? '#FEE2E2' : Page1Theme.BORDER })
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.realSendEnabled) })
           .onClick((): void => {
             this.store.toggleRealSend()
           })
 
         Button(this.store.obstacleEditEnabled ? '设障：开' : '设障：关')
           .layoutWeight(1)
-          .height(44)
-          .borderRadius(14)
-          .backgroundColor(this.store.obstacleEditEnabled ? '#FEF3C7' : '#FFFBEB')
-          .fontColor('#D97706')
-          .fontSize(13)
+          .height(CONTROL_PANEL.MODE_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.MODE_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(this.store.obstacleEditEnabled))
+          .fontColor(this.trafficBtnFg(this.store.obstacleEditEnabled))
+          .fontSize(CONTROL_PANEL.MODE_BTN_FONT_SIZE)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#FEF3C7' })
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.obstacleEditEnabled) })
           .onClick((): void => {
             this.store.toggleObstacleEdit()
           })
@@ -61,13 +63,13 @@ export struct ControlPanel {
 
         Button(this.targetBtnText())
           .layoutWeight(1)
-          .height(44)
-          .borderRadius(14)
+          .height(CONTROL_PANEL.MODE_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.MODE_BTN_RADIUS)
           .backgroundColor(this.targetBtnBg())
-          .fontColor('#7C3AED')
-          .fontSize(13)
+          .fontColor(this.trafficBtnFg(this.store.targetPickEnabled || this.store.mapTargetPendingSend))
+          .fontSize(CONTROL_PANEL.MODE_BTN_FONT_SIZE)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#EDE9FE' })
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.targetPickEnabled || this.store.mapTargetPendingSend) })
           .onClick((): void => {
             this.onTargetPickBtn()
           })
@@ -80,13 +82,13 @@ export struct ControlPanel {
 
         Button('更多')
           .layoutWeight(1)
-          .height(44)
-          .borderRadius(14)
-          .backgroundColor('#F1F5F9')
-          .fontColor(Page1Theme.TEXT_SECONDARY)
-          .fontSize(13)
+          .height(CONTROL_PANEL.MODE_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.MODE_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(false))
+          .fontColor(this.trafficBtnFg(false))
+          .fontSize(CONTROL_PANEL.MODE_BTN_FONT_SIZE)
           .fontWeight(FontWeight.Bold)
-          .border({ width: 1, color: '#E2E8F0' })
+          .border({ width: 1, color: this.trafficBtnBorder(false) })
           .onClick((): void => {
             this.onMore()
           })
@@ -98,20 +100,21 @@ export struct ControlPanel {
         Row() {
           Blank()
           Button('诊断')
-            .height(24)
+            .height(CONTROL_PANEL.DIAG_BTN_HEIGHT)
             .padding({ left: 10, right: 10 })
-            .borderRadius(12)
-            .fontSize(11)
+            .borderRadius(CONTROL_PANEL.DIAG_BTN_RADIUS)
+            .fontSize(15)
             .fontWeight(FontWeight.Medium)
-            .backgroundColor('#F1F5F9')
-            .fontColor(Page1Theme.TEXT_SECONDARY)
+            .backgroundColor(this.trafficBtnBg(false))
+            .fontColor(this.trafficBtnFg(false))
+            .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               this.onDiag()
             })
         }
         .width('100%')
 
-        Text('VEHICLE CONTROL')
+        Text('车辆控制')
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
           .fontColor(Page1Theme.TEXT_TERTIARY)
@@ -122,10 +125,23 @@ export struct ControlPanel {
           TextInput({ text: this.custom0AInput, placeholder: '分段输入：A@ 然后 1' })
             .layoutWeight(1)
             .height(40)
-            .backgroundColor('#F8FAFC')
+            .backgroundColor(INPUT.BG)
             .borderRadius(12)
             .fontSize(13)
-            .fontColor(Page1Theme.TEXT_PRIMARY)
+            .fontColor('#FFFFFF')
+            .placeholderColor(INPUT.PLACEHOLDER_COLOR)
+            .border({
+              width: 1,
+              // 聚焦时切换为极光青（INPUT.BORDER_FOCUS），平时为隐形微澜（INPUT.BORDER_COLOR）
+              color: this.isInputFocused ? INPUT.BORDER_FOCUS : INPUT.BORDER_COLOR
+            })
+              // 监听聚焦和失焦事件
+            .onFocus(() => {
+              this.isInputFocused = true
+            })
+            .onBlur(() => {
+              this.isInputFocused = false
+            })
             .padding({ left: 12, right: 12 })
             .onChange((v: string): void => {
               this.custom0AInput = v
@@ -135,14 +151,14 @@ export struct ControlPanel {
             })
 
           Button('发送')
-            .height(40)
+            .height(CONTROL_PANEL.SEND_BTN_HEIGHT)
             .padding({ left: 14, right: 14 })
-            .borderRadius(12)
-            .backgroundColor('#EEF2FF')
-            .fontColor('#3730A3')
+            .borderRadius(CONTROL_PANEL.SEND_BTN_RADIUS)
+            .backgroundColor(this.trafficBtnBg(false))
+            .fontColor(this.trafficBtnFg(false))
             .fontSize(12)
             .fontWeight(FontWeight.Bold)
-            .border({ width: 1, color: '#C7D2FE' })
+            .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               void this.onSendCustom0A()
             })
@@ -150,13 +166,18 @@ export struct ControlPanel {
         .width('100%')
 
         Row({ space: 10 }) {
-          Button('特殊路段')
+          Button() {
+            Text('特殊路段')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.trafficBtnFg(this.store.specialRoadEditEnabled))
+          }
             .layoutWeight(1)
-            .height(48)
-            .borderRadius(6)
-            .backgroundColor('#EEF2FF')
-            .fontColor('#3730A3')
-            .border({ width: 1, color: '#C7D2FE' })
+            .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+            .backgroundColor(this.trafficBtnBg(this.store.specialRoadEditEnabled))
+            .stateEffect(false)
+            .border({ width: 1, color: this.trafficBtnBorder(this.store.specialRoadEditEnabled) })
             .onClick((): void => {
               this.store.toggleSpecialRoadEdit()
             })
@@ -168,13 +189,18 @@ export struct ControlPanel {
                 })
             )
 
-          Button('设置车库')
+          Button() {
+            Text('设置车库')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.trafficBtnFg(this.store.garageEditEnabled))
+          }
             .layoutWeight(1)
-            .height(48)
-            .borderRadius(6)
-            .backgroundColor(this.store.garageEditEnabled ? '#EDE9FE' : '#EEF2FF')
-            .fontColor('#3730A3')
-            .border({ width: 1, color: this.store.garageEditEnabled ? '#A78BFA' : '#C7D2FE' })
+            .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+            .backgroundColor(this.trafficBtnBg(this.store.garageEditEnabled))
+            .stateEffect(false)
+            .border({ width: 1, color: this.trafficBtnBorder(this.store.garageEditEnabled) })
             .onClick((): void => {
               this.store.toggleGarageEdit()
             })
@@ -188,22 +214,22 @@ export struct ControlPanel {
 
           Button('停止任务')
             .layoutWeight(1)
-            .height(48)
-            .borderRadius(6)
-            .backgroundColor('#EEF2FF')
-            .fontColor('#3730A3')
-            .border({ width: 1, color: '#C7D2FE' })
+            .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+            .backgroundColor(this.trafficBtnBg(false))
+            .fontColor(this.trafficBtnFg(false))
+            .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               void page1Coordinator.stopTaskByUi()
             })
 
           Button('继续任务')
             .layoutWeight(1)
-            .height(48)
-            .borderRadius(6)
-            .backgroundColor('#EEF2FF')
-            .fontColor('#3730A3')
-            .border({ width: 1, color: '#C7D2FE' })
+            .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+            .backgroundColor(this.trafficBtnBg(false))
+            .fontColor(this.trafficBtnFg(false))
+            .border({ width: 1, color: this.trafficBtnBorder(false) })
             .onClick((): void => {
               void page1Coordinator.resumeTaskByUi()
             })
@@ -216,13 +242,13 @@ export struct ControlPanel {
             Text(this.store.trafficLightEditEnabled ? '交通灯：开' : '交通灯')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#3730A3')
+              .fontColor(this.trafficBtnFg(this.store.trafficLightEditEnabled))
           }
           .layoutWeight(1)
-          .height(48)
-          .borderRadius(6)
-          .backgroundColor('#EEF2FF')
-          .border({ width: 1, color: '#C7D2FE' })
+          .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(this.store.trafficLightEditEnabled))
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.trafficLightEditEnabled) })
           .onClick((): void => { this.onTrafficLight() })
           .gesture(
             LongPressGesture()
@@ -236,13 +262,13 @@ export struct ControlPanel {
             Text(this.store.gateEditEnabled ? '道闸：开' : '道闸')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#3730A3')
+              .fontColor(this.trafficBtnFg(this.store.gateEditEnabled))
           }
           .layoutWeight(1)
-          .height(48)
-          .borderRadius(6)
-          .backgroundColor('#EEF2FF')
-          .border({ width: 1, color: '#C7D2FE' })
+          .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(this.store.gateEditEnabled))
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.gateEditEnabled) })
           .onClick((): void => {
             this.onGate()
           })
@@ -254,32 +280,35 @@ export struct ControlPanel {
               })
           )
 
-          Button() {
-            Text('掉头')
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#3730A3')
-          }
+          Button('设置仓库')
           .layoutWeight(1)
-          .height(48)
-          .borderRadius(6)
-          .backgroundColor('#EEF2FF')
-          .border({ width: 1, color: '#C7D2FE' })
+          .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(this.store.warehouseEditEnabled))
+          .fontColor(this.trafficBtnFg(this.store.warehouseEditEnabled))
+          .border({ width: 1, color: this.trafficBtnBorder(this.store.warehouseEditEnabled) })
           .onClick((): void => {
-            void page1Coordinator.onAction(Page1Action.UTURN)
+            this.store.toggleWarehouseEdit()
           })
+          .gesture(
+            LongPressGesture()
+              .onAction((): void => {
+                void page1Coordinator.clearWarehouseByUi()
+                this.store.warehouseEditEnabled = false
+              })
+          )
 
           Button() {
             Text('清图')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#3730A3')
+              .fontColor(this.trafficBtnFg(false))
           }
           .layoutWeight(1)
-          .height(48)
-          .borderRadius(6)
-          .backgroundColor('#EEF2FF')
-          .border({ width: 1, color: '#C7D2FE' })
+          .height(CONTROL_PANEL.ACTION_BTN_HEIGHT)
+          .borderRadius(CONTROL_PANEL.ACTION_BTN_RADIUS)
+          .backgroundColor(this.trafficBtnBg(false))
+          .border({ width: 1, color: this.trafficBtnBorder(false) })
           .shadow({ radius: 0 })
           .onClick((): void => {
             void page1Coordinator.resetNetworkMap()
@@ -291,7 +320,8 @@ export struct ControlPanel {
       .width('100%')
       .borderRadius(8)
       .backgroundColor(Page1Theme.CARD)
-      .shadow({ radius: 16, color: '#00000008', offsetX: 0, offsetY: 2 })
+      .shadow({ radius: 10, color: 'rgba(110,168,255,0.12)', offsetX: 0, offsetY: 2 })
+      .backgroundBlurStyle(BlurStyle.Thin)
       .border({ width: 1, color: Page1Theme.BORDER })
     }
     .width('100%')
@@ -375,9 +405,24 @@ export struct ControlPanel {
   }
 
   private targetBtnBg(): string {
-    if (this.store.targetPickEnabled) return '#EDE9FE'
-    if (this.store.mapTargetPendingSend) return '#DDD6FE'
-    return '#F3EEFF'
+    if (this.store.targetPickEnabled) return this.trafficBtnBg(true)
+    if (this.store.mapTargetPendingSend) return this.trafficBtnBg(true)
+    return this.trafficBtnBg(false)
+  }
+
+  private trafficBtnBg(active: boolean): string {
+    if (active) return CONTROL_PANEL.BG_ACTIVE
+    return CONTROL_PANEL.BG_IDLE
+  }
+
+  private trafficBtnBorder(active: boolean): string {
+    if (active) return CONTROL_PANEL.BORDER_ACTIVE
+    return CONTROL_PANEL.BORDER_IDLE
+  }
+
+  private trafficBtnFg(active: boolean): string {
+    if (active) return CONTROL_PANEL.FG_ACTIVE
+    return CONTROL_PANEL.FG_IDLE
   }
 
   private onTargetPickBtn(): void {

@@ -21,88 +21,51 @@ const SHANTUI_LOG_TAG: string = 'shantui'
 
 type NodeBlockType = 'parking' | 'junction' | 'corridor'
 
-// 视觉配置中心：后续改地图样式优先改这里，而不是到处改魔法数字。
-interface ParkingMapStyle {
-  spotsPerRow: number
-  rowHeights: Array<number>
-  sidePaddingWidth: number
-  oceanBandHeight: number
-  horizontalLane: {
-    borderHeight: number
-    mainHeight: number
-    borderColor: string
-    mainColor: string
-  }
-  verticalLane: {
-    borderWidth: number
-    mainWidth: number
-    borderColor: string
-    mainColor: string
-  }
-  palette: {
-    ocean: string
-    parkingCell: string
-    parkingCellBorder: string
-  }
-  parkingCellBorderWidth: number
+interface RouteHighlightStyle {
   routeHighlight: {
-    color: string
     lineWidth: number
   }
-}
-
-const PARKING_MAP_STYLE: ParkingMapStyle = {
-  spotsPerRow: 2,
-  rowHeights: [110, 190, 190, 110],
-  sidePaddingWidth: 148,
-  oceanBandHeight: 60,
-  horizontalLane: {
-    borderHeight: 2,
-    mainHeight: 12,
-    borderColor: '#0016D278',
-    mainColor: '#C4D6E1'
-  },
-  verticalLane: {
-    borderWidth: 2,
-    mainWidth: 12,
-    borderColor: '#16D278',
-    mainColor: '#C4D6E1'
-  },
-  palette: {
-    ocean: '#00FFFF',
-    parkingCell: '#FFFFFF',
-    parkingCellBorder: '#16D278'
-  },
-  parkingCellBorderWidth: 2,
-  routeHighlight: {
-    color: '#FFD400',
-    lineWidth: 10
+  visual: {
+    coreBorderColor: string
+    flowColorA: string
+    flowColorB: string
+    flowBreathBase: number
+    flowBreathAmp: number
+    flowBreathSpeed: number
   }
 }
 
+const ROUTE_HIGHLIGHT_STYLE: RouteHighlightStyle = {
+  routeHighlight: {
+    lineWidth: 14
+  },
+  visual: {
+    coreBorderColor: '#4a0087ff',
+    flowColorA: '#ff00ff87',
+    flowColorB: '#fff6719e',
+    flowBreathBase: 0.75,
+    flowBreathAmp: 0.25,
+    flowBreathSpeed: 0.038
+  }
+}
 
 interface NodeBlockRule {
   fullBlockThreshold: number
 }
 
 type MapDetailLevel = 'OVERVIEW' | 'ROUTE' | 'DETAIL'
-interface MapRoadRect {
-  id: string
+
+interface RoutePolyPoint {
   x: number
   y: number
-  w: number
-  h: number
-}
-
-interface MapBlockCellRect extends MapRoadRect {
-  color: string
+  s: number
 }
 
 @Component
 export struct SandboxMap {
   @State private store: Page1UiStore = page1Store
   fullHeightMap: boolean = false
-  private readonly parkingMapStyle: ParkingMapStyle = PARKING_MAP_STYLE
+  private readonly routeHighlightStyle: RouteHighlightStyle = ROUTE_HIGHLIGHT_STYLE
   // 取消 Page1 分层式渲染显示：统一按单一细节层渲染。
   private readonly flatRenderModeEnabled: boolean = true
 
@@ -117,12 +80,12 @@ export struct SandboxMap {
 
   @State private cameraFollowEnabled: boolean = true
   private followTimerId: number = -1
+  private flowAnimTimerId: number = -1
 
   // 手动操作后的临时失权窗口
   @State private manualOverrideUntilMs: number = 0
+  @State private routeAnimTick: number = 0
   private lastTishixianDebugSig: string = ''
-  @State private homePlaceConfigured: boolean = false
-  @State private companyPlaceConfigured: boolean = false
   @State private directionPickerVisible: boolean = false
   @State private directionPickerCenterX: number = 0
   @State private directionPickerCenterY: number = 0
@@ -151,18 +114,21 @@ export struct SandboxMap {
     // 每次进入页面都回到 ROUTE 级缩放（1.2 <= zoom < 2.2）。
     this.zoomScale = this.DEFAULT_ROUTE_ZOOM
     this.pinchStartZoomScale = this.DEFAULT_ROUTE_ZOOM
-    this.capturePlaceConfiguredSnapshot()
-    this.logBengkui(`SandboxMap.aboutToAppear homeConfigured=${this.homePlaceConfigured} companyConfigured=${this.companyPlaceConfigured}`)
-    this.logBengkui(`SandboxMap.images company=${this.companyPlaceConfigured ? '公司仓库设置.jpg' : '公司仓库未设置.jpg'} home=${this.homePlaceConfigured ? '物流中心设置.jpg' : '物流中心未设置.jpg'}`)
+    this.logBengkui('SandboxMap.aboutToAppear')
     this.clampAll()
     this.syncCameraFollow()
-    this.probeTishixianRenderInput()
 
     this.stopFollowTimer()
     this.followTimerId = setInterval((): void => {
       this.syncCameraFollow()
-      this.probeTishixianRenderInput()
     }, this.FOLLOW_TICK_MS) as number
+
+    // 流光重绘独立 60fps 循环，避免被 120ms 的跟随节拍拖慢
+    if (this.flowAnimTimerId !== -1) clearInterval(this.flowAnimTimerId)
+    this.flowAnimTimerId = setInterval((): void => {
+      this.routeAnimTick = (this.routeAnimTick + 1) % 1000000
+      this.drawCompleteStreamingRoute()
+    }, 16) as number
   }
 
   aboutToDisappear(): void {
@@ -175,11 +141,10 @@ export struct SandboxMap {
       clearInterval(this.followTimerId)
       this.followTimerId = -1
     }
-  }
-
-  private capturePlaceConfiguredSnapshot(): void {
-    this.homePlaceConfigured = this.store.homePlaceConfigured
-    this.companyPlaceConfigured = this.store.companyPlaceConfigured
+    if (this.flowAnimTimerId !== -1) {
+      clearInterval(this.flowAnimTimerId)
+      this.flowAnimTimerId = -1
+    }
   }
 
   private logBengkui(msg: string): void {
@@ -266,6 +231,7 @@ export struct SandboxMap {
             this.buildGateMarkers()
             this.buildSpecialRoadMarkers()
             this.buildGarageMarkers()
+            this.buildWarehouseMarkers()
             this.buildBlockedNodeMarkers()
             this.buildRouteObstaclePointMarkers()
             this.buildBlockedEdgeMarkers()
@@ -274,7 +240,6 @@ export struct SandboxMap {
 
           // 图层4：小车相关（最上层）
           this.buildCarDot()
-          this.buildCarHeadingArrow()
           if (this.isDetailLevel()) {
             this.buildCurrentNodeBadge()
           }
@@ -367,6 +332,16 @@ export struct SandboxMap {
             this.store.upsertGaragePoint(id)
             void page1Coordinator.setGarageByMapNode(id)
             this.store.garageEditEnabled = false
+          }
+          return
+        }
+
+        if (this.store.warehouseEditEnabled) {
+          const id: string = this.store.nearestNodeIdByPixel(x, y)
+          if (id.length > 0) {
+            this.store.upsertWarehousePoint(id)
+            void page1Coordinator.setWarehouseByMapNode(id)
+            this.store.warehouseEditEnabled = false
           }
           return
         }
@@ -511,9 +486,11 @@ export struct SandboxMap {
     this.logShantui(`sector click local=(${localX.toFixed(1)},${localY.toFixed(1)}) dir=${dir}`)
     this.directionPickerSelected = dir
 
-    // 2. 立即同步本地状态（视觉反馈）
-    this.syncLocalHeadingByDir(dir)
-    this.logShantui(`sync heading dir=${dir} headingDeg=${this.headingDegFromDir(dir)}`)
+    // 2. 仅 CAR 模式同步小车朝向；TRAFFIC 模式只设置红绿灯方向，不改车头。
+    if (this.directionPickerMode === 'CAR') {
+      this.syncLocalHeadingByDir(dir)
+      this.logShantui(`sync heading dir=${dir} headingDeg=${this.headingDegFromDir(dir)}`)
+    }
 
     // 3. 延迟发送指令并关闭，增加用户确认感
     this.clearDirectionPickerCloseTimer()
@@ -632,10 +609,10 @@ export struct SandboxMap {
   private buildTrafficLightMarkers(): void {
     ForEach(this.store.trafficLights, (p: any): void => {
       Image($rawfile('icon/红绿灯.png'))
-        .width(36)
-        .height(36)
+        .width(this.mapPlacedMarkerSize())
+        .height(this.mapPlacedMarkerSize())
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
+        .position({ x: p.xNorm * this.store.mapW - this.mapPlacedMarkerSize() / 2, y: p.yNorm * this.store.mapH - this.mapPlacedMarkerSize() / 2 })
         .zIndex(6)
     }, (p: any): string => `traffic-${p.id}`)
   }
@@ -644,10 +621,10 @@ export struct SandboxMap {
   private buildGateMarkers(): void {
     ForEach(this.store.gatePoints, (p: any): void => {
       Image($rawfile('icon/道闸.png'))
-        .width(36)
-        .height(36)
+        .width(this.mapPlacedMarkerSize())
+        .height(this.mapPlacedMarkerSize())
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
+        .position({ x: p.xNorm * this.store.mapW - this.mapPlacedMarkerSize() / 2, y: p.yNorm * this.store.mapH - this.mapPlacedMarkerSize() / 2 })
         .zIndex(6)
     }, (p: any): string => `gate-${p.id}`)
   }
@@ -656,10 +633,10 @@ export struct SandboxMap {
   private buildSpecialRoadMarkers(): void {
     ForEach(this.store.specialRoadPoints, (p: any): void => {
       Image($rawfile('icon/农作物.png'))
-        .width(36)
-        .height(36)
+        .width(this.mapPlacedMarkerSize())
+        .height(this.mapPlacedMarkerSize())
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
+        .position({ x: p.xNorm * this.store.mapW - this.mapPlacedMarkerSize() / 2, y: p.yNorm * this.store.mapH - this.mapPlacedMarkerSize() / 2 })
         .zIndex(6)
     }, (p: any): string => `special-${p.id}`)
   }
@@ -668,12 +645,24 @@ export struct SandboxMap {
   private buildGarageMarkers(): void {
     ForEach(this.store.garagePoints, (p: any): void => {
       Image($rawfile('icon/车库.png'))
-        .width(36)
-        .height(36)
+        .width(this.mapPlacedMarkerSize())
+        .height(this.mapPlacedMarkerSize())
         .objectFit(ImageFit.Contain)
-        .position({ x: p.xNorm * this.store.mapW - 18, y: p.yNorm * this.store.mapH - 18 })
+        .position({ x: p.xNorm * this.store.mapW - this.mapPlacedMarkerSize() / 2, y: p.yNorm * this.store.mapH - this.mapPlacedMarkerSize() / 2 })
         .zIndex(6)
     }, (p: any): string => `garage-${p.id}`)
+  }
+
+  @Builder
+  private buildWarehouseMarkers(): void {
+    ForEach(this.store.warehousePoints, (p: any): void => {
+      Image($rawfile('icon/仓储.png'))
+        .width(this.mapPlacedMarkerSize())
+        .height(this.mapPlacedMarkerSize())
+        .objectFit(ImageFit.Contain)
+        .position({ x: p.xNorm * this.store.mapW - this.mapPlacedMarkerSize() / 2, y: p.yNorm * this.store.mapH - this.mapPlacedMarkerSize() / 2 })
+        .zIndex(6)
+    }, (p: any): string => `warehouse-${p.id}`)
   }
 
 
@@ -711,12 +700,12 @@ export struct SandboxMap {
     ForEach(this.visibleGridNodesForRender(), (n: GridNode): void => {
       if (!this.isCurrentNode(n.id) && this.shouldShowGridNode(n.id)) {
         Column() {}
-          .width(this.gridDotSize())
-          .height(this.gridDotSize())
-          .borderRadius(this.gridDotSize() / 2)
-          .backgroundColor(this.nodeDotBg(n.id))
-          .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
-          .zIndex(2)
+        .width(this.gridDotSize())
+        .height(this.gridDotSize())
+        .borderRadius(this.gridDotSize() / 2)
+        .backgroundColor(this.nodeDotBg(n.id))
+        .position(this.store.gridNodeDotPos(n, this.gridDotSize()))
+        .zIndex(2)
 
         if (this.shouldShowNodeLabel(n.id)) {
           Text(n.id)
@@ -734,9 +723,9 @@ export struct SandboxMap {
   private buildRouteObstaclePointMarkers(): void {
     ForEach(this.visibleRouteObstaclePointsForRender(), (p: RouteObstaclePoint): void => {
       if (!this.edgeMarkerSuppressedByNodeBlock(p.edgeId)) {
-        Image($rawfile('icon/障碍物.png'))
-          .width(30)
-          .height(30)
+        Image($rawfile('icon/道路阻塞.png'))
+          .width(this.blockedMarkerSize())
+          .height(this.blockedMarkerSize())
           .objectFit(ImageFit.Contain)
           .position(this.routeObstaclePointPos(p))
           .zIndex(4)
@@ -745,8 +734,8 @@ export struct SandboxMap {
   }
 
   private routeObstaclePointPos(p: RouteObstaclePoint): XYPos {
-    const x: number = p.xNorm * this.store.mapW - 15
-    const y: number = p.yNorm * this.store.mapH - 15
+    const x: number = p.xNorm * this.store.mapW - this.blockedMarkerSize() / 2
+    const y: number = p.yNorm * this.store.mapH - this.blockedMarkerSize() / 2
     return { x: x, y: y }
   }
 
@@ -754,9 +743,9 @@ export struct SandboxMap {
   private buildBlockedEdgeMarkers(): void {
     ForEach(this.visibleBlockedEdgesForRender(), (edgeId: string): void => {
       if (this.edgeMarkerVisible(edgeId)) {
-        Image($rawfile('icon/障碍物.png'))
-          .width(30)
-          .height(30)
+        Image($rawfile('icon/道路阻塞.png'))
+          .width(this.blockedMarkerSize())
+          .height(this.blockedMarkerSize())
           .objectFit(ImageFit.Contain)
           .position(this.edgeMarkerPos(edgeId))
           .zIndex(3)
@@ -774,7 +763,7 @@ export struct SandboxMap {
     if (!p) {
       return { x: -1000, y: -1000 }
     }
-    return { x: p.x - 15, y: p.y - 15 }
+    return { x: p.x - this.blockedMarkerSize() / 2, y: p.y - this.blockedMarkerSize() / 2 }
   }
 
   @Builder
@@ -782,11 +771,11 @@ export struct SandboxMap {
     ForEach(this.visibleBlockedNodesForRender(), (n: GridNode): void => {
       if (this.shouldShowBlockedNodeMarker(n.id)) {
         Image(this.blockedNodeMarkerResource(n.id))
-        .width(30)
-        .height(30)
-        .objectFit(ImageFit.Contain)
-        .position(this.store.gridNodeDotPos(n, 30))
-        .zIndex(6)
+          .width(this.blockedMarkerSize())
+          .height(this.blockedMarkerSize())
+          .objectFit(ImageFit.Contain)
+          .position(this.store.gridNodeDotPos(n, this.blockedMarkerSize()))
+          .zIndex(6)
       }
     }, (n: GridNode): string => `blocked-node-${n.id}`)
   }
@@ -839,13 +828,37 @@ export struct SandboxMap {
 
   @Builder
   private buildDestinationMarker(): void {
-    if (this.hasDestinationMarker()) {
-      Image($rawfile('icon/目的地.png'))
-        .width(24)
-        .height(24)
-        .objectFit(ImageFit.Contain)
-        .position(this.destinationMarkerPos())
+    if (this.shouldShowDestinationVisual()) {
+      Column() {}
+        .width(this.destinationOuterRingSize())
+        .height(this.destinationOuterRingSize())
+        .borderRadius(this.destinationOuterRingSize() / 2)
+        .border({ width: 2.4, color: '#7CD7FF' })
+        .backgroundColor('#0F58B2FF')
+        .position(this.destinationOuterRingPos())
+        .scale({ x: this.destinationOuterRingScale(), y: this.destinationOuterRingScale() })
+        .opacity(this.destinationOuterRingOpacity())
+        .shadow({ radius: 12, color: '#2A7BE7FF', offsetX: 0, offsetY: 0 })
+        .zIndex(7)
+
+      Column() {}
+        .width(this.destinationInnerRingSize())
+        .height(this.destinationInnerRingSize())
+        .borderRadius(this.destinationInnerRingSize() / 2)
+        .border({ width: 2.0, color: '#9CE6FF' })
+        .backgroundColor('#1646A8FF')
+        .position(this.destinationInnerRingPos())
+        .scale({ x: this.destinationInnerRingScale(), y: this.destinationInnerRingScale() })
+        .opacity(this.destinationInnerRingOpacity())
+        .shadow({ radius: 10, color: '#307BDFFF', offsetX: 0, offsetY: 0 })
         .zIndex(8)
+
+      Image($rawfile('icon/目的地.png'))
+        .width(this.destinationMarkerSize())
+        .height(this.destinationMarkerSize())
+        .objectFit(ImageFit.Contain)
+        .position(this.destinationMarkerAnimatedPos())
+        .zIndex(9)
     }
   }
 
@@ -853,10 +866,91 @@ export struct SandboxMap {
     return this.destinationMarkerNode() !== undefined
   }
 
+  private shouldShowDestinationVisual(): boolean {
+    const targetId: string = this.displayTargetNodeId()
+    if (targetId.length <= 0) return false
+    const applied: string = this.store.destApplied.trim().toUpperCase()
+    if (targetId !== applied) return true
+    return !this.hasArrivedAppliedDestination()
+  }
+
+  private hasArrivedAppliedDestination(): boolean {
+    const applied: string = this.store.destApplied.trim().toUpperCase()
+    if (applied.length <= 0) return false
+    const current: string = this.store.currentSnapNodeId.trim().toUpperCase()
+    if (current !== applied) return false
+    if (this.store.pathNodes.length <= 0) return true
+    const lastId: string = this.store.pathNodes[this.store.pathNodes.length - 1].trim().toUpperCase()
+    if (lastId !== applied) return false
+    return this.store.pathIndex >= (this.store.pathNodes.length - 1)
+  }
+
+  private destinationBreathPhase(): number {
+    return (Math.sin(this.routeAnimTick * 0.09) + 1) / 2
+  }
+
+  private destinationRingFloatOffsetY(): number {
+    return (0.5 - this.destinationBreathPhase()) * 4
+  }
+
+  private destinationIconFloatOffsetY(): number {
+    return (0.5 - this.destinationBreathPhase()) * 8
+  }
+
+  private destinationOuterRingSize(): number {
+    return this.destinationMarkerSize() + 30
+  }
+
+  private destinationInnerRingSize(): number {
+    return this.destinationMarkerSize() + 14
+  }
+
+  private destinationOuterRingScale(): number {
+    return 0.96 + 0.14 * this.destinationBreathPhase()
+  }
+
+  private destinationInnerRingScale(): number {
+    return 0.98 + 0.10 * this.destinationBreathPhase()
+  }
+
+  private destinationOuterRingOpacity(): number {
+    return 0.24 + 0.28 * this.destinationBreathPhase()
+  }
+
+  private destinationInnerRingOpacity(): number {
+    return 0.32 + 0.34 * this.destinationBreathPhase()
+  }
+
+  private destinationNodeCenter(): XYPos {
+    const node: GridNode | undefined = this.destinationMarkerNode()
+    if (!node) return { x: -9999, y: -9999 }
+    return { x: node.xNorm * this.store.mapW, y: node.yNorm * this.store.mapH }
+  }
+
+  private destinationOuterRingPos(): XYPos {
+    const center: XYPos = this.destinationNodeCenter()
+    const size: number = this.destinationOuterRingSize()
+    return { x: center.x - size / 2, y: center.y - size / 2 + this.destinationRingFloatOffsetY() }
+  }
+
+  private destinationInnerRingPos(): XYPos {
+    const center: XYPos = this.destinationNodeCenter()
+    const size: number = this.destinationInnerRingSize()
+    return { x: center.x - size / 2, y: center.y - size / 2 + this.destinationRingFloatOffsetY() }
+  }
+
+  private destinationMarkerAnimatedPos(): XYPos {
+    const p: XYPos = this.destinationMarkerPos()
+    return { x: p.x, y: p.y + this.destinationIconFloatOffsetY() }
+  }
+
   private destinationMarkerPos(): XYPos {
     const node: GridNode | undefined = this.destinationMarkerNode()
     if (!node) return { x: -9999, y: -9999 }
-    return this.store.gridNodeDotPos(node, 24)
+    const size: number = this.destinationMarkerSize()
+    const center: XYPos = this.store.gridNodeDotPos(node, size)
+    // 让图片底端对齐点位：在居中位置基础上向上偏移半个高度
+    return { x: center.x, y: center.y - size / 2 }
   }
 
   private destinationMarkerNode(): GridNode | undefined {
@@ -888,31 +982,18 @@ export struct SandboxMap {
 
   @Builder
   private buildCarDot(): void {
-    Column() {}
-    .width(this.store.carDotSize)
-    .height(this.store.carDotSize)
-    .borderRadius(this.store.carDotSize / 2)
-    .backgroundColor('#3381FF')
-    .border({ width: 3, color: '#FFFFFF' })
-    .position(this.store.carDotPos())
-    .zIndex(10)
-  }
-
-  // 箭头相关
-  @Builder
-  private buildCarHeadingArrow(): void {
-    Image($rawfile('icon/方向箭头.png'))
-      .width(this.carArrowSize())
-      .height(this.carArrowSize())
+    Image($rawfile('icon/小车.png'))
+      .width(this.carIconSize())
+      .height(this.carIconSize())
       .objectFit(ImageFit.Contain)
       .rotate({
         z: 1,
-        angle: this.carArrowDisplayDeg(),
+        angle: this.normHeadingDeg(this.store.pose.headingDeg) + 90,
         centerX: '50%',
         centerY: '50%'
       })
-      .position(this.carArrowPos())
-      .zIndex(11)
+      .position(this.carIconPos())
+      .zIndex(10)
   }
 
   private normHeadingDeg(v: number): number {
@@ -923,62 +1004,22 @@ export struct SandboxMap {
     return x
   }
 
-  private carArrowSectorIndex(): number {
-    const headingDeg: number = this.normHeadingDeg(this.store.pose.headingDeg)
-    return Math.round(headingDeg / 45) % 8
+  private carIconSize(): number {
+    const min: number = Math.max(44, this.store.carDotSize + 22)
+    if (min > 80) return 80
+    return min
   }
 
-  private carArrowSize(): number {
-    return 18
-  }
-
-  private carArrowPos(): XYPos {
+  private carIconPos(): XYPos {
     const dot: XYPos = this.store.carDotPos()
-    const size: number = this.store.carDotSize
-    const centerX: number = dot.x + size / 2
-    const centerY: number = dot.y + size / 2
-    const headingDeg: number = this.carArrowHeadingDeg()
-    const rad: number = headingDeg * Math.PI / 180
-    const radius: number = size / 2 + 10
-    const arrowSize: number = this.carArrowSize()
-
+    const dotSize: number = this.store.carDotSize
+    const iconSize: number = this.carIconSize()
+    const centerX: number = dot.x + dotSize / 2
+    const centerY: number = dot.y + dotSize / 2
     return {
-      x: centerX + Math.cos(rad) * radius - arrowSize / 2,
-      y: centerY + Math.sin(rad) * radius - arrowSize / 2
+      x: centerX - iconSize / 2,
+      y: centerY - iconSize / 2
     }
-  }
-
-  private carArrowHeadingDeg(): number {
-    // 边框优先规则：
-    // - 红点贴左边框：箭头强制朝右
-    // - 红点贴右边框：箭头强制朝左
-    if (this.isCarNearLeftBorder()) return 0
-    if (this.isCarNearRightBorder()) return 180
-    return this.carArrowSectorIndex() * 45
-  }
-
-  private carArrowDisplayDeg(): number {
-    // 假设方向箭头.png 的“0度”朝向为右（与旧版文本箭头一致）。
-    // 若素材默认朝上，可改成：return this.carArrowHeadingDeg() + 90
-    return this.carArrowHeadingDeg()
-  }
-
-  private isCarNearLeftBorder(): boolean {
-    const dot: XYPos = this.store.carDotPos()
-    const size: number = this.store.carDotSize
-    const centerX: number = dot.x + size / 2
-    const thresholdPx: number = Math.max(8, size * 0.7)
-    return centerX <= thresholdPx
-  }
-
-  private isCarNearRightBorder(): boolean {
-    const dot: XYPos = this.store.carDotPos()
-    const size: number = this.store.carDotSize
-    const mw: number = this.store.mapW
-    if (mw <= 0) return false
-    const centerX: number = dot.x + size / 2
-    const thresholdPx: number = Math.max(8, size * 0.7)
-    return centerX >= mw - thresholdPx
   }
 
   private edgeMarkerSuppressedByNodeBlock(edgeId: string): boolean {
@@ -1009,10 +1050,7 @@ export struct SandboxMap {
   }
 
   private blockedNodeMarkerResource(nodeId: string): any {
-    if (this.isNodeFullyBlocked(nodeId) && !this.isParkingNode(nodeId)) {
-      return $rawfile('icon/堵塞占用.png')
-    }
-    return $rawfile('icon/堵塞.png')
+    return $rawfile('icon/道路阻塞.png')
   }
 
   private nodeBlockTypeOf(nodeId: string): NodeBlockType {
@@ -1079,36 +1117,6 @@ export struct SandboxMap {
     }
   }
 
-  @Builder
-  private buildOverviewCurrentNodeMarker(): void {
-    if (this.hasOverviewCurrentNodeMarker()) {
-      Column() {}
-        .width(14)
-        .height(14)
-        .borderRadius(7)
-        .backgroundColor('#4089FF')
-        .border({ width: 2, color: '#FFFFFF' })
-        .position(this.overviewCurrentNodeMarkerPos())
-        .zIndex(9)
-    }
-  }
-
-  private hasOverviewCurrentNodeMarker(): boolean {
-    return this.overviewCurrentNode() !== undefined
-  }
-
-  private overviewCurrentNode(): GridNode | undefined {
-    const id: string = this.currentNodeBadgeId()
-    if (id.length <= 0) return undefined
-    return this.findGridNodeById(id)
-  }
-
-  private overviewCurrentNodeMarkerPos(): XYPos {
-    const n: GridNode | undefined = this.overviewCurrentNode()
-    if (!n) return { x: -9999, y: -9999 }
-    return this.store.gridNodeDotPos(n, 14)
-  }
-
   private currentNodeBadgeId(): string {
     return this.store.currentSnapNodeId.trim().toUpperCase()
   }
@@ -1121,7 +1129,7 @@ export struct SandboxMap {
     const bh: number = 18
     const centerX: number = dot.x + size / 2
     const centerY: number = dot.y + size / 2
-    const oppositeDeg: number = (this.carArrowHeadingDeg() + 180) % 360
+    const oppositeDeg: number = (this.normHeadingDeg(this.store.pose.headingDeg) + 180) % 360
     const oppositeRad: number = oppositeDeg * Math.PI / 180
     const radius: number = size / 2 + 16
 
@@ -1281,90 +1289,215 @@ export struct SandboxMap {
     return !(sx < -margin || sx > this.store.mapW + margin || sy < -margin || sy > this.store.mapH + margin)
   }
 
+  private canvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
+  private canvasContext: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.canvasSettings)
+
   @Builder
   private buildPlannedRouteHighlight(): void {
-    ForEach(this.highlightRouteRects(), (r: MapRoadRect): void => {
-      Column() {}
-        .width(r.w)
-        .height(r.h)
-        .borderRadius(Math.min(r.w, r.h) / 2)
-        .backgroundColor(this.parkingMapStyle.routeHighlight.color)
-        .border({ width: 1, color: '#000000AA' })
-        .position({ x: r.x, y: r.y })
-        .zIndex(1)
-    }, (r: MapRoadRect): string => `hl-${r.id}`)
+    // 🎨【Canvas 完整流光渲染】一次性绘制整条路线的连贯流光
+    Canvas(this.canvasContext)
+      .width('100%')
+      .height('100%')
+      .onReady((): void => {
+        this.drawCompleteStreamingRoute()
+      })
   }
 
-  private highlightRouteRects(): Array<MapRoadRect> {
-    const nodes: Array<string> = this.activeHighlightNodes()
-    const thickness: number = this.routeHighlightThickness(this.parkingMapStyle)
-    const rects: Array<MapRoadRect> = this.plannedRouteRectsByNodes(nodes, thickness)
-    const head: string = nodes.length > 0 ? nodes[0] : ''
-    const tail: string = nodes.length > 0 ? nodes[nodes.length - 1] : ''
-    let firstRect: string = 'none'
-    if (rects.length > 0) {
-      const r: MapRoadRect = rects[0]
-      firstRect = `x=${r.x.toFixed(1)},y=${r.y.toFixed(1)},w=${r.w.toFixed(1)},h=${r.h.toFixed(1)}`
-    }
-    this.debugTishixian(
-      'render',
-      `nodes=${nodes.length}(${head}->${tail}) rects=${rects.length} thick=${thickness.toFixed(1)} map=${this.store.mapW.toFixed(1)}x${this.store.mapH.toFixed(1)} first=${firstRect}`
-    )
-    return rects
-  }
+  private drawCompleteStreamingRoute(): void {
+    const ctx = this.canvasContext
+    ctx.clearRect(0, 0, this.store.mapW, this.store.mapH)
+    const nodes = this.activeHighlightNodes()
+    if (nodes.length >= 2) {
+      const pts: Array<RoutePolyPoint> = this.buildRoutePolyline(nodes)
+      if (pts.length >= 2) {
+        const thickness = this.routeHighlightThickness(this.routeHighlightStyle)
 
-  private routeHighlightThickness(style: ParkingMapStyle): number {
-    const v: number = style.routeHighlight.lineWidth
-    if (v <= 0) return 14
-    return v
-  }
+        // 1. 整条路径的底色轨道（科技蓝、低透明度）
+        this.strokePolyline(ctx, pts, this.routeHighlightStyle.visual.coreBorderColor, thickness, 0.3)
 
-  private plannedRouteRectsByNodes(pathNodes: Array<string>, thickness: number): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    if (pathNodes.length < 2) return out
-
-    for (let i: number = 0; i < pathNodes.length - 1; i++) {
-      const fromId: string = pathNodes[i]
-      const toId: string = pathNodes[i + 1]
-      const a: GridNode | undefined = this.findGridNodeById(fromId)
-      const b: GridNode | undefined = this.findGridNodeById(toId)
-      if (!a || !b) continue
-
-      const ax: number = a.xNorm * this.store.mapW
-      const ay: number = a.yNorm * this.store.mapH
-      const bx: number = b.xNorm * this.store.mapW
-      const by: number = b.yNorm * this.store.mapH
-      const dx: number = Math.abs(bx - ax)
-      const dy: number = Math.abs(by - ay)
-      const segId: string = RouteEdgeCodec.normalize(fromId, toId)
-
-      if (dx >= dy) {
-        const x: number = Math.min(ax, bx) - thickness / 2
-        const y: number = (ay + by) / 2 - thickness / 2
-        const w: number = dx + thickness
-        const h: number = thickness
-        out.push({ id: `route-hl-${segId}-${i}`, x: x, y: y, w: w, h: h })
-      } else {
-        const x: number = (ax + bx) / 2 - thickness / 2
-        const y: number = Math.min(ay, by) - thickness / 2
-        const w: number = thickness
-        const h: number = dy + thickness
-        out.push({ id: `route-hl-${segId}-${i}`, x: x, y: y, w: w, h: h })
+        // 2. 流光跑马灯效果（虚线 + dashOffset 动画）
+        this.drawDashedFlowLine(ctx, pts, thickness)
       }
     }
+    this.drawPlacedMarkerFlowBorders(ctx)
+  }
 
+  private drawDashedFlowLine(ctx: CanvasRenderingContext2D, pts: Array<RoutePolyPoint>, thickness: number): void {
+    const total: number = pts[pts.length - 1].s
+    if (total <= 0) return
+
+    const sweepLen: number = Math.max(50, total * 0.18)
+    const speed: number = 5.0
+    const streamerCount: number = 3
+    const cycle: number = total + sweepLen
+
+    const heads: Array<number> = []
+    const baseHead: number = (this.routeAnimTick * speed) % cycle
+    for (let k: number = 0; k < streamerCount; k++) {
+      heads.push((baseHead + (cycle * k) / streamerCount) % cycle)
+    }
+
+    const step: number = 4
+    const lineW: number = Math.max(2, thickness * 0.32)
+    ctx.lineCap = 'butt'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = lineW
+    const breathAlpha: number = this.routeFlowBreathAlpha()
+
+    let prev: RoutePolyPoint = this.pointAtArcLength(pts, 0)
+    for (let s: number = step; s <= total; s += step) {
+      const cur: RoutePolyPoint = this.pointAtArcLength(pts, s)
+      const mid: number = s - step / 2
+
+      let bestAlpha: number = 0
+      let bestHeadFactor: number = 0
+      for (let k: number = 0; k < heads.length; k++) {
+        const dist: number = heads[k] - mid
+        if (dist < 0) continue
+        if (dist > sweepLen) continue
+        const f: number = 1 - dist / sweepLen
+        const a: number = Math.pow(f, 2.0)
+        if (a > bestAlpha) {
+          bestAlpha = a
+          bestHeadFactor = f
+        }
+      }
+      if (bestAlpha <= 0.01) {
+        prev = cur
+        continue
+      }
+
+      // 关键修正：按“尾部蓝 -> 头部青”给每段流光上色，形成可见渐变尾迹。
+      ctx.strokeStyle = this.routeFlowGradientColor(bestHeadFactor)
+      ctx.globalAlpha = bestAlpha * breathAlpha
+      ctx.beginPath()
+      ctx.moveTo(prev.x, prev.y)
+      ctx.lineTo(cur.x, cur.y)
+      ctx.stroke()
+
+      prev = cur
+    }
+    ctx.globalAlpha = 1
+  }
+
+  private routeFlowBreathPhase(): number {
+    const base: number = this.routeAnimTick * this.routeHighlightStyle.visual.flowBreathSpeed
+    return (Math.sin(base) + 1) / 2
+  }
+
+  private routeFlowBreathAlpha(): number {
+    const b: number = this.routeHighlightStyle.visual.flowBreathBase
+    const a: number = this.routeHighlightStyle.visual.flowBreathAmp
+    const out: number = b + a * this.routeFlowBreathPhase()
+    if (out < 0.08) return 0.08
+    if (out > 1) return 1
     return out
   }
 
-  private activeHighlightNodes(): Array<string> {
-    if (this.store.mapTargetPendingSend) {
-      this.debugTishixian('active', 'source=path pending=1')
+  private routeFlowBreathColor(): string {
+    return this.mixHexColor(this.routeHighlightStyle.visual.flowColorA, this.routeHighlightStyle.visual.flowColorB, this.routeFlowBreathPhase())
+  }
+
+  private routeFlowGradientColor(headFactor: number): string {
+    const h: number = headFactor < 0 ? 0 : (headFactor > 1 ? 1 : headFactor)
+    const pulse: number = this.routeFlowBreathPhase()
+    const t: number = h * 0.82 + pulse * 0.18
+    // 尾部更蓝，头部更青亮
+    return this.mixHexColor(this.routeHighlightStyle.visual.flowColorB, this.routeHighlightStyle.visual.flowColorA, t)
+  }
+
+  private mixHexColor(a: string, b: string, t: number): string {
+    const aa = this.parseHexColor(a)
+    const bb = this.parseHexColor(b)
+    const p: number = t < 0 ? 0 : (t > 1 ? 1 : t)
+    const r: number = Math.floor(aa.r + (bb.r - aa.r) * p)
+    const g: number = Math.floor(aa.g + (bb.g - aa.g) * p)
+    const bl: number = Math.floor(aa.b + (bb.b - aa.b) * p)
+    return this.rgbToHex(r, g, bl)
+  }
+
+  private parseHexColor(hex: string): { r: number, g: number, b: number } {
+    const raw: string = hex.trim().replace('#', '')
+    if (raw.length === 6) {
+      const r: number = Number.parseInt(raw.slice(0, 2), 16)
+      const g: number = Number.parseInt(raw.slice(2, 4), 16)
+      const b: number = Number.parseInt(raw.slice(4, 6), 16)
+      return { r: r, g: g, b: b }
     }
+    return { r: 0, g: 255, b: 204 }
+  }
+
+  private rgbToHex(r: number, g: number, b: number): string {
+    const rr: string = this.byteToHex(r)
+    const gg: string = this.byteToHex(g)
+    const bb: string = this.byteToHex(b)
+    return `#${rr}${gg}${bb}`
+  }
+
+  private byteToHex(v: number): string {
+    const c: number = v < 0 ? 0 : (v > 255 ? 255 : v)
+    const s: string = c.toString(16).toUpperCase()
+    return s.length >= 2 ? s : `0${s}`
+  }
+
+  private pointAtArcLength(pts: Array<RoutePolyPoint>, s: number): RoutePolyPoint {
+    if (s <= 0) return { x: pts[0].x, y: pts[0].y, s: 0 }
+    const last: RoutePolyPoint = pts[pts.length - 1]
+    if (s >= last.s) return { x: last.x, y: last.y, s: last.s }
+    for (let i: number = 1; i < pts.length; i++) {
+      const a: RoutePolyPoint = pts[i - 1]
+      const b: RoutePolyPoint = pts[i]
+      if (s <= b.s) {
+        const segLen: number = b.s - a.s
+        const t: number = segLen > 0 ? (s - a.s) / segLen : 0
+        return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, s: s }
+      }
+    }
+    return { x: last.x, y: last.y, s: last.s }
+  }
+
+  private buildRoutePolyline(nodes: Array<string>): Array<RoutePolyPoint> {
+    const pts: Array<RoutePolyPoint> = []
+    let acc: number = 0
+    for (let i: number = 0; i < nodes.length; i++) {
+      const n: GridNode | undefined = this.findGridNodeById(nodes[i])
+      if (!n) continue
+      const x: number = n.xNorm * this.store.mapW
+      const y: number = n.yNorm * this.store.mapH
+      if (pts.length > 0) {
+        const prev = pts[pts.length - 1]
+        acc += Math.hypot(x - prev.x, y - prev.y)
+      }
+      pts.push({ x: x, y: y, s: acc })
+    }
+    return pts
+  }
+
+  private strokePolyline(ctx: CanvasRenderingContext2D, pts: Array<RoutePolyPoint>, color: string, width: number, alpha: number): void {
+    ctx.globalAlpha = alpha
+    ctx.strokeStyle = color
+    ctx.lineWidth = width
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i: number = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x, pts[i].y)
+    }
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  private routeHighlightThickness(style: RouteHighlightStyle): number {
+    const v: number = style.routeHighlight.lineWidth
+    if (v <= 0) return 12
+    return v
+  }
+
+  private activeHighlightNodes(): Array<string> {
     if (this.store.pathNodes.length >= 2) {
-      this.debugTishixian('active', `source=path len=${this.store.pathNodes.length} nodes=${this.store.pathNodes.join('->')}`)
       return this.store.pathNodes
     }
-    this.debugTishixian('active', 'source=none len=0')
     return []
   }
 
@@ -1373,509 +1506,6 @@ export struct SandboxMap {
     if (sig === this.lastTishixianDebugSig) return
     this.lastTishixianDebugSig = sig
     this.store.pushLog(`[tishixian] ${stage} ${message}`)
-  }
-
-  private probeTishixianRenderInput(): void {
-    const nodes: Array<string> = this.activeHighlightNodes()
-    const thickness: number = this.routeHighlightThickness(this.parkingMapStyle)
-    const rects: Array<MapRoadRect> = this.plannedRouteRectsByNodes(nodes, thickness)
-    const head: string = nodes.length > 0 ? nodes[0] : ''
-    const tail: string = nodes.length > 0 ? nodes[nodes.length - 1] : ''
-    let inside: number = 0
-    let screenVisible: number = 0
-    for (let i: number = 0; i < rects.length; i++) {
-      const r: MapRoadRect = rects[i]
-      const hitX: boolean = r.x + r.w >= 0 && r.x <= this.store.mapW
-      const hitY: boolean = r.y + r.h >= 0 && r.y <= this.store.mapH
-      if (hitX && hitY) inside += 1
-      if (this.isWorldRectVisible(r.x, r.y, r.w, r.h, 0)) screenVisible += 1
-    }
-    this.debugTishixian(
-      'probe',
-      `pending=${this.store.mapTargetPendingSend ? 1 : 0} nodes=${nodes.length}(${head}->${tail}) rects=${rects.length} inside=${inside} screenVisible=${screenVisible} zoom=${this.zoomScale.toFixed(2)} offset=(${this.offsetX.toFixed(1)},${this.offsetY.toFixed(1)}) map=${this.store.mapW.toFixed(1)}x${this.store.mapH.toFixed(1)}`
-    )
-  }
-
-  @Builder
-  private buildProceduralMapBase(): void {
-    Stack() {
-      Column() {}
-        .width('100%')
-        .height('100%')
-        .backgroundColor(this.isOverviewLevel() ? '#061220' : '#081624')
-
-      if (this.isOverviewLevel()) {
-        // OVERVIEW 只保留暗底，不绘制网格。
-      } else {
-        if (this.isDetailLevel()) {
-          this.buildRoadRects(this.detailGridRoadRects(this.greenBeltThickness() * 1.25), this.greenBeltColor())
-          this.buildRoadRects(this.detailGridRoadRects(this.mainRoadThickness() * 1.05), this.mainRoadColor())
-          this.buildRoadBlockCells()
-        } else {
-          this.buildRoadRects(this.roadRectsForThickness(this.greenBeltThickness()), this.greenBeltColor())
-          this.buildRoadRects(this.roadRectsForThickness(this.mainRoadThickness()), this.mainRoadColor())
-        }
-      }
-    }
-    .width('100%')
-    .height('100%')
-  }
-
-  @Builder
-  private buildOverviewReferenceGridBase(): void {
-    this.buildRoadRects(this.overviewExactLaneFillRects(), this.mainRoadColor(), false)
-    this.buildRoadRects(this.overviewExactBlueRects(), this.mainRoadColor(), false)
-    this.buildRoadRects(this.overviewExactGreenRectsNoCross(), this.greenBeltColor(), false)
-  }
-
-  @Builder
-  private buildRoadRects(rects: Array<MapRoadRect>, color: string, rounded: boolean = true, zLevel: number = 1): void {
-    ForEach(rects, (r: MapRoadRect): void => {
-      Column() {}
-        .width(r.w)
-        .height(r.h)
-        .borderRadius(rounded ? Math.min(r.w, r.h) / 2 : 0)
-        .backgroundColor(color)
-        .position({ x: r.x, y: r.y })
-        .zIndex(zLevel)
-    }, (r: MapRoadRect): string => r.id)
-  }
-
-  private greenBeltColor(): string {
-    return this.isDetailLevel() ? '#12324B' : '#163A56'
-  }
-
-  private mainRoadColor(): string {
-    return this.isDetailLevel() ? '#0E2940' : '#113451'
-  }
-
-  private greenBeltThickness(): number {
-    const base: number = Math.min(this.store.mapW, this.store.mapH)
-    if (base <= 0) return 32
-    const v: number = base * 0.072
-    if (v < 26) return 26
-    if (v > 42) return 42
-    return v
-  }
-
-  private mainRoadThickness(): number {
-    const base: number = Math.min(this.store.mapW, this.store.mapH)
-    if (base <= 0) return 22
-    const v: number = base * 0.048
-    if (v < 16) return 16
-    if (v > 28) return 28
-    return v
-  }
-
-  private overviewGuideThickness(): number {
-    const base: number = Math.min(this.store.mapW, this.store.mapH)
-    if (base <= 0) return 3
-    const v: number = base * 0.0046
-    if (v < 2.5) return 2.5
-    if (v > 4.5) return 4.5
-    return v
-  }
-
-  private overviewGuideX(): Array<number> {
-    const out: Array<number> = []
-    // 严格按参考图：最小缩放仅三条纵线（对应 B / D / F）
-    const raw: Array<number> = [0.188, 0.505, 0.813]
-    for (let i: number = 0; i < raw.length; i++) {
-      out.push(raw[i] * this.store.mapW)
-    }
-    return out
-  }
-
-  private overviewGuideY(): Array<number> {
-    const out: Array<number> = []
-    const raw: Array<number> = [0.094, 0.258, 0.507, 0.754, 0.917]
-    for (let i: number = 0; i < raw.length; i++) {
-      out.push(raw[i] * this.store.mapH)
-    }
-    return out
-  }
-
-  private overviewGuideVerticalRects(xs: Array<number>, ys: Array<number>, thickness: number): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    if (ys.length <= 0) return out
-    const top: number = ys[0] - thickness / 2
-    const bottom: number = ys[ys.length - 1] + thickness / 2
-    const h: number = Math.max(0, bottom - top)
-    for (let i: number = 0; i < xs.length; i++) {
-      const x: number = xs[i] - thickness / 2
-      out.push({ id: `ov-v-${i}`, x: x, y: top, w: thickness, h: h })
-    }
-    return out
-  }
-
-  private overviewGuideHorizontalRects(ys: Array<number>, thickness: number): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    const w: number = this.store.mapW
-    for (let i: number = 0; i < ys.length; i++) {
-      const y: number = ys[i] - thickness / 2
-      out.push({ id: `ov-h-${i}`, x: 0, y: y, w: w, h: thickness })
-    }
-    return out
-  }
-
-  private overviewVerticalGuideRects(): Array<MapRoadRect> {
-    const guideThickness: number = this.overviewGuideThickness()
-    const guidesX: Array<number> = this.overviewGuideX()
-    const guidesY: Array<number> = this.overviewGuideY()
-    return this.overviewGuideVerticalRects(guidesX, guidesY, guideThickness)
-  }
-
-  private overviewHorizontalGuideRects(): Array<MapRoadRect> {
-    const guideThickness: number = this.overviewGuideThickness()
-    const guidesY: Array<number> = this.overviewGuideY()
-    return this.overviewGuideHorizontalRects(guidesY, guideThickness)
-  }
-
-  private overviewRoadCellRects(): Array<MapRoadRect> {
-    const guideThickness: number = this.overviewGuideThickness()
-    const guidesX: Array<number> = this.overviewGuideX()
-    const guidesY: Array<number> = this.overviewGuideY()
-    return this.overviewCellRects(guidesX, guidesY, guideThickness, true)
-  }
-
-  private overviewLandCellRects(): Array<MapRoadRect> {
-    const guideThickness: number = this.overviewGuideThickness()
-    const guidesX: Array<number> = this.overviewGuideX()
-    const guidesY: Array<number> = this.overviewGuideY()
-    return this.overviewCellRects(guidesX, guidesY, guideThickness, false)
-  }
-
-  private overviewCellRects(xs: Array<number>, ys: Array<number>, guideThickness: number, road: boolean): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    if (xs.length < 1 || ys.length < 2) return out
-
-    const pad: number = Math.max(2, guideThickness * 1.4)
-    const colBounds: Array<number> = [0]
-    for (let i: number = 0; i < xs.length; i++) colBounds.push(xs[i])
-    colBounds.push(this.store.mapW)
-
-    for (let r: number = 0; r < ys.length - 1; r++) {
-      for (let c: number = 0; c < colBounds.length - 1; c++) {
-        const isRoad: boolean = this.overviewRoadCellEnabled(r, c)
-        if (isRoad !== road) continue
-
-        const left: number = colBounds[c] + pad
-        const top: number = ys[r] + pad
-        const width: number = (colBounds[c + 1] - colBounds[c]) - pad * 2
-        const height: number = (ys[r + 1] - ys[r]) - pad * 2
-        if (width <= 0 || height <= 0) continue
-        out.push({
-          id: `ov-cell-${r}-${c}-${road ? 'road' : 'land'}`,
-          x: left,
-          y: top,
-          w: width,
-          h: height
-        })
-      }
-    }
-    return out
-  }
-
-  private overviewRoadCellEnabled(row: number, col: number): boolean {
-    const mask: Array<Array<number>> = [
-      [0, 0, 1, 0],
-      [0, 1, 0, 1],
-      [1, 0, 1, 0],
-      [1, 1, 0, 1]
-    ]
-    if (row >= 0 && row < mask.length && col >= 0 && col < mask[row].length) {
-      return mask[row][col] === 1
-    }
-    return (row + col) % 2 === 0
-  }
-
-  private refX(px: number): number {
-    const canvas = this.overviewCanvasRect()
-    return canvas.x + px / 1024.0 * canvas.size
-  }
-
-  private refY(py: number): number {
-    const canvas = this.overviewCanvasRect()
-    return canvas.y + py / 1024.0 * canvas.size
-  }
-
-  private overviewCanvasRect(): { x: number, y: number, size: number } {
-    const w: number = this.store.mapW
-    const h: number = this.store.mapH
-    if (w <= 0 || h <= 0) {
-      return { x: 0, y: 0, size: 0 }
-    }
-    const size: number = Math.min(w, h)
-    const x: number = (w - size) / 2
-    const y: number = (h - size) / 2
-    return { x: x, y: y, size: size }
-  }
-
-  private overviewExactLaneFillRects(): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    const verticalLaneFills: Array<{ x: number, w: number, y: number, h: number }> = [
-      { x: 195, w: 11, y: 81, h: 859 },
-      { x: 510, w: 11, y: 81, h: 859 },
-      { x: 826, w: 10, y: 81, h: 859 }
-    ]
-    for (let i: number = 0; i < verticalLaneFills.length; i++) {
-      const v = verticalLaneFills[i]
-      out.push({
-        id: `ovx-lane-v-${i}`,
-        x: this.refX(v.x),
-        y: this.refY(v.y),
-        w: this.refX(v.x + v.w) - this.refX(v.x),
-        h: this.refY(v.y + v.h) - this.refY(v.y)
-      })
-    }
-
-    const horizontalLaneFills: Array<{ y: number, h: number, x: number, w: number }> = [
-      { y: 85, h: 11, x: 0, w: 1024 },
-      { y: 251, h: 12, x: 0, w: 1024 },
-      { y: 505, h: 11, x: 0, w: 1024 },
-      { y: 757, h: 11, x: 0, w: 1024 },
-      { y: 923, h: 13, x: 0, w: 1024 }
-    ]
-    for (let i: number = 0; i < horizontalLaneFills.length; i++) {
-      const h = horizontalLaneFills[i]
-      out.push({
-        id: `ovx-lane-h-${i}`,
-        x: this.refX(h.x),
-        y: this.refY(h.y),
-        w: this.refX(h.x + h.w) - this.refX(h.x),
-        h: this.refY(h.y + h.h) - this.refY(h.y)
-      })
-    }
-    return out
-  }
-
-  private overviewExactGreenRectsNoCross(): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    // 竖向绿线分段绘制，避开横向双线带，避免“绿线交叉”
-    const verticals: Array<{ x: number, w: number }> = [
-      { x: 190, w: 5 }, { x: 206, w: 5 },
-      { x: 505, w: 5 }, { x: 521, w: 5 },
-      { x: 822, w: 4 }, { x: 836, w: 5 }
-    ]
-    const vSegY: Array<{ y: number, h: number }> = [
-      { y: 101, h: 146 }, { y: 267, h: 234 },
-      { y: 521, h: 232 }, { y: 772, h: 147 }
-    ]
-    for (let i: number = 0; i < verticals.length; i++) {
-      for (let j: number = 0; j < vSegY.length; j++) {
-        const v = verticals[i]
-        const s = vSegY[j]
-        out.push({
-          id: `ovx-v-${i}-${j}`,
-          x: this.refX(v.x),
-          y: this.refY(s.y),
-          w: this.refX(v.x + v.w) - this.refX(v.x),
-          h: this.refY(s.y + s.h) - this.refY(s.y)
-        })
-      }
-    }
-
-    // 横向绿线分段绘制，避开竖向双线带
-    const horizontals: Array<{ y: number, h: number }> = [
-      { y: 81, h: 4 }, { y: 96, h: 5 },
-      { y: 247, h: 4 }, { y: 263, h: 4 },
-      { y: 501, h: 4 }, { y: 516, h: 5 },
-      { y: 753, h: 4 }, { y: 768, h: 4 },
-      { y: 919, h: 4 }, { y: 936, h: 4 }
-    ]
-    const hSegX: Array<{ x: number, w: number }> = [
-      { x: 0, w: 190 }, { x: 211, w: 294 },
-      { x: 526, w: 296 }, { x: 841, w: 183 }
-    ]
-    for (let i: number = 0; i < horizontals.length; i++) {
-      for (let j: number = 0; j < hSegX.length; j++) {
-        const h = horizontals[i]
-        const s = hSegX[j]
-        out.push({
-          id: `ovx-h-${i}-${j}`,
-          x: this.refX(s.x),
-          y: this.refY(h.y),
-          w: this.refX(s.x + s.w) - this.refX(s.x),
-          h: this.refY(h.y + h.h) - this.refY(h.y)
-        })
-      }
-    }
-    return out
-  }
-
-  private overviewExactBlueRects(): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    // 参考图4x4分块（列边界按双线间隔后区域）
-    const cols: Array<{ x: number, w: number }> = [
-      { x: 0, w: 190 },
-      { x: 211, w: 294 },
-      { x: 526, w: 296 },
-      { x: 841, w: 183 }
-    ]
-    const rows: Array<{ y: number, h: number }> = [
-      { y: 101, h: 146 },
-      { y: 267, h: 234 },
-      { y: 521, h: 232 },
-      { y: 772, h: 147 }
-    ]
-    // 与参考图一致的蓝块分布
-    const mask: Array<Array<number>> = [
-      [0, 0, 1, 1],
-      [0, 1, 0, 1],
-      [1, 0, 1, 0],
-      [1, 1, 0, 1]
-    ]
-    for (let r: number = 0; r < rows.length; r++) {
-      for (let c: number = 0; c < cols.length; c++) {
-        if (mask[r][c] !== 1) continue
-        const cellX: number = cols[c].x
-        const cellY: number = rows[r].y
-        const cellW: number = cols[c].w
-        const cellH: number = rows[r].h
-        out.push({
-          id: `ovx-cell-${r}-${c}`,
-          x: this.refX(cellX),
-          y: this.refY(cellY),
-          w: this.refX(cellX + cellW) - this.refX(cellX),
-          h: this.refY(cellY + cellH) - this.refY(cellY)
-        })
-      }
-    }
-    return out
-  }
-
-  private roadRectsForThickness(thickness: number): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    const edges = PathPlannerAStar.routeEdges()
-    for (let i: number = 0; i < edges.length; i++) {
-      const seg = edges[i]
-      const a: GridNode | undefined = this.findGridNodeById(seg.a)
-      const b: GridNode | undefined = this.findGridNodeById(seg.b)
-      if (!a || !b) continue
-
-      const ax: number = a.xNorm * this.store.mapW
-      const ay: number = a.yNorm * this.store.mapH
-      const bx: number = b.xNorm * this.store.mapW
-      const by: number = b.yNorm * this.store.mapH
-      const dx: number = Math.abs(bx - ax)
-      const dy: number = Math.abs(by - ay)
-      const key: string = RouteEdgeCodec.fromSegment(seg)
-
-      if (dx >= dy) {
-        const x: number = Math.min(ax, bx) - thickness / 2
-        const y: number = (ay + by) / 2 - thickness / 2
-        const w: number = dx + thickness
-        const h: number = thickness
-        out.push({ id: `${key}-h-${thickness}`, x: x, y: y, w: w, h: h })
-      } else {
-        const x: number = (ax + bx) / 2 - thickness / 2
-        const y: number = Math.min(ay, by) - thickness / 2
-        const w: number = thickness
-        const h: number = dy + thickness
-        out.push({ id: `${key}-v-${thickness}`, x: x, y: y, w: w, h: h })
-      }
-    }
-    return out
-  }
-
-  private gridAxisX(): Array<number> {
-    const out: Array<number> = []
-    const seen: Map<string, boolean> = new Map<string, boolean>()
-    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
-      const x: number = this.store.gridNodes[i].xNorm * this.store.mapW
-      const key: string = `${Math.round(x)}`
-      if (seen.get(key) === true) continue
-      seen.set(key, true)
-      out.push(x)
-    }
-    out.sort((a: number, b: number): number => a - b)
-    return out
-  }
-
-  private gridAxisY(): Array<number> {
-    const out: Array<number> = []
-    const seen: Map<string, boolean> = new Map<string, boolean>()
-    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
-      const y: number = this.store.gridNodes[i].yNorm * this.store.mapH
-      const key: string = `${Math.round(y)}`
-      if (seen.get(key) === true) continue
-      seen.set(key, true)
-      out.push(y)
-    }
-    out.sort((a: number, b: number): number => a - b)
-    return out
-  }
-
-  private detailGridRoadRects(thickness: number): Array<MapRoadRect> {
-    const out: Array<MapRoadRect> = []
-    const xs: Array<number> = this.gridAxisX()
-    const ys: Array<number> = this.gridAxisY()
-
-    for (let i: number = 0; i < xs.length; i++) {
-      out.push({
-        id: `detail-v-${i}-${thickness}`,
-        x: xs[i] - thickness / 2,
-        y: 0,
-        w: thickness,
-        h: this.store.mapH
-      })
-    }
-    for (let i: number = 0; i < ys.length; i++) {
-      out.push({
-        id: `detail-h-${i}-${thickness}`,
-        x: 0,
-        y: ys[i] - thickness / 2,
-        w: this.store.mapW,
-        h: thickness
-      })
-    }
-    return out
-  }
-
-  private detailBlockCellRects(): Array<MapBlockCellRect> {
-    const out: Array<MapBlockCellRect> = []
-    if (!this.isDetailLevel()) return out
-    const xs: Array<number> = this.gridAxisX()
-    const ys: Array<number> = this.gridAxisY()
-    const insetFactor: number = 0.20
-
-    for (let r: number = 0; r + 1 < ys.length; r++) {
-      for (let c: number = 0; c + 1 < xs.length; c++) {
-        const cellW: number = xs[c + 1] - xs[c]
-        const cellH: number = ys[r + 1] - ys[r]
-        if (cellW <= 0 || cellH <= 0) continue
-        const inset: number = Math.min(cellW, cellH) * insetFactor
-        const x: number = xs[c] + inset
-        const y: number = ys[r] + inset
-        const w: number = cellW - inset * 2
-        const h: number = cellH - inset * 2
-        if (w <= 0 || h <= 0) continue
-        if (!this.isWorldRectVisible(x, y, w, h, 42)) continue
-        out.push({
-          id: `detail-cell-${r}-${c}`,
-          x: x,
-          y: y,
-          w: w,
-          h: h,
-          color: ((r + c) % 2 === 0) ? '#0A1F31' : '#0B2439'
-        })
-      }
-    }
-    return out
-  }
-
-  @Builder
-  private buildRoadBlockCells(): void {
-    ForEach(this.detailBlockCellRects(), (cell: MapBlockCellRect): void => {
-        Column() {}
-          .width(cell.w)
-          .height(cell.h)
-          .borderRadius(Math.min(cell.w, cell.h) * 0.18)
-          .backgroundColor(cell.color)
-          .border({ width: 1, color: '#1A496A55' })
-          .position({ x: cell.x, y: cell.y })
-          .zIndex(1)
-    }, (cell: MapBlockCellRect): string => cell.id)
   }
 
   private safeScale(): number {
@@ -1924,6 +1554,143 @@ export struct SandboxMap {
   private nodeLabelFontSize(): number {
     if (this.isDetailLevel()) return 10
     return 9
+  }
+
+  private markerFlowPhase(id: string): number {
+    let hash: number = 0
+    for (let i: number = 0; i < id.length; i++) {
+      hash = (hash * 33 + id.charCodeAt(i)) % 1000
+    }
+    const seed: number = hash / 1000
+    return this.routeAnimTick * 0.05 + seed * Math.PI * 2
+  }
+
+  private markerFlowBreath(id: string): number {
+    const w: number = (Math.sin(this.markerFlowPhase(id)) + 1) / 2
+    return 0.58 + 0.42 * w
+  }
+
+  private markerFlowRotateDeg(id: string): number {
+    const phase: number = this.markerFlowPhase(id)
+    const seedDeg: number = (phase * 180 / Math.PI) % 360
+    const spinDeg: number = (this.routeAnimTick * 2.2) % 360
+    return (seedDeg + spinDeg) % 360
+  }
+
+  private markerFlowBorderWidth(): number {
+    return 2
+  }
+
+  private drawPlacedMarkerFlowBorders(ctx: CanvasRenderingContext2D): void {
+    if (this.isOverviewLevel()) return
+    for (let i: number = 0; i < this.store.trafficLights.length; i++) {
+      const p: any = this.store.trafficLights[i]
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `traffic-${p.id}`)
+    }
+    for (let i: number = 0; i < this.store.gatePoints.length; i++) {
+      const p: any = this.store.gatePoints[i]
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `gate-${p.id}`)
+    }
+    for (let i: number = 0; i < this.store.specialRoadPoints.length; i++) {
+      const p: any = this.store.specialRoadPoints[i]
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `special-${p.id}`)
+    }
+    for (let i: number = 0; i < this.store.garagePoints.length; i++) {
+      const p: any = this.store.garagePoints[i]
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `garage-${p.id}`)
+    }
+    for (let i: number = 0; i < this.store.warehousePoints.length; i++) {
+      const p: any = this.store.warehousePoints[i]
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `warehouse-${p.id}`)
+    }
+
+    for (let i: number = 0; i < this.store.routeObstaclePoints.length; i++) {
+      const p: RouteObstaclePoint = this.store.routeObstaclePoints[i]
+      if (this.edgeMarkerSuppressedByNodeBlock(p.edgeId)) continue
+      this.drawPlacedMarkerFlowBorder(ctx, p.xNorm, p.yNorm, `obstacle-point-${p.id}`, this.blockedMarkerSize())
+    }
+
+    for (let i: number = 0; i < this.store.blockedEdges.length; i++) {
+      const edgeId: string = this.store.blockedEdges[i]
+      if (!this.edgeMarkerVisible(edgeId)) continue
+      const pos: XYPos | undefined = this.store.blockedEdgeMidPos(edgeId)
+      if (!pos) continue
+      this.drawPlacedMarkerFlowBorderByCenter(ctx, pos.x, pos.y, `blocked-edge-${edgeId}`, this.blockedMarkerSize())
+    }
+
+    for (let i: number = 0; i < this.store.gridNodes.length; i++) {
+      const n: GridNode = this.store.gridNodes[i]
+      if (!this.shouldShowBlockedNodeMarker(n.id)) continue
+      this.drawPlacedMarkerFlowBorder(ctx, n.xNorm, n.yNorm, `blocked-node-${n.id}`, this.blockedMarkerSize())
+    }
+  }
+
+  private drawPlacedMarkerFlowBorder(ctx: CanvasRenderingContext2D, xNorm: number, yNorm: number, markerId: string, markerSize?: number): void {
+    const centerX: number = xNorm * this.store.mapW
+    const centerY: number = yNorm * this.store.mapH
+    this.drawPlacedMarkerFlowBorderByCenter(ctx, centerX, centerY, markerId, markerSize)
+  }
+
+  private drawPlacedMarkerFlowBorderByCenter(
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    markerId: string,
+    markerSize?: number
+  ): void {
+    const iconSize: number = markerSize && markerSize > 0 ? markerSize : this.mapPlacedMarkerSize()
+    const size: number = iconSize + this.markerFlowBorderWidth() * 2
+    const left: number = centerX - size / 2
+    const top: number = centerY - size / 2
+    if (!this.isWorldRectVisible(left, top, size, size, 40)) return
+
+    const borderWidth: number = this.markerFlowBorderWidth()
+    const breath: number = this.markerFlowBreath(markerId)
+    const angle: number = this.markerFlowRotateDeg(markerId)
+    const span: number = size * 1.8
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(left, top, size, size)
+    ctx.clip()
+
+    // 黑色基础轨道（常亮）
+    ctx.globalAlpha = 0.92
+    ctx.lineWidth = borderWidth
+    ctx.strokeStyle = '#101010'
+    ctx.strokeRect(left + borderWidth / 2, top + borderWidth / 2, size - borderWidth, size - borderWidth)
+
+    ctx.save()
+    ctx.translate(centerX, centerY)
+    ctx.rotate(angle * Math.PI / 180)
+    const gradient = ctx.createLinearGradient(-span, -span, span, span)
+    gradient.addColorStop(0.0, 'rgba(255,0,0,0)')
+    gradient.addColorStop(0.42, 'rgba(255,0,0,0)')
+    gradient.addColorStop(0.50, 'rgba(255,78,78,1.0)')
+    gradient.addColorStop(0.58, 'rgba(255,0,0,0)')
+    gradient.addColorStop(1.0, 'rgba(255,0,0,0)')
+    ctx.globalAlpha = breath
+    ctx.fillStyle = gradient
+    ctx.fillRect(-span, -span, span * 2, span * 2)
+    ctx.restore()
+
+    // 镂空中心，仅保留贴图标矩形边框区域的流光
+    ctx.clearRect(left + borderWidth, top + borderWidth, size - borderWidth * 2, size - borderWidth * 2)
+
+    ctx.restore()
+    ctx.globalAlpha = 1
+  }
+
+  private mapPlacedMarkerSize(): number {
+    return 58
+  }
+
+  private blockedMarkerSize(): number {
+    return 48
+  }
+
+  private destinationMarkerSize(): number {
+    return 54
   }
 
   private isCurrentNode(id: string): boolean {
@@ -1983,7 +1750,7 @@ export struct SandboxMap {
     }
     // 7. 其他普通节点 → 灰蓝色
     return '#86AEC8'
-}
+  }
 
   private nodeLabelWeight(id: string): FontWeight {
     if (this.isBlockedNode(id)) {
@@ -2065,268 +1832,10 @@ export struct SandboxMap {
 
   @Builder
   private buildParkingLotGrid(): void {
-    Column() {
-      this.buildOceanBand(this.parkingMapStyle, 'top')
-
-      ForEach(this.parkingMapStyle.rowHeights, (rowHeight: number, rowIndex?: number): void => {
-        this.buildHorizontalLane(this.parkingMapStyle)
-
-        Row() {
-          if (rowIndex === 0) {
-            this.buildSideParkingCell(this.parkingMapStyle, 'left', rowIndex, 0)
-          } else {
-            this.buildSideParkingCell(this.parkingMapStyle, 'left', rowIndex, 0)
-          }
-          ForEach(this.parkingSpotIndexes(), (_spotIndex: number): void => {
-            this.buildVerticalLane(this.parkingMapStyle)
-            this.buildParkingCell(this.parkingMapStyle, rowIndex, _spotIndex + 1)
-          }, (spotIndex: number): string => `spot-${spotIndex}`)
-          this.buildVerticalLane(this.parkingMapStyle)
-          this.buildSideParkingCell(this.parkingMapStyle, 'right', rowIndex, 3)
-        }
-        .width('100%')
-        .height(rowHeight)
-        .backgroundColor(this.parkingMapStyle.palette.ocean)
-      }, (_rowHeight: number, index: number): string => `row-${index}`)
-
-      this.buildHorizontalLane(this.parkingMapStyle)
-      this.buildOceanBand(this.parkingMapStyle, 'bottom')
-    }
-    .width('100%').height('100%').backgroundColor(this.parkingMapStyle.palette.ocean)
-  }
-
-  @Builder
-  private buildOceanBand(style: ParkingMapStyle, band: 'top' | 'bottom'): void {
-    Row() {
-      this.buildOceanSideCell(style, 'left', band, 0)
-      ForEach(this.parkingSpotIndexes(), (spotIndex: number): void => {
-        this.buildVerticalLane(style)
-        this.buildOceanCenterCell(style, band, spotIndex + 1)
-      }, (spotIndex: number): string => `ocean-spot-${spotIndex}`)
-      this.buildVerticalLane(style)
-      this.buildOceanSideCell(style, 'right', band, 3)
-    }
-    .width('100%')
-    .height(style.oceanBandHeight)
-    .backgroundColor(style.palette.ocean)
-  }
-
-  @Builder
-  private buildHorizontalLane(style: ParkingMapStyle): void {
-    Row()
+    Image($rawfile('map/map.png'))
       .width('100%')
-      .height(style.horizontalLane.mainHeight)
-      .backgroundColor(style.horizontalLane.mainColor)
-  }
-
-  @Builder
-  private buildVerticalLane(style: ParkingMapStyle): void {
-    Column()
-      .width(style.verticalLane.mainWidth)
       .height('100%')
-      .backgroundColor(style.verticalLane.mainColor)
+      .objectFit(ImageFit.Fill)
   }
 
-  @Builder
-  private buildParkingCell(style: ParkingMapStyle, rowIndex?: number, blockIndex?: number): void {
-    Stack() {
-      Column()
-        .layoutWeight(1)
-        .height('100%')
-        .backgroundColor(style.palette.parkingCell)
-      if (this.hasParkingBlockImage(rowIndex, blockIndex)) {
-        Image(this.parkingBlockImagePath(rowIndex, blockIndex))
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-          .opacity(1)
-        if (this.isDynamicPlaceBlock(rowIndex, blockIndex)) {
-          Image(this.parkingBlockActiveImagePath(rowIndex, blockIndex))
-            .width('100%')
-            .height('100%')
-            .objectFit(ImageFit.Cover)
-            .opacity(this.dynamicPlaceActiveOpacity(rowIndex, blockIndex))
-        }
-      }
-    }
-    .layoutWeight(1)
-    .height('100%')
-    .clip(true)
-    .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
-  }
-
-  @Builder
-  private buildOceanCenterCell(style: ParkingMapStyle, band?: 'top' | 'bottom', blockIndex?: number): void {
-    Stack() {
-      Column()
-        .layoutWeight(1)
-        .height('100%')
-        .backgroundColor(style.palette.ocean)
-      if (this.hasOceanBandImage(band, blockIndex)) {
-        Image(this.oceanBandImagePath(band, blockIndex))
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-      }
-    }
-    .layoutWeight(1)
-    .height('100%')
-    .clip(true)
-    .border({ width: style.parkingCellBorderWidth, color: style.palette.parkingCellBorder })
-  }
-
-  @Builder
-  private buildOceanSideCell(style: ParkingMapStyle, side: 'left' | 'right', band?: 'top' | 'bottom', blockIndex?: number): void {
-    Stack() {
-      Column()
-        .width(style.sidePaddingWidth)
-        .height('100%')
-        .backgroundColor(style.palette.ocean)
-      if (this.hasOceanBandImage(band, blockIndex)) {
-        Image(this.oceanBandImagePath(band, blockIndex))
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-      }
-    }
-    .width(style.sidePaddingWidth)
-    .height('100%')
-    .clip(true)
-    .border({
-      width: {
-        left: side === 'left' ? 0 : style.parkingCellBorderWidth,
-        right: side === 'right' ? 0 : style.parkingCellBorderWidth,
-        top: style.parkingCellBorderWidth,
-        bottom: style.parkingCellBorderWidth
-      },
-      color: style.palette.parkingCellBorder
-    })
-  }
-
-  @Builder
-  private buildSideParkingCell(style: ParkingMapStyle, side: 'left' | 'right', rowIndex?: number, blockIndex?: number): void {
-    Stack() {
-      Column()
-        .width(style.sidePaddingWidth)
-        .height('100%')
-        .backgroundColor(style.palette.parkingCell)
-      if (this.hasParkingBlockImage(rowIndex, blockIndex)) {
-        Image(this.parkingBlockImagePath(rowIndex, blockIndex))
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-          .opacity(1)
-        if (this.isDynamicPlaceBlock(rowIndex, blockIndex)) {
-          Image(this.parkingBlockActiveImagePath(rowIndex, blockIndex))
-            .width('100%')
-            .height('100%')
-            .objectFit(ImageFit.Cover)
-            .opacity(this.dynamicPlaceActiveOpacity(rowIndex, blockIndex))
-        }
-      }
-    }
-    .width(style.sidePaddingWidth)
-    .height('100%')
-    .clip(true)
-      .border({
-        width: {
-          left: side === 'left' ? 0 : style.parkingCellBorderWidth,
-          right: side === 'right' ? 0 : style.parkingCellBorderWidth,
-          top: style.parkingCellBorderWidth,
-          bottom: style.parkingCellBorderWidth
-        },
-        color: style.palette.parkingCellBorder
-      })
-  }
-
-  private hasParkingBlockImage(rowIndex?: number, blockIndex?: number): boolean {
-    if (rowIndex === undefined || blockIndex === undefined) return false
-    if (rowIndex === 0 && blockIndex === 0) return true
-    if (rowIndex === 0 && blockIndex === 1) return true
-    if (rowIndex === 0 && blockIndex === 2) return true
-    if (rowIndex === 0 && blockIndex === 3) return true
-    if (rowIndex === 1 && blockIndex === 0) return true
-    if (rowIndex === 1 && blockIndex === 1) return true
-    if (rowIndex === 1 && blockIndex === 2) return true
-    if (rowIndex === 1 && blockIndex === 3) return true
-    if (rowIndex === 2 && blockIndex === 0) return true
-    if (rowIndex === 2 && blockIndex === 1) return true
-    if (rowIndex === 2 && blockIndex === 2) return true
-    if (rowIndex === 2 && blockIndex === 3) return true
-    if (rowIndex === 3 && blockIndex === 0) return true
-    if (rowIndex === 3 && blockIndex === 1) return true
-    if (rowIndex === 3 && blockIndex === 2) return true
-    if (rowIndex === 3 && blockIndex === 3) return true
-    return false
-  }
-
-  private parkingBlockImagePath(rowIndex?: number, blockIndex?: number): any {
-    if (rowIndex === undefined || blockIndex === undefined) return $rawfile('map/海昏侯.jpg')
-    // blockIndex: 每行白块从左到右编号 0..3
-    // rowIndex:   从上到下 0..3
-    if (rowIndex === 0 && blockIndex === 0) return $rawfile('map/海昏侯.jpg')
-    if (rowIndex === 0 && blockIndex === 1) {
-      return $rawfile('map/公司仓库未设置.jpg')
-    }
-    if (rowIndex === 0 && blockIndex === 2) return $rawfile('map/省博物馆.jpg')
-    if (rowIndex === 0 && blockIndex === 3) return $rawfile('map/青山湖风景区.jpg')
-    if (rowIndex === 1 && blockIndex === 0) return $rawfile('map/梅岭.jpg')
-    if (rowIndex === 1 && blockIndex === 1) return $rawfile('map/滕王阁.jpg')
-    if (rowIndex === 1 && blockIndex === 2) return $rawfile('map/八一广场.jpg')
-    if (rowIndex === 1 && blockIndex === 3) return $rawfile('map/南昌之星摩天轮.jpg')
-    if (rowIndex === 2 && blockIndex === 0) return $rawfile('map/万寿宫.jpg')
-    if (rowIndex === 2 && blockIndex === 1) return $rawfile('map/八一起义纪念馆.jpg')
-    if (rowIndex === 2 && blockIndex === 2) return $rawfile('map/南昌火车站.jpg')
-    if (rowIndex === 2 && blockIndex === 3) return $rawfile('map/赣江风光带.jpg')
-    if (rowIndex === 3 && blockIndex === 0) return $rawfile('map/秋水广场.jpg')
-    if (rowIndex === 3 && blockIndex === 1) return $rawfile('map/八大山人纪念馆.jpg')
-    if (rowIndex === 3 && blockIndex === 2) {
-      return $rawfile('map/物流中心未设置.jpg')
-    }
-    if (rowIndex === 3 && blockIndex === 3) return $rawfile('map/小兰工业园.jpg')
-    return $rawfile('map/海昏侯.jpg')
-  }
-
-  private parkingBlockActiveImagePath(rowIndex?: number, blockIndex?: number): any {
-    if (rowIndex === 0 && blockIndex === 1) return $rawfile('map/公司仓库设置.jpg')
-    if (rowIndex === 3 && blockIndex === 2) return $rawfile('map/物流中心设置.jpg')
-    return this.parkingBlockImagePath(rowIndex, blockIndex)
-  }
-
-  private isDynamicPlaceBlock(rowIndex?: number, blockIndex?: number): boolean {
-    if (rowIndex === 0 && blockIndex === 1) return true
-    if (rowIndex === 3 && blockIndex === 2) return true
-    return false
-  }
-
-  private dynamicPlaceActiveOpacity(rowIndex?: number, blockIndex?: number): number {
-    if (rowIndex === 0 && blockIndex === 1) return this.companyPlaceConfigured ? 1 : 0
-    if (rowIndex === 3 && blockIndex === 2) return this.homePlaceConfigured ? 1 : 0
-    return 0
-  }
-
-  private hasOceanBandImage(band?: 'top' | 'bottom', blockIndex?: number): boolean {
-    if (band === undefined || blockIndex === undefined) return false
-    if (blockIndex < 0 || blockIndex > 3) return false
-    return true
-  }
-
-  private oceanBandImagePath(band?: 'top' | 'bottom', blockIndex?: number): any {
-    if (band === 'top') {
-      if (blockIndex === 0) return $rawfile('map/上边缘1.jpg')
-      if (blockIndex === 1) return $rawfile('map/上边缘2.jpg')
-      if (blockIndex === 2) return $rawfile('map/上边缘3.jpg')
-      return $rawfile('map/上边缘4.jpg')
-    }
-    if (blockIndex === 0) return $rawfile('map/下边缘1.jpg')
-    if (blockIndex === 1) return $rawfile('map/下边缘2.jpg')
-    if (blockIndex === 2) return $rawfile('map/下边缘3.jpg')
-    return $rawfile('map/下边缘4.jpg')
-  }
-
-  private parkingSpotIndexes(): Array<number> {
-    const out: Array<number> = []
-    for (let i: number = 0; i < this.parkingMapStyle.spotsPerRow; i++) out.push(i)
-    return out
-  }
 }

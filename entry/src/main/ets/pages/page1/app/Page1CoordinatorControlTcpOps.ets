@@ -4,17 +4,18 @@ import { CarTcpCallbacks } from '../../../services/control/CarTcpService'
 import { CarConnectionState } from '../../../services/control/CarConnectionState'
 import { CarSendMode } from '../../../services/control/CarProtocolService'
 import { CarProtoFrame, CarProtoStreamDecoder } from '../net/CarRx55StreamDecoder'
-import { P1C } from './Page1CoordinatorDefs'
+import { P1C, IPage1CoordinatorOps } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
 import { ensureRecognitionCenter } from '../../../services/recognition/RecognitionCenter'
 import { RecognitionSubtype } from '../../../services/recognition/RecognitionTask'
 import { videoStore } from '../../../state/VideoStore'
+import { page2ReplayService } from '../../../services/replay/Page2ReplayService'
 import hilog from '@ohos.hilog'
 
 const PAGE1_TCP_LOG_DOMAIN = 0xFF03
 const PAGE1_TCP_LOG_TAG = 'page1tcp'
 
-export function bindTcpCallbacks(ctx: any): void {
+export function bindTcpCallbacks(ctx: IPage1CoordinatorOps): void {
   const cb: CarTcpCallbacks = {
     onStateChange: (state: CarConnectionState, text: string): void => onTcpState(ctx, state, text),
     onData: (data: Uint8Array): void => onTcpData(ctx, data)
@@ -22,7 +23,7 @@ export function bindTcpCallbacks(ctx: any): void {
   ctx.tcp.setCallbacks(cb)
 }
 
-export function onTcpState(ctx: any, state: CarConnectionState, text: string): void {
+export function onTcpState(ctx: IPage1CoordinatorOps, state: CarConnectionState, text: string): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
 
@@ -30,7 +31,6 @@ export function onTcpState(ctx: any, state: CarConnectionState, text: string): v
 
   if (state === CarConnectionState.CONNECTED) {
     ctx.rxDecoder.reset()
-    ctx.resetPathAckState()
     s.setConnState(CarConnState.CONNECTED, `TCP:CONNECTED | ${text}`)
     s.heartbeatOk = true
     s.pushLog('TCP 已连接，进入新协议链路模式(CCF5)')
@@ -40,26 +40,26 @@ export function onTcpState(ctx: any, state: CarConnectionState, text: string): v
     return
   }
   if (state === CarConnectionState.CONNECTING) {
-    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${text}`)
+    ctx.rxDecoder.reset(); s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${text}`)
     commStore.setCommState(false, 'CONNECTING'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount()); return
   }
   if (state === CarConnectionState.RECONNECTING) {
-    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.RECONNECTING, `TCP:RECONNECTING | ${text}`)
+    ctx.rxDecoder.reset(); s.setConnState(CarConnState.RECONNECTING, `TCP:RECONNECTING | ${text}`)
     commStore.setCommState(false, 'RECONNECTING'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount()); return
   }
   if (state === CarConnectionState.FAILED) {
-    ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.FAILED, `TCP:FAILED | ${text}`)
+    ctx.rxDecoder.reset(); s.setConnState(CarConnState.FAILED, `TCP:FAILED | ${text}`)
     s.heartbeatOk = false
     commStore.setCommState(false, 'FAILED'); commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
     commStore.setCommLastError(ctx.tcp.getLastErrorText()); return
   }
-  ctx.rxDecoder.reset(); ctx.resetPathAckState(); s.setConnState(CarConnState.IDLE, `TCP:IDLE | ${text}`)
+  ctx.rxDecoder.reset(); s.setConnState(CarConnState.IDLE, `TCP:IDLE | ${text}`)
   s.heartbeatOk = false
   commStore.setCommState(false, 'DISCONNECTED')
   commStore.setCommReconnectCount(ctx.tcp.getReconnectCount())
 }
 
-export function onTcpData(ctx: any, data: Uint8Array): void {
+export function onTcpData(ctx: IPage1CoordinatorOps, data: Uint8Array): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   s.bumpRx(); s.heartbeatOk = true; commStore.bumpRxPacket()
@@ -116,7 +116,7 @@ export function onTcpData(ctx: any, data: Uint8Array): void {
   }
 }
 
-function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
+function handleBCFrame(ctx: IPage1CoordinatorOps, s: Page1UiStore, f: CarProtoFrame): void {
   const d: Uint8Array = f.data
   if (d.length <= 0) {
     s.pushLog(`RX CCF5 BC: empty seq=${f.seq}`)
@@ -128,10 +128,12 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
     if (d.length >= 3) {
       const nodeId: string = decodeNodeAscii(d[1], d[2])
       if (nodeId.length > 0) {
-        const dirText: string = d.length >= 4 ? decodeDirAscii(d[3]) : 'N'
+        const dirRaw: number = d.length >= 4 ? (d[3] & 0xff) : 0x4E
+        const dirText: string = decodeDirByte(dirRaw)
         const headingDeg: number = headingDegFromDir(dirText)
         s.updateCurrentNodePose(nodeId, headingDeg)
-        s.pushLog(`RX CCF5 BC: 当前点位 node=${nodeId} 方向为${dirToCn(dirText)} seq=${f.seq}`)
+        syncPathWithCarNode(s, nodeId)
+        s.pushLog(`RX CCF5 BC: 当前点位 node=${nodeId} 方向为${dirToCn(dirText)}(0x${byteToHex(dirRaw)}) seq=${f.seq}`)
         return
       }
     }
@@ -148,9 +150,11 @@ function handleBCFrame(ctx: any, s: Page1UiStore, f: CarProtoFrame): void {
       const toId: string = decodeNodeAscii(d[3], d[4])
       if (fromId.length > 0 && toId.length > 0) {
         const edgeId: string = `${fromId}|${toId}`
+        void page2ReplayService.onObstacleEdgeDetected(fromId, toId)
         if (!s.isBlockedEdgeById(edgeId)) {
           s.toggleBlockedEdge(edgeId)
         }
+        s.addBlockedEdgeIfAbsent(edgeId, 'CAR_ASTAR_OBSTACLE')
         if (s.destApplied.length > 0 && typeof ctx.planPath === 'function') {
           ctx.planPath(s.destApplied)
           s.pushLog(`RX CCF5 BC: 重规划触发 goal=${s.destApplied}`)
@@ -203,8 +207,16 @@ function decodeNodeAscii(b0: number, b1: number): string {
   return (ok0 && ok1) ? id : ''
 }
 
-function decodeDirAscii(b: number): string {
-  const c: string = String.fromCharCode(b & 0xff).toUpperCase()
+function decodeDirByte(b: number): string {
+  const v: number = b & 0xff
+  // 兼容数字方向编码：1=N, 2=E, 3=S, 4=W
+  if (v === 0x01) return 'N'
+  if (v === 0x02) return 'E'
+  if (v === 0x03) return 'S'
+  if (v === 0x04) return 'W'
+
+  // 兼容 ASCII 方向编码：'N'/'E'/'S'/'W'
+  const c: string = String.fromCharCode(v).toUpperCase()
   if (c === 'N' || c === 'E' || c === 'S' || c === 'W') return c
   return 'N'
 }
@@ -231,8 +243,9 @@ function summarizeBcFrame(f: CarProtoFrame): string {
   if (data1 === 0x01) {
     if (d.length >= 3) {
       const nodeId: string = decodeNodeAscii(d[1], d[2])
-      const dirText: string = d.length >= 4 ? decodeDirAscii(d[3]) : 'N'
-      return `上报当前点位 node=${nodeId.length > 0 ? nodeId : '??'} 方向为${dirToCn(dirText)}`
+      const dirRaw: number = d.length >= 4 ? (d[3] & 0xff) : 0x4E
+      const dirText: string = decodeDirByte(dirRaw)
+      return `上报当前点位 node=${nodeId.length > 0 ? nodeId : '??'} 方向为${dirToCn(dirText)}(0x${byteToHex(dirRaw)})`
     }
     return '上报当前点位(格式异常)'
   }
@@ -270,12 +283,12 @@ function appendDiagRxFrame(f: CarProtoFrame, summary: string): void {
 }
 
 
-export function clearPendingFrameDestApply(ctx: any): void {
+export function clearPendingFrameDestApply(ctx: IPage1CoordinatorOps): void {
   if (ctx.frameDestApplyTimerId !== -1) { clearTimeout(ctx.frameDestApplyTimerId); ctx.frameDestApplyTimerId = -1 }
   ctx.pendingFrameDestNodeId = ''
 }
 
-export function scheduleFrameDestApply(ctx: any, destNodeId: string): void {
+export function scheduleFrameDestApply(ctx: IPage1CoordinatorOps, destNodeId: string): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   clearPendingFrameDestApply(ctx)
@@ -307,23 +320,23 @@ export function bytesToHex(data: Uint8Array): string {
   return s
 }
 
-export function markParkingUltrasonicRequest(ctx: any, nowMs: number): void {
+export function markParkingUltrasonicRequest(ctx: IPage1CoordinatorOps, nowMs: number): void {
   ctx.parkingUltrasonicPending = true
   ctx.parkingUltrasonicRequestAtMs = nowMs
   ctx.parkingUltrasonicExpireAtMs = nowMs + P1C.ULTRASONIC_RESPONSE_CONTEXT_MS
 }
 
-export function clearParkingUltrasonicRequest(ctx: any): void {
+export function clearParkingUltrasonicRequest(ctx: IPage1CoordinatorOps): void {
   ctx.parkingUltrasonicPending = false
   ctx.parkingUltrasonicRequestAtMs = 0
   ctx.parkingUltrasonicExpireAtMs = 0
 }
 
-export function isParkingUltrasonicResponseContext(ctx: any, nowMs: number): boolean {
+export function isParkingUltrasonicResponseContext(ctx: IPage1CoordinatorOps, nowMs: number): boolean {
   return !!ctx.parkingUltrasonicPending && ctx.parkingUltrasonicRequestAtMs > 0 && nowMs >= ctx.parkingUltrasonicRequestAtMs && nowMs <= ctx.parkingUltrasonicExpireAtMs
 }
 
-export async function connectTcp(ctx: any, ip: string, port: number): Promise<void> {
+export async function connectTcp(ctx: IPage1CoordinatorOps, ip: string, port: number): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   s.setConnState(CarConnState.CONNECTING, `TCP:CONNECTING | ${ip}:${port}`)
@@ -331,26 +344,26 @@ export async function connectTcp(ctx: any, ip: string, port: number): Promise<vo
   try { await ctx.tcp.connect(ip, port) } catch { s.pushLog('connect() 抛异常：已交给 CarTcpService 重连处理') }
 }
 
-export async function disconnectTcp(ctx: any): Promise<void> {
+export async function disconnectTcp(ctx: IPage1CoordinatorOps): Promise<void> {
   try { await ctx.tcp.disconnect() } catch (e) {
     const msg: string = e instanceof Error ? e.message : 'disconnect error'
     hilog.warn(PAGE1_TCP_LOG_DOMAIN, PAGE1_TCP_LOG_TAG, '%{public}s', `[Page1] disconnectTcp: ${msg}`)
   }
 }
 
-export function canRealSend(ctx: any): boolean {
+export function canRealSend(ctx: IPage1CoordinatorOps): boolean {
   const s: Page1UiStore | undefined = ctx.store
   return !!s && !!s.realSendEnabled && s.connState === CarConnState.CONNECTED
 }
 
-export async function sendManualGoCommand(ctx: any, _actionText: string, _commandSeq: number): Promise<void> {
+export async function sendManualGoCommand(ctx: IPage1CoordinatorOps, _actionText: string, _commandSeq: number): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   s.setAction('前进'); s.bumpTx(); s.pushLog('旧发送协议已删除：忽略前进下发')
   ctx.manualGoLastSentAtMs = Date.now()
 }
 
-export async function onAction(ctx: any, a: Page1Action): Promise<void> {
+export async function onAction(ctx: IPage1CoordinatorOps, a: Page1Action): Promise<void> {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
   const name: string = Page1Action[a]
@@ -388,4 +401,36 @@ export async function onAction(ctx: any, a: Page1Action): Promise<void> {
   if (a === Page1Action.LEFT_HALF) ctx.previewManualActionOnMap(Page1Action.LEFT_HALF)
   if (a === Page1Action.RIGHT_HALF) ctx.previewManualActionOnMap(Page1Action.RIGHT_HALF)
   if (a === Page1Action.UTURN) ctx.previewManualActionOnMap(Page1Action.UTURN)
+}
+
+// 小车上报节点时，用实际经过的节点同步路线预览。
+// 逻辑：
+// 1. 节点在路径前方 → 推进 pathIndex 到该节点（跳过中间漏报）
+// 2. 节点不在路径里（小车重规划）→ 截断当前路径到当前位置，追加新节点
+// 3. 无规划路径 → 不动
+function syncPathWithCarNode(s: Page1UiStore, nodeId: string): void {
+  const nodes: Array<string> = s.pathNodes
+  if (nodes.length <= 1) return
+
+  const id: string = nodeId.trim().toUpperCase()
+
+  // 从当前 pathIndex 往后找，看节点是否在预览路径里
+  const cur: number = s.pathIndex
+  for (let i: number = cur; i < nodes.length; i++) {
+    if (nodes[i].trim().toUpperCase() === id) {
+      // 找到了：把 pathIndex 推进到该位置
+      if (i > cur) {
+        s.pathIndex = i
+      }
+      return
+    }
+  }
+
+  // 节点不在预览路径里：小车走了不同路线（重规划/绕行）
+  // 截断路径到 pathIndex（保留已走部分），然后把新节点追加进去
+  const walked: Array<string> = nodes.slice(0, cur + 1)
+  walked.push(id)
+  s.setPath(walked, 'CAR_ASTAR_REROUTE')
+  // setPath 会把 pathIndex 重置为 0，手动推到已走完的最后一个节点
+  s.pathIndex = walked.length - 1
 }

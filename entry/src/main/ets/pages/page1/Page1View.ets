@@ -10,6 +10,7 @@
 import { page1Store, Page1UiStore } from './app/Page1UiStore'
 import { page1Coordinator } from './app/Page1Coordinator'
 import { Page1Theme } from './Page1Theme'
+import { MORE_PANEL, MODAL } from './Page1Styles'
 import { Page1Action } from './types/Page1Types'
 import { SandboxMap } from './components/SandboxMap'
 import { CarStatusCard } from './components/CarStatusCard'
@@ -45,6 +46,7 @@ export struct Page1View {
   onPageShow(): void {
     page1Coordinator.bind(this.store)
     void page1Coordinator.start()
+    void page1Coordinator.connectTcp(this.store.connIp, this.store.connPort)
   }
 
   onPageHide(): void {
@@ -99,7 +101,7 @@ export struct Page1View {
         Stack() {
           Column() {
             Row() {
-              Text('Diagnostics Console')
+              Text('诊断日志')
                 .fontSize(18)
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Page1Theme.TEXT_PRIMARY)
@@ -109,7 +111,7 @@ export struct Page1View {
                 .padding({ left: 16, right: 16 })
                 .borderRadius(16)
                 .fontSize(13)
-                .backgroundColor('#F1F5F9')
+                .backgroundColor(Page1Theme.CARD_HOVER)
                 .fontColor(Page1Theme.TEXT_SECONDARY)
                 .onClick((): void => { this.showDiag = false })
             }
@@ -121,11 +123,12 @@ export struct Page1View {
           .padding(20)
           .borderRadius(Page1Theme.RADIUS_L)
           .backgroundColor(Page1Theme.SURFACE)
-          .shadow({ radius: 40, color: '#00000022', offsetX: 0, offsetY: 10 })
+          .border({ width: 1, color: Page1Theme.BORDER })
+          .shadow({ radius: 18, color: 'rgba(110,168,255,0.12)', offsetX: 0, offsetY: 4 })
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#00000033')
+        .backgroundColor(MODAL.OVERLAY_BG)
         .align(Alignment.Bottom)
         .onClick((): void => { this.showDiag = false })
       }
@@ -141,11 +144,12 @@ export struct Page1View {
           .padding(20)
           .borderRadius(Page1Theme.RADIUS_L)
           .backgroundColor(Page1Theme.SURFACE)
-          .shadow({ radius: 40, color: '#00000022', offsetX: 0, offsetY: 10 })
+          .border({ width: 1, color: Page1Theme.BORDER })
+          .shadow({ radius: 18, color: 'rgba(110,168,255,0.12)', offsetX: 0, offsetY: 4 })
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#00000033')
+        .backgroundColor(MODAL.OVERLAY_BG)
         .align(Alignment.Bottom)
         .onClick((): void => { this.showReplay = false })
       }
@@ -162,12 +166,12 @@ export struct Page1View {
                   .fontColor(Page1Theme.TEXT_PRIMARY)
                 Blank()
                 Button('关闭')
-                  .height(30)
+                  .height(MODAL.CLOSE_BTN_HEIGHT)
                   .padding({ left: 12, right: 12 })
-                  .borderRadius(14)
+                  .borderRadius(MODAL.CLOSE_BTN_RADIUS)
                   .fontSize(12)
-                  .backgroundColor('#F1F5F9')
-                  .fontColor(Page1Theme.TEXT_SECONDARY)
+                  .backgroundColor(MODAL.CLOSE_BTN_BG)
+                  .fontColor(MODAL.CLOSE_BTN_FG)
                   .onClick((): void => { this.showMorePanel = false })
               }
               .width('100%')
@@ -175,82 +179,94 @@ export struct Page1View {
 
               Button('前进')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.GO)
                 })
 
               Button('后退')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.BACK)
                 })
 
               Button('左转')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.LEFT)
                 })
 
               Button('右转')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.RIGHT)
                 })
 
               Button('左半转')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.LEFT_HALF)
                 })
 
               Button('右半转')
                 .width('100%')
-                .height(40)
-                .borderRadius(10)
-                .backgroundColor('#EEF2FF')
-                .fontColor('#3730A3')
-                .border({ width: 1, color: '#C7D2FE' })
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.RIGHT_HALF)
+                })
+
+              Button('掉头')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.onAction(Page1Action.UTURN)
                 })
             }
             .width('30%')
             .height('100%')
             .padding(12)
             .backgroundColor(Page1Theme.SURFACE)
-            .shadow({ radius: 18, color: '#00000022', offsetX: -4, offsetY: 0 })
+            .border({ width: 1, color: Page1Theme.BORDER })
+            .shadow({ radius: 12, color: 'rgba(110,168,255,0.12)', offsetX: -2, offsetY: 0 })
           }
           .width('100%')
           .height('100%')
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#00000033')
+        .backgroundColor(MODAL.OVERLAY_BG)
         .onClick((): void => { this.showMorePanel = false })
       }
     }

@@ -145,6 +145,12 @@ export class VehicleMotionPlayer {
     return false
   }
 
+  private easeInOutSine(t: number): number {
+    if (t <= 0) return 0
+    if (t >= 1) return 1
+    return 0.5 - 0.5 * Math.cos(Math.PI * t)
+  }
+
   private tunePhaseMs(baseMs: number, scale: number, offset: number, minMs: number): number {
     const scaled: number = Math.round(baseMs * scale + offset)
     if (scaled < minMs) return minMs
@@ -347,17 +353,18 @@ export class VehicleMotionPlayer {
       }
       if (activeT < 0) activeT = 0
       if (activeT > 1) activeT = 1
+      const easedT: number = this.easeInOutSine(activeT)
 
       if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
         if (fromNode && toNode) {
-          const xNorm: number = fromNode.xNorm + (toNode.xNorm - fromNode.xNorm) * activeT
-          const yNorm: number = fromNode.yNorm + (toNode.yNorm - fromNode.yNorm) * activeT
+          const xNorm: number = fromNode.xNorm + (toNode.xNorm - fromNode.xNorm) * easedT
+          const yNorm: number = fromNode.yNorm + (toNode.yNorm - fromNode.yNorm) * easedT
           const speed: number = this.motionAction === Page1Action.BACK || this.motionUseReverseSpeed ? -20 : 20
           hooks.updatePoseAndTelemetryForDisplay(xNorm, yNorm, this.motionHeadingToDeg, speed)
         }
       } else if (this.isTurnAction(this.motionAction)) {
         const headingDeg: number = hooks.norm360(
-          this.motionHeadingFromDeg + hooks.headingErrorDeg(this.motionHeadingFromDeg, this.motionHeadingToDeg) * activeT
+          this.motionHeadingFromDeg + hooks.headingErrorDeg(this.motionHeadingFromDeg, this.motionHeadingToDeg) * easedT
         )
         hooks.updateHeadingOnlyAtCurrentPose(headingDeg)
       }
@@ -400,5 +407,4 @@ export class VehicleMotionPlayer {
     this.doReset(nowMs, true)
   }
 }
-
 

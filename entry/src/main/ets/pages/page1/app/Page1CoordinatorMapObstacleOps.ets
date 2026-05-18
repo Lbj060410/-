@@ -14,9 +14,10 @@ Page1 coordination/scheduling helper logic.
  */
 import { Page1Action } from '../types/Page1Types'
 import { PathPlannerAStar, GridIdCodec, RouteEdgeCodec } from './PathPlannerAStar'
-import { P1C, VisionLabelKind } from './Page1CoordinatorDefs'
+import { P1C, VisionLabelKind, IPage1CoordinatorOps, SegmentPoseMatch, SegmentPlanDecision, NormPoint } from './Page1CoordinatorDefs'
 import { commStore } from '../../../state/CommStore'
 import { recogStore } from '../../../state/RecogStore'
+import { RouteObstaclePoint } from './Page1UiStore'
 
 export function clamp01Value(v: number): number {
   if (v < 0) return 0
@@ -33,7 +34,7 @@ export function turnDeltaDegValue(action: Page1Action): number {
   return 0
 }
 
-export function syncCurrentSnapNodeByPose(ctx: any, xNorm: number, yNorm: number): void {
+export function syncCurrentSnapNodeByPose(ctx: IPage1CoordinatorOps, xNorm: number, yNorm: number): void {
   const s = ctx.store
   if (!s) return
   if (s.gridNodes.length <= 0) return
@@ -58,7 +59,7 @@ export function syncCurrentSnapNodeByPose(ctx: any, xNorm: number, yNorm: number
 }
 
 export async function animateMapPoseTransition(
-  ctx: any,
+  ctx: IPage1CoordinatorOps,
   fromXNorm: number,
   fromYNorm: number,
   toXNorm: number,
@@ -89,7 +90,7 @@ export async function animateMapPoseTransition(
   }
 }
 
-export function previewManualActionOnMap(ctx: any, action: Page1Action): void {
+export function previewManualActionOnMap(ctx: IPage1CoordinatorOps, action: Page1Action): void {
   if (
     action !== Page1Action.GO &&
     action !== Page1Action.BACK &&
@@ -105,7 +106,7 @@ export function previewManualActionOnMap(ctx: any, action: Page1Action): void {
   void previewManualActionOnMapAsync(ctx, action)
 }
 
-export async function previewManualActionOnMapAsync(ctx: any, action: Page1Action): Promise<void> {
+export async function previewManualActionOnMapAsync(ctx: IPage1CoordinatorOps, action: Page1Action): Promise<void> {
   const s = ctx.store
   if (!s) return
   const startXNorm = clamp01Value(s.pose.xNorm)
@@ -197,12 +198,12 @@ export async function previewManualActionOnMapAsync(ctx: any, action: Page1Actio
   syncCurrentSnapNodeByPose(ctx, startXNorm, startYNorm)
 }
 
-export function playMapReverseParkingAnimation(ctx: any, arrivedId: string, goalId: string, headingDeg: number): void {
+export function playMapReverseParkingAnimation(ctx: IPage1CoordinatorOps, arrivedId: string, goalId: string, headingDeg: number): void {
   void playMapReverseParkingAnimationAsync(ctx, arrivedId, goalId, headingDeg)
 }
 
 export async function playMapReverseParkingAnimationAsync(
-  ctx: any,
+  ctx: IPage1CoordinatorOps,
   arrivedId: string,
   goalId: string,
   headingDeg: number
@@ -271,7 +272,7 @@ export function classifyLabel(label: string): VisionLabelKind {
   return VisionLabelKind.TASK
 }
 
-export function maybeLogVisionTaskOrTraffic(ctx: any, nowMs: number): void {
+export function maybeLogVisionTaskOrTraffic(ctx: IPage1CoordinatorOps, nowMs: number): void {
   const s = ctx.store
   if (!s) return
   if (nowMs - ctx.lastVisionLogAtMs < P1C.VISION_LOG_COOLDOWN_MS) return
@@ -293,7 +294,7 @@ export function maybeLogVisionTaskOrTraffic(ctx: any, nowMs: number): void {
   }
 }
 
-export function yoloSuggestBlockedNodeId(ctx: any, nowMs: number): string {
+export function yoloSuggestBlockedNodeId(ctx: IPage1CoordinatorOps, nowMs: number): string {
   if (nowMs - ctx.lastYoloTriggerAtMs < P1C.YOLO_COOLDOWN_MS) return ''
   const r = recogStore.lastRecog
   if (!r || r.boxes.length <= 0) return ''
@@ -315,7 +316,7 @@ export function yoloSuggestBlockedNodeId(ctx: any, nowMs: number): string {
   return nextId
 }
 
-export function maybeTriggerRoutePointObstacle(ctx: any): boolean {
+export function maybeTriggerRoutePointObstacle(ctx: IPage1CoordinatorOps): boolean {
   const s = ctx.store
   if (!s) return false
   if (ctx.aheadVisionPending || ctx.parkingInProgress) return false
@@ -355,7 +356,7 @@ export function maybeTriggerRoutePointObstacle(ctx: any): boolean {
   return true
 }
 
-export function frontRouteEdgeIdForDriving(ctx: any): string {
+export function frontRouteEdgeIdForDriving(ctx: IPage1CoordinatorOps): string {
   const s = ctx.store
   if (!s) return ''
   const liveAction = ctx.motionPlayer.currentAction()
@@ -372,13 +373,13 @@ export function frontRouteEdgeIdForDriving(ctx: any): string {
   return RouteEdgeCodec.normalize(fromId, toId)
 }
 
-export function markRouteObstaclePointOnEdge(ctx: any, edgeId: string, nowMs: number): void {
+export function markRouteObstaclePointOnEdge(ctx: IPage1CoordinatorOps, edgeId: string, nowMs: number): void {
   const s = ctx.store
   if (!s) return
   const seg = RouteEdgeCodec.parse(edgeId)
   if (!seg) return
-  const a = ctx.findNode(seg.a)
-  const b = ctx.findNode(seg.b)
+  const a: NormPoint | undefined = ctx.findNode(seg.a)
+  const b: NormPoint | undefined = ctx.findNode(seg.b)
   if (!a || !b) return
   const t = 0.5
   const xNorm = a.xNorm + (b.xNorm - a.xNorm) * t
@@ -405,7 +406,7 @@ export function markRouteObstaclePointOnEdge(ctx: any, edgeId: string, nowMs: nu
   s.pushLog(`障碍点标注：edge=${edgeId} t=${t.toFixed(2)}`)
 }
 
-export function promoteBlockedEdgePairsToBlockedNodes(ctx: any): Array<string> {
+export function promoteBlockedEdgePairsToBlockedNodes(ctx: IPage1CoordinatorOps): Array<string> {
   const s = ctx.store
   if (!s) return []
   if (s.blockedEdges.length < 2) return []
@@ -429,17 +430,16 @@ export function promoteBlockedEdgePairsToBlockedNodes(ctx: any): Array<string> {
       if (!parsed) continue
       if (parsed.a === nodeId || parsed.b === nodeId) touchingEdges.push(edgeId)
     }
-    // 永久分界线不计入升级判断，只统计动态阻塞边
+    // 统计与候选点相邻的阻塞边数量
     let dynamicTouchCount: number = 0
     for (let k = 0; k < touchingEdges.length; k++) {
-      if (!s.isPermanentBlockedEdge(touchingEdges[k])) dynamicTouchCount++
+      dynamicTouchCount++
     }
     if (dynamicTouchCount < 2) continue
     if (promotedNodes.indexOf(nodeId) < 0) promotedNodes.push(nodeId)
     s.addBlockedIfAbsent(nodeId, 'EDGE_PAIR')
     for (let j = 0; j < touchingEdges.length; j++) {
       const edgeId = touchingEdges[j]
-      if (s.isPermanentBlockedEdge(edgeId)) continue  // 永久分界线不移除
       if (removeEdges.indexOf(edgeId) < 0) removeEdges.push(edgeId)
     }
     s.pushLog(`路段禁行转点禁行：${nodeId} edges=[${touchingEdges.join(',')}]`)
@@ -456,7 +456,7 @@ export function promoteBlockedEdgePairsToBlockedNodes(ctx: any): Array<string> {
   return promotedNodes
 }
 
-export function maybeHandleDrivingUltrasonicObstacle(ctx: any, nowMs: number, edgeOverride: string = ''): void {
+export function maybeHandleDrivingUltrasonicObstacle(ctx: IPage1CoordinatorOps, nowMs: number, edgeOverride: string = ''): void {
   const s = ctx.store
   if (!s) return
   if (ctx.parkingInProgress) return
@@ -488,7 +488,7 @@ export function maybeHandleDrivingUltrasonicObstacle(ctx: any, nowMs: number, ed
   ctx.planPath(s.destApplied)
 }
 
-export function maybeReplanOnObstacle(ctx: any): void {
+export function maybeReplanOnObstacle(ctx: IPage1CoordinatorOps): void {
   const s = ctx.store
   if (!s) return
   if (ctx.aheadVisionPending || ctx.parkingInProgress) return
@@ -526,7 +526,7 @@ export function maybeReplanOnObstacle(ctx: any): void {
   ctx.planPath(s.destApplied)
 }
 
-export function isNextNodeBlocked(ctx: any): boolean {
+export function isNextNodeBlocked(ctx: IPage1CoordinatorOps): boolean {
   const s = ctx.store
   if (!s) return false
   if (s.pathNodes.length <= 1 || s.pathIndex >= s.pathNodes.length - 1) return false
@@ -536,7 +536,7 @@ export function isNextNodeBlocked(ctx: any): boolean {
   return s.isBlockedEdge(fromId, nextId)
 }
 
-export function nearestNodeIdByPose(ctx: any): string {
+export function nearestNodeIdByPose(ctx: IPage1CoordinatorOps): string {
   const s = ctx.store
   if (!s || s.gridNodes.length === 0) return ''
   const px = s.pose.xNorm
@@ -561,13 +561,13 @@ export function nearestNodeIdByPose(ctx: any): string {
   return bestId
 }
 
-export function findNearestRouteSegmentByPose(ctx: any): any {
+export function findNearestRouteSegmentByPose(ctx: IPage1CoordinatorOps): SegmentPoseMatch | undefined {
   const s = ctx.store
   if (!s) return undefined
   const px = s.pose.xNorm
   const py = s.pose.yNorm
   const edges = PathPlannerAStar.routeEdges()
-  let best = undefined
+  let best: SegmentPoseMatch | undefined = undefined
   let bestD2 = 0
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i]
@@ -605,10 +605,10 @@ export function findNearestRouteSegmentByPose(ctx: any): any {
   return best
 }
 
-export function chooseSegmentEndpointForGoal(ctx: any, seg: any, goal: string, blocked: Array<string>, blockedEdges: Array<string>): any {
+export function chooseSegmentEndpointForGoal(ctx: IPage1CoordinatorOps, seg: SegmentPoseMatch, goal: string, blocked: Array<string>, blockedEdges: Array<string>): SegmentPlanDecision | undefined {
   const s = ctx.store
   if (!s) return undefined
-  let best = undefined
+  let best: SegmentPlanDecision | undefined = undefined
   let bestScore = 0
   const targetA = seg.aId
   const targetB = seg.bId
@@ -638,7 +638,7 @@ export function chooseSegmentEndpointForGoal(ctx: any, seg: any, goal: string, b
   return best
 }
 
-export function tryBuildSegmentAwarePath(ctx: any, goal: string, blocked: Array<string>, blockedEdges: Array<string>): Array<string> | undefined {
+export function tryBuildSegmentAwarePath(ctx: IPage1CoordinatorOps, goal: string, blocked: Array<string>, blockedEdges: Array<string>): Array<string> | undefined {
   const s = ctx.store
   if (!s) return undefined
   if (!s.segPlannerEnabled || !s.poseInited) return undefined
@@ -664,7 +664,7 @@ export function tryBuildSegmentAwarePath(ctx: any, goal: string, blocked: Array<
   return path
 }
 
-export function findPendingRouteObstacleOnEdge(ctx: any, edgeId: string, nowMs: number): any {
+export function findPendingRouteObstacleOnEdge(ctx: IPage1CoordinatorOps, edgeId: string, nowMs: number): RouteObstaclePoint | undefined {
   const s = ctx.store
   if (!s) return undefined
   const x = edgeId.trim().toUpperCase()
@@ -679,7 +679,7 @@ export function findPendingRouteObstacleOnEdge(ctx: any, edgeId: string, nowMs: 
   return undefined
 }
 
-export function maybeStartAheadVisionReplan(ctx: any, fromId: string, toId: string, nowMs: number): boolean {
+export function maybeStartAheadVisionReplan(ctx: IPage1CoordinatorOps, fromId: string, toId: string, nowMs: number): boolean {
   const s = ctx.store
   if (!s) return false
   if (ctx.aheadVisionPending) return true
@@ -697,7 +697,7 @@ export function maybeStartAheadVisionReplan(ctx: any, fromId: string, toId: stri
   return true
 }
 
-export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
+export function maybeHandleAheadVisionReplan(ctx: IPage1CoordinatorOps, nowMs: number): boolean {
   if (!ctx.aheadVisionPending) return false
   const s = ctx.store
   if (!s) {
@@ -721,3 +721,5 @@ export function maybeHandleAheadVisionReplan(ctx: any, nowMs: number): boolean {
   ctx.planPath(goal)
   return true
 }
+
+

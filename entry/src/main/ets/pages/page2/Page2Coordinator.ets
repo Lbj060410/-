@@ -322,6 +322,52 @@ export class Page2Coordinator {
     this.rtsp.setSurfaceId(surfaceId)
   }
 
+  async switchVideoLink(mode: DisplayMode): Promise<void> {
+    if (!this.started || this.starting || this.prewarming) {
+      videoStore.setStatus('视频链路切换失败：Page2未启动')
+      return
+    }
+    if (mode === videoStore.displayMode) {
+      videoStore.setStatus(`视频源保持不变: ${mode === DisplayMode.RTSP ? 'RTSP' : 'HTTP'}`)
+      return
+    }
+
+    if (mode === DisplayMode.RTSP) {
+      if (!this.rtsp.hasSurfaceId()) {
+        videoStore.setStatus('RTSP切换失败：视频渲染面未就绪')
+        return
+      }
+      await this.switchToRtspInternal('manual switch')
+      return
+    }
+    await this.switchToHttpInternal('manual switch')
+  }
+
+  private async switchToRtspInternal(reason: string): Promise<void> {
+    // Keep HTTP frame pipeline alive for recognition/replay even when preview switches to RTSP.
+    // The view layer decides which source is visible; scheduler still needs fresh frames.
+    const ok: boolean = await this.rtsp.playRtsp(videoStore.rtspUrl)
+    if (ok) {
+      videoStore.setDisplayMode(DisplayMode.RTSP, reason)
+      videoStore.setStatus(`Page2 source=RTSP, mode=${this.modeText()}`)
+      return
+    }
+    const err: string = videoStore.lastErrorText.length > 0 ? videoStore.lastErrorText : 'unknown'
+    await this.switchToHttpInternal(`rtsp failed (${reason})`)
+    videoStore.setStatus(`RTSP启动失败，已回退HTTP: ${err}`)
+  }
+
+  private async switchToHttpInternal(reason: string): Promise<void> {
+    await this.rtsp.pause().catch((): void => {})
+    const httpUrl: string = this.activeSnapshotUrl.length > 0
+      ? this.activeSnapshotUrl
+      : buildCameraSnapshotUrl(videoStore.cameraHost, videoStore.cameraUser, videoStore.cameraPass)
+    const intervalMs: number = this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs
+    this.frames.startHttp(httpUrl, intervalMs)
+    videoStore.setDisplayMode(DisplayMode.HTTP, reason)
+    videoStore.setStatus(`Page2 source=HTTP, mode=${this.modeText()}`)
+  }
+
   bindResourceManager(rm: resourceManager.ResourceManager): void {
     this.switcher.bindResourceManager(rm)
   }
@@ -422,7 +468,8 @@ export class Page2Coordinator {
 
   async start(): Promise<void> {
     if (this.started || this.starting) {
-      videoStore.setStatus(`Page2 keep-alive, source=HTTP, mode=${this.modeText()}`)
+      const sourceText: string = videoStore.displayMode === DisplayMode.RTSP ? 'RTSP' : 'HTTP'
+      videoStore.setStatus(`Page2 keep-alive, source=${sourceText}, mode=${this.modeText()}`)
       return
     }
     this.starting = true
@@ -448,10 +495,15 @@ export class Page2Coordinator {
         : buildCameraSnapshotUrl(videoStore.cameraHost, videoStore.cameraUser, videoStore.cameraPass)
       console.info(`[Page2] start http host=${videoStore.cameraHost} url=${httpUrl}`)
 
-      videoStore.setDisplayMode(DisplayMode.HTTP, 'startup')
       this.resetVideoConnStateForNewSession()
-      // 平衡预览新鲜度和控制路径稳定性。
-      this.frames.startHttp(httpUrl, this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs)
+      const startupIntervalMs: number = this.pageBackgroundMode ? this.backgroundHttpIntervalMs : this.foregroundHttpIntervalMs
+      this.frames.startHttp(httpUrl, startupIntervalMs)
+      if (this.rtsp.hasSurfaceId()) {
+        await this.switchToRtspInternal('startup')
+      } else {
+        videoStore.setDisplayMode(DisplayMode.HTTP, 'startup surface pending')
+        videoStore.setStatus(`Page2 source=HTTP(surface pending), mode=${this.modeText()}`)
+      }
       this.ensurePulseTimer()
       this.currentLiveIntervalMs = this.pageBackgroundMode ? this.backgroundLiveIntervalMs : this.foregroundLiveIntervalMs
       this.lastLiveCadenceTuneAtMs = 0
@@ -469,12 +521,13 @@ export class Page2Coordinator {
       this.snapshotRecovering = false
       this.lastSnapshotRecoverAtMs = 0
 
-      // 保持 HarmonyOS 与当前 HTTP 预览路径对齐。
+      // 当前实现由 Page2Coordinator 显式控制链路，不启用自动切换器。
       this.switcher.stop()
 
       this.started = true
       this.prewarmed = false
-      videoStore.setStatus(`Page2 started, camera=${videoStore.cameraHost}, source=HTTP, mode=${this.modeText()}`)
+      const sourceText: string = videoStore.displayMode === DisplayMode.RTSP ? 'RTSP' : 'HTTP'
+      videoStore.setStatus(`Page2 started, camera=${videoStore.cameraHost}, source=${sourceText}, mode=${this.modeText()}`)
     } finally {
       if (token === this.lifeToken) this.starting = false
     }
@@ -592,6 +645,10 @@ export class Page2Coordinator {
         ? `Page2 background mode: low-frequency, camera=${videoStore.cameraHost}`
         : `Page2 foreground mode: high-frequency, camera=${videoStore.cameraHost}`
     )
+  }
+
+  onVideoSurfaceReady(surfaceId: string): void {
+    this.bindSurface(surfaceId)
   }
 
   private resolveCachedSnapshotUrlForQuickStart(): string {

@@ -56,17 +56,17 @@ export class RouteEdgeCodec {
  * - parse/encode: 在字符串节点与网格坐标之间转换。
  */
 export class GridIdCodec {
-  // 列标签与行标签定义了“节点命名空间”，改这里会影响所有节点解析/编码。
+  // 列标签与行标签定义了”节点命名空间”，改这里会影响所有节点解析/编码。
   private static readonly COLS: Array<string> = ['A', 'B', 'D', 'F', 'G']
   private static readonly ROW_LABELS: Array<number> = [1, 2, 4, 6, 7]
   // ROUTE_NODE_IDS 是允许参与黑线规划的全部节点白名单。
-  // 增删节点时必须同步 ROUTE_EDGES，否则节点会“合法但不可达”。
+  // 增删节点时必须同步 ROUTE_EDGES，否则节点会”合法但不可达”。
   private static readonly ROUTE_NODE_IDS: Array<string> = [
-          'B1', 'D1', 'F1',
+    'A1', 'B1', 'D1', 'F1', 'G1',
     'A2', 'B2', 'D2', 'F2', 'G2',
     'A4', 'B4', 'D4', 'F4', 'G4',
     'A6', 'B6', 'D6', 'F6', 'G6',
-          'B7', 'D7', 'F7'
+    'A7', 'B7', 'D7', 'F7', 'G7'
   ]
   private static readonly ROUTE_NODE_SET: Map<string, boolean> = GridIdCodec.buildRouteNodeSet()
 
@@ -126,16 +126,19 @@ export class PathPlannerAStar {
   // 黑线网络拓扑（唯一真实路网）：
   // 修改”允许怎么走”必须改这里，A* 只会在这张图上搜索。
   private static readonly ROUTE_EDGES: Array<RouteSegment> = [
-    // 三条主要垂直干线
+    // 五条主要垂直干线
+    { a: 'A1', b: 'A2' }, { a: 'A2', b: 'A4' }, { a: 'A4', b: 'A6' }, { a: 'A6', b: 'A7' },
     { a: 'B1', b: 'B2' }, { a: 'B2', b: 'B4' }, { a: 'B4', b: 'B6' }, { a: 'B6', b: 'B7' },
     { a: 'D1', b: 'D2' }, { a: 'D2', b: 'D4' }, { a: 'D4', b: 'D6' }, { a: 'D6', b: 'D7' },
     { a: 'F1', b: 'F2' }, { a: 'F2', b: 'F4' }, { a: 'F4', b: 'F6' }, { a: 'F6', b: 'F7' },
+    { a: 'G1', b: 'G2' }, { a: 'G2', b: 'G4' }, { a: 'G4', b: 'G6' }, { a: 'G6', b: 'G7' },
 
-    // 第 2/4/6 行的水平连接
-    // A/G 是每行的侧端点，不跨行垂直连接
+    // 五行的水平连接
+    { a: 'A1', b: 'B1' }, { a: 'B1', b: 'D1' }, { a: 'D1', b: 'F1' }, { a: 'F1', b: 'G1' },
     { a: 'A2', b: 'B2' }, { a: 'B2', b: 'D2' }, { a: 'D2', b: 'F2' }, { a: 'F2', b: 'G2' },
     { a: 'A4', b: 'B4' }, { a: 'B4', b: 'D4' }, { a: 'D4', b: 'F4' }, { a: 'F4', b: 'G4' },
-    { a: 'A6', b: 'B6' }, { a: 'B6', b: 'D6' }, { a: 'D6', b: 'F6' }, { a: 'F6', b: 'G6' }
+    { a: 'A6', b: 'B6' }, { a: 'B6', b: 'D6' }, { a: 'D6', b: 'F6' }, { a: 'F6', b: 'G6' },
+    { a: 'A7', b: 'B7' }, { a: 'B7', b: 'D7' }, { a: 'D7', b: 'F7' }, { a: 'F7', b: 'G7' }
   ]
   private static readonly ROUTE_ADJ: Map<string, Array<string>> = PathPlannerAStar.buildRouteAdj()
 
@@ -192,12 +195,22 @@ export class PathPlannerAStar {
     // blockedSet/blockedEdgeSet：
     // - blockedSet 直接封节点
     // - blockedEdgeSet 只封节点之间的特定连线
-    // 若你要让“某段黑线不可走”，优先改 blockedEdges，而不是删节点。
+    // 若你要让”某段黑线不可走”，优先改 blockedEdges，而不是删节点。
     const blockedSet: Map<string, boolean> = new Map<string, boolean>()
     for (let i: number = 0; i < blocked.length; i++) {
       blockedSet.set(blocked[i], true)
     }
     const blockedEdgeSet: Map<string, boolean> = new Map<string, boolean>()
+
+    // 默认断开行1和行7的水平边（小车A*默认不加载这些边）
+    const defaultBlockedEdges: Array<string> = [
+      'A1|B1', 'B1|D1', 'D1|F1', 'F1|G1',
+      'A7|B7', 'B7|D7', 'D7|F7', 'F7|G7'
+    ]
+    for (let i: number = 0; i < defaultBlockedEdges.length; i++) {
+      blockedEdgeSet.set(defaultBlockedEdges[i], true)
+    }
+
     for (let i: number = 0; i < blockedEdges.length; i++) {
       const e: string = blockedEdges[i].trim().toUpperCase()
       if (e.length <= 0) continue

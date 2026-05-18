@@ -5,6 +5,7 @@
  */
 import fs from '@ohos.file.fs'
 import image from '@ohos.multimedia.image'
+import hilog from '@ohos.hilog'
 import { videoStore } from '../../state/VideoStore'
 import { RecognitionResult } from '../recognition/RecognitionResult'
 import { RecognitionSubtype, RecognitionTaskSource } from '../recognition/RecognitionTask'
@@ -22,6 +23,8 @@ const MAX_SESSIONS: number = 120
 const MAX_TIMELINE: number = 300
 const ACTIVE_IDLE_CLOSE_MS: number = 20000
 const SNAPSHOT_MIN_INTERVAL_MS: number = 1200
+const LOG_DOMAIN: number = 0xFF22
+const LOG_TAG: string = 'ReplayArchiveSvc'
 
 interface ReplayPersistPayload {
   sessions?: Array<ReplaySession>
@@ -256,20 +259,25 @@ export class ReplayArchiveService {
       f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.APPEND)
       fs.writeSync(f.fd, jpeg)
       return path
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '保存会话快照失败 path=%{public}s: %{public}s',
+        path, e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
       if (packer) {
-        try { packer.release() } catch (_) {}
+        try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
 
   private ensureDir(dir: string): void {
-    try { fs.mkdirSync(dir) } catch (_) {}
+    try { fs.mkdirSync(dir) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '创建归档目录失败 dir=%{public}s: %{public}s',
+        dir, e instanceof Error ? e.message : String(e))
+    }
   }
 
   private ensureLoaded(): void {
@@ -298,12 +306,14 @@ export class ReplayArchiveService {
       this.sessions = this.normalizeSessions(srcSessions)
       this.seq = Math.max(this.seqFromSessions(this.sessions), this.toSafeInt(payload.seq))
       this.activeSessionId = ''
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '加载复盘索引失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       this.sessions = []
       this.activeSessionId = ''
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
@@ -317,17 +327,18 @@ export class ReplayArchiveService {
     try {
       this.ensureDir(REPLAY_DIR)
       const text: string = JSON.stringify(payload)
-      try { fs.unlinkSync(REPLAY_INDEX_PATH) } catch (_) {}
+      try { fs.unlinkSync(REPLAY_INDEX_PATH) } catch (_) { /* 资源释放失败可安全忽略 */ }
       f = fs.openSync(
         REPLAY_INDEX_PATH,
         fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.APPEND
       )
       fs.writeSync(f.fd, text)
-    } catch (_) {
-      // ignore persistence failure; runtime memory still keeps replay data
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '写入复盘索引失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }

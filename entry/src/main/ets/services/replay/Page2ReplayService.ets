@@ -3,6 +3,7 @@ import image from '@ohos.multimedia.image'
 import mediaLibrary from '@ohos.multimedia.mediaLibrary'
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
 import type common from '@ohos.app.ability.common'
+import hilog from '@ohos.hilog'
 import { videoStore } from '../../state/VideoStore'
 import { BBoxNorm, RecognitionResult } from '../recognition/RecognitionResult'
 import { RecognitionSubtype } from '../recognition/RecognitionTask'
@@ -10,7 +11,7 @@ import { RecognitionSubtype } from '../recognition/RecognitionTask'
 export interface Page2ObstacleReplayItem {
   id: string
   tsMs: number
-  triggerType: 'SHIGONG' | 'ULTRASONIC_01' | 'VISION'
+  triggerType: 'SHIGONG' | 'ULTRASONIC_01' | 'VISION' | 'OBSTACLE_EDGE'
   buttonName: string
   resultText: string
   decisionText: string
@@ -43,6 +44,8 @@ const MAX_GALLERY_ITEMS_PER_TYPE: number = 3
 const MAX_FRAME_BUFFER: number = 20
 const FRAME_SAMPLE_INTERVAL_MS: number = 200
 const SHIGONG_COOLDOWN_MS: number = 1400
+const LOG_DOMAIN: number = 0xFF21
+const LOG_TAG: string = 'Page2ReplaySvc'
 
 @Observed
 export class Page2ReplayService {
@@ -116,6 +119,27 @@ export class Page2ReplayService {
     })
   }
 
+  async onObstacleEdgeDetected(fromId: string, toId: string): Promise<void> {
+    const nowMs: number = Date.now()
+    const from: string = fromId.trim().toUpperCase()
+    const to: string = toId.trim().toUpperCase()
+    if (from.length <= 0 || to.length <= 0) return
+
+    const id: string = this.nextId('obs')
+    const clipFrameRefs: Array<string> = await this.saveRecentClipFrames(id, 2000)
+    const decisionImageRef: string = await this.saveDecisionImage(id, 'obstacle_edge')
+    this.pushObstacle({
+      id,
+      tsMs: nowMs,
+      triggerType: 'OBSTACLE_EDGE',
+      buttonName: `Obstacle Edge: ${from}|${to}`,
+      resultText: '路段障碍',
+      decisionText: '路段障碍上报，已标记并触发重规划',
+      decisionImageRef,
+      clipFrameRefs
+    })
+  }
+
   async onVisionObstacleDetected(result: RecognitionResult): Promise<void> {
     if (!result.ok || result.boxes.length <= 0) return
     if (result.subtype !== RecognitionSubtype.YOLOV26BARRIER && result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT) return
@@ -149,7 +173,10 @@ export class Page2ReplayService {
       const info: image.ImageInfo = await originalPm.getImageInfo()
       imgW = Math.max(0, info.size.width)
       imgH = Math.max(0, info.size.height)
-    } catch (_) {}
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '读取原图尺寸失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
     const boxes: Array<BBoxNorm> = await this.cloneBoxesForReplay(result, imgW, imgH)
     this.pushGallery({
       id,
@@ -197,9 +224,12 @@ export class Page2ReplayService {
         const info: image.ImageInfo = await pm.getImageInfo()
         imgW = Math.max(0, info.size.width)
         imgH = Math.max(0, info.size.height)
-      } catch (_) {}
+      } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '读取选图尺寸失败: %{public}s',
+          e instanceof Error ? e.message : String(e))
+      }
       if (pm !== videoStore.snapshotPixelMap) {
-        try { pm.release() } catch (_) {}
+        try { pm.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
     const boxes: Array<BBoxNorm> = await this.cloneBoxesForReplay(result, imgW, imgH)
@@ -248,11 +278,17 @@ export class Page2ReplayService {
       candidates.push(v)
     }
     pushUnique(one)
-    try { pushUnique(decodeURIComponent(one)) } catch (_) {}
+    try { pushUnique(decodeURIComponent(one)) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '解析URI解码候选失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    }
     if (one.toLowerCase().startsWith('file://')) {
       const pathRaw: string = one.substring('file://'.length)
       pushUnique(pathRaw)
-      try { pushUnique(decodeURIComponent(pathRaw)) } catch (_) {}
+      try { pushUnique(decodeURIComponent(pathRaw)) } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '解析file URI解码候选失败: %{public}s',
+          e instanceof Error ? e.message : String(e))
+      }
     }
 
     for (let i: number = 0; i < candidates.length; i++) {
@@ -261,11 +297,12 @@ export class Page2ReplayService {
         src = image.createImageSource(candidates[i])
         if (!src) continue
         return await src.createPixelMap()
-      } catch (_) {
-        // try next candidate
+      } catch (e) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '从URI候选创建PixelMap失败 candidate=%{public}s: %{public}s',
+          candidates[i], e instanceof Error ? e.message : String(e))
       } finally {
         if (src) {
-          try { src.release() } catch (_) {}
+          try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
         }
       }
     }
@@ -349,7 +386,7 @@ export class Page2ReplayService {
     const path: string = ref.trim()
     if (path.length <= 0) return
     if (!path.startsWith(PAGE2_REPLAY_DIR)) return
-    try { fs.unlinkSync(path) } catch (_) {}
+    try { fs.unlinkSync(path) } catch (_) { /* 资源释放失败可安全忽略 */ }
   }
 
   private containsShigong(result: RecognitionResult): boolean {
@@ -428,10 +465,12 @@ export class Page2ReplayService {
       if (!region) return ''
       await copy.crop(region)
       return await this.savePixelMapReference(copy, key, preferGallery)
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '保存裁剪框图片失败 key=%{public}s: %{public}s',
+        key, e instanceof Error ? e.message : String(e))
       return ''
     } finally {
-      try { copy.release() } catch (_) {}
+      try { copy.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -467,12 +506,14 @@ export class Page2ReplayService {
       try {
         return await src.createPixelMap()
       } finally {
-        try { src.release() } catch (_) {}
+        try { src.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '克隆PixelMap失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
-      try { packer.release() } catch (_) {}
+      try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -481,10 +522,12 @@ export class Page2ReplayService {
     try {
       const jpeg: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 90 })
       return await this.saveJpegReference(jpeg, key, preferGallery)
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '编码并保存图片失败 key=%{public}s: %{public}s',
+        key, e instanceof Error ? e.message : String(e))
       return ''
     } finally {
-      try { packer.release() } catch (_) {}
+      try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
     }
   }
 
@@ -514,14 +557,16 @@ export class Page2ReplayService {
       await asset.close(fd)
       fd = -1
       return asset.uri
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '写入媒体库失败 key=%{public}s: %{public}s',
+        key, e instanceof Error ? e.message : String(e))
       return ''
     } finally {
       if (fd >= 0) {
-        try { await fs.close(fd) } catch (_) {}
+        try { await fs.close(fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
       if (lib) {
-        try { await lib.release() } catch (_) {}
+        try { await lib.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
@@ -531,15 +576,17 @@ export class Page2ReplayService {
     const path: string = `${PAGE2_REPLAY_DIR}/${this.safeText(key)}_${Date.now()}.jpg`
     let f: fs.File | undefined = undefined
     try {
-      try { fs.unlinkSync(path) } catch (_) {}
+      try { fs.unlinkSync(path) } catch (_) { /* 资源释放失败可安全忽略 */ }
       f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.APPEND)
       fs.writeSync(f.fd, jpeg)
       return path
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '写入应用文件失败 path=%{public}s: %{public}s',
+        path, e instanceof Error ? e.message : String(e))
       return ''
     } finally {
       if (f) {
-        try { fs.closeSync(f.fd) } catch (_) {}
+        try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
       }
     }
   }
@@ -562,13 +609,18 @@ export class Page2ReplayService {
         if (result.authResults[i] !== 0) return false
       }
       return true
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '申请媒体权限失败: %{public}s',
+        e instanceof Error ? e.message : String(e))
       return false
     }
   }
 
   private ensureDir(path: string): void {
-    try { fs.mkdirSync(path) } catch (_) {}
+    try { fs.mkdirSync(path) } catch (e) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '创建目录失败 path=%{public}s: %{public}s',
+        path, e instanceof Error ? e.message : String(e))
+    }
   }
 
   private safeText(v: string): string {
