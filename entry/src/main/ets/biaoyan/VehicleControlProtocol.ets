@@ -1,14 +1,16 @@
-/**
- * 表演文件：车辆控制协议处理 - 完整指令流程
- * 用途：演示 0x01/0x02/0x03 等指令的处理流程
+﻿/**
+ * 表演文件：车辆控制协议处理 - 清晰版流程示例
+ * 用途：演示 0x01/0x02/0x03/0x04/0x05 指令从接收到执行的完整链路（非正式业务逻辑）
  */
 
+import { AStarPathPlanner } from './WavefrontDiffusion'
+
 export enum CommandType {
-  HEARTBEAT = 0x01,           // 心跳
-  OBSTACLE_DETECTION = 0x02,  // 障碍检测
-  PATH_REPLAN = 0x03,         // 路径重规划
-  EMERGENCY_STOP = 0x04,      // 紧急停止
-  STATUS_REPORT = 0x05        // 状态上报
+  HEARTBEAT = 0x01,
+  OBSTACLE_DETECTION = 0x02,
+  PATH_REPLAN = 0x03,
+  EMERGENCY_STOP = 0x04,
+  STATUS_REPORT = 0x05
 }
 
 export interface CommandFrame {
@@ -17,9 +19,11 @@ export interface CommandFrame {
   data: any
 }
 
+export type SpecialRoadType = 'PEANUT_FIELD' | 'CONSTRUCTION' | 'WATER_HAZARD' | 'STEEP_SLOPE'
+
 export interface SpecialRoadSegment {
   location: string
-  type: 'PEANUT_FIELD' | 'CONSTRUCTION' | 'WATER_HAZARD' | 'STEEP_SLOPE'
+  type: SpecialRoadType
   confidence: number
   imageId: string
   timestamp: number
@@ -33,176 +37,275 @@ export interface ReviewResult {
   affectsPathPlanning: boolean
 }
 
+interface RotationFrame {
+  timestamp: number
+  sensorData: {
+    distance: number
+  }
+}
+
+interface CameraFrame {
+  timestamp: number
+  resolution: string
+  format: string
+  data: string
+}
+
+interface RecognitionResult {
+  detectedType: SpecialRoadType | 'UNKNOWN'
+  confidence: number
+  boundingBox: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  modelVersion: string
+}
+
+interface ReplanData {
+  reason: string
+  obstacles: Array<any>
+  blockedNodes: Array<string>
+  priority: 'LOW' | 'MEDIUM' | 'HIGH'
+}
+
+interface CloudUploadTask {
+  data: any
+  timestamp: number
+  status: 'PENDING' | 'DONE' | 'FAILED'
+}
+
+interface VehicleStatus {
+  timestamp: number
+  position: string
+  target: string
+  battery: number
+  temperature: number
+  autoNavigationEnabled: boolean
+  specialRoadsCount: number
+  queuedCommands: number
+  logCount: number
+}
+
+interface AvoidanceDecision {
+  action: 'TURN_LEFT' | 'TURN_RIGHT' | 'SLOW_DOWN' | 'STOP'
+  angle: number
+  speed: number
+}
+
 export class VehicleControlProtocol {
   private commandQueue: Array<CommandFrame> = []
   private specialRoadsDetected: Array<SpecialRoadSegment> = []
   private reviewResults: Array<ReviewResult> = []
-  private cloudUploadQueue: Array<any> = []
+  private cloudUploadQueue: Array<CloudUploadTask> = []
   private systemLogs: Array<string> = []
 
+  private currentPath: Array<string> = []
+  private currentTarget: string = 'G7'
+  private lastHeartbeatAt: number = 0
+  private autoNavigationEnabled: boolean = true
+
+  private readonly pathPlanner: AStarPathPlanner = new AStarPathPlanner()
+
   /**
-   * 主入口：处理接收到的指令帧
+   * 主入口：处理收到的协议帧
    */
   processCommand(frame: CommandFrame): void {
-    this.logSystemEvent(`收到指令: 0x${frame.type.toString(16).toUpperCase()}`)
+    this.logSystemEvent(`[RX] 收到指令 0x${frame.type.toString(16).toUpperCase()}`)
+    this.dispatchCommand(frame)
+    this.consumeQueuedCommands()
+  }
 
+  private dispatchCommand(frame: CommandFrame): void {
     switch (frame.type) {
       case CommandType.HEARTBEAT:
         this.handleHeartbeat(frame)
-        break
+        return
       case CommandType.OBSTACLE_DETECTION:
         this.handleObstacleDetection(frame)
-        break
+        return
       case CommandType.PATH_REPLAN:
         this.handlePathReplan(frame)
-        break
+        return
       case CommandType.EMERGENCY_STOP:
         this.handleEmergencyStop(frame)
-        break
+        return
       case CommandType.STATUS_REPORT:
         this.handleStatusReport(frame)
-        break
+        return
       default:
-        this.logSystemEvent(`未知指令类型: 0x${frame.type}`)
+        this.logSystemEvent(`[WARN] 未知指令类型: 0x${frame.type}`)
+        return
+    }
+  }
+
+  private consumeQueuedCommands(): void {
+    let guard = 0
+    while (this.commandQueue.length > 0 && guard < 16) {
+      const next = this.commandQueue.shift()
+      if (!next) {
+        break
+      }
+      this.logSystemEvent(`[QUEUE] 处理排队指令 0x${next.type.toString(16).toUpperCase()}`)
+      this.dispatchCommand(next)
+      guard += 1
     }
   }
 
   /**
-   * 0x01 心跳处理
+   * 0x01 心跳：只做状态刷新
    */
   private handleHeartbeat(frame: CommandFrame): void {
-    this.logSystemEvent('心跳信号已接收，系统正常')
-    // 更新最后心跳时间
-    // 检查系统健康状态
-    // 返回心跳应答
+    this.lastHeartbeatAt = frame.timestamp > 0 ? frame.timestamp : Date.now()
+    this.logSystemEvent(`[HEARTBEAT] 心跳正常，lastHeartbeatAt=${this.lastHeartbeatAt}`)
   }
 
   /**
-   * 0x02 障碍检测处理 - 核心流程
+   * 0x02 障碍检测：
+   * 1. 读传感器回传
+   * 2. 判断是否触发障碍
+   * 3. 触发识别
+   * 4. 特殊路段处理
+   * 5. 上报云端
+   * 6. 执行避障
+   * 7. 触发重规划
    */
   private handleObstacleDetection(frame: CommandFrame): void {
-    this.logSystemEvent('=== 进入 0x02 障碍检测流程 ===')
+    this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
 
-    // 步骤 1：接收回转帧
-    const rotationFrame = frame.data
-    this.logSystemEvent(`接收到回转帧，时间戳: ${rotationFrame.timestamp}`)
+    const rotationFrame = this.normalizeRotationFrame(frame.data)
+    this.logSystemEvent(`[0x02] Step1 接收回传帧 ts=${rotationFrame.timestamp}`)
 
-    // 步骤 2：进入障碍判断分支
-    this.logSystemEvent('进入障碍判断分支')
     const obstacleDetected = this.detectObstacle(rotationFrame)
-
     if (!obstacleDetected) {
-      this.logSystemEvent('未检测到障碍，继续前进')
+      this.logSystemEvent('[0x02] Step2 未检测到障碍，流程结束')
       return
     }
 
-    this.logSystemEvent('检测到障碍，启动识别模型')
+    this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
 
-    // 步骤 3：调用识别模型，检测摄像头画面
     const cameraFrame = this.captureCamera()
     const recognitionResult = this.invokeRecognitionModel(cameraFrame)
+    this.logSystemEvent(
+      `[0x02] Step3 识别结果 type=${recognitionResult.detectedType}, confidence=${recognitionResult.confidence}`
+    )
 
-    this.logSystemEvent(`识别结果: ${recognitionResult.detectedType}, 置信度: ${recognitionResult.confidence}`)
-
-    // 步骤 4：检查是否为特殊路段
     if (this.isSpecialRoadSegment(recognitionResult)) {
-      this.logSystemEvent('识别到特殊路段，执行特殊处理')
-
-      // 4.1 写入系统相册
-      const imageId = this.saveToSystemAlbum(cameraFrame, recognitionResult)
-      this.logSystemEvent(`画面已保存到系统相册，ID: ${imageId}`)
-
-      // 4.2 创建特殊路段记录
-      const specialSegment: SpecialRoadSegment = {
-        location: this.getCurrentLocation(),
-        type: recognitionResult.detectedType,
-        confidence: recognitionResult.confidence,
-        imageId: imageId,
-        timestamp: Date.now()
-      }
-      this.specialRoadsDetected.push(specialSegment)
-
-      // 4.3 执行复盘分析
-      const reviewResult = this.performReview(specialSegment)
-      this.reviewResults.push(reviewResult)
-      this.logSystemEvent(`复盘完成: ${reviewResult.recommendation}`)
+      this.handleSpecialRoadSegment(recognitionResult, cameraFrame)
     }
 
-    // 步骤 5：记录日志并上传云端
-    this.logSystemEvent('记录日志并准备上传云端')
+    this.logSystemEvent('[0x02] Step5 上传障碍事件到云端队列')
     this.uploadToCloud({
       type: 'OBSTACLE_DETECTION',
+      recognitionResult: recognitionResult,
       specialRoads: this.specialRoadsDetected,
       reviewResults: this.reviewResults,
       timestamp: Date.now()
     })
 
-    // 步骤 6：进入避障逻辑
-    this.logSystemEvent('进入避障逻辑')
     this.executeAvoidanceLogic(recognitionResult)
-
-    // 步骤 7：触发路径重规划
-    this.logSystemEvent('触发路径重规划模块')
     this.triggerPathReplan(recognitionResult)
+
+    this.logSystemEvent('=== 0x02 障碍检测流程结束 ===')
   }
 
   /**
-   * 0x03 路径重规划处理
+   * 0x03 路径重规划：
+   * 1. 解析重规划上下文
+   * 2. 确定起终点和阻塞节点
+   * 3. 调用扩散路径规划
+   * 4. 更新路径并恢复自动导航
    */
   private handlePathReplan(frame: CommandFrame): void {
-    this.logSystemEvent('=== 进入 0x03 路径重规划流程 ===')
+    this.logSystemEvent('=== 0x03 路径重规划流程开始 ===')
 
-    const replanData = frame.data
-    this.logSystemEvent(`重规划原因: ${replanData.reason}`)
+    const replanData = this.normalizeReplanData(frame.data)
+    this.logSystemEvent(`[0x03] Step1 重规划原因: ${replanData.reason}`)
 
-    // 获取当前位置和目标
     const currentPos = this.getCurrentLocation()
     const targetPos = this.getTargetLocation()
+    const blockedNodes = this.collectBlockedNodes(replanData)
 
-    // 调用 A* 重规划
-    const newPath = this.replanPathWithAStar(currentPos, targetPos, replanData.obstacles)
-    this.logSystemEvent(`新路径规划完成，节点数: ${newPath.length}`)
+    this.logSystemEvent(
+      `[0x03] Step2 起点=${currentPos}, 终点=${targetPos}, 阻塞节点=${blockedNodes.length > 0 ? blockedNodes.join(',') : '无'}`
+    )
 
-    // 更新路径
+    const newPath = this.replanPathWithDiffusion(currentPos, targetPos, blockedNodes)
+    if (newPath.length <= 0) {
+      this.logSystemEvent('[0x03] Step3 重规划失败，保持原路径')
+      return
+    }
+
     this.updatePath(newPath)
-
-    // 恢复自动导航
     this.resumeAutoNavigation()
+
+    this.logSystemEvent('[0x03] Step4 路径更新完成，已恢复自动导航')
+    this.logSystemEvent('=== 0x03 路径重规划流程结束 ===')
   }
 
   /**
-   * 0x04 紧急停止处理
+   * 0x04 紧急停止
    */
   private handleEmergencyStop(frame: CommandFrame): void {
-    this.logSystemEvent('!!! 收到紧急停止指令 !!!')
+    this.logSystemEvent('!!! 收到 0x04 紧急停止指令 !!!')
     this.stopVehicle()
     this.disableAutoNavigation()
     this.uploadCriticalLog()
   }
 
   /**
-   * 0x05 状态上报处理
+   * 0x05 状态上报
    */
   private handleStatusReport(frame: CommandFrame): void {
-    this.logSystemEvent('状态上报请求')
+    this.logSystemEvent('[0x05] 状态上报请求')
     const status = this.collectSystemStatus()
     this.sendStatusToCloud(status)
   }
 
-  /**
-   * 检测障碍
-   */
-  private detectObstacle(rotationFrame: any): boolean {
-    // 装模做样：检查传感器数据
-    const sensorData = rotationFrame.sensorData
-    return sensorData && sensorData.distance < 100
+  private normalizeRotationFrame(data: any): RotationFrame {
+    const timestamp = Number(data?.timestamp) > 0 ? Number(data.timestamp) : Date.now()
+    const distance = Number(data?.sensorData?.distance)
+
+    return {
+      timestamp: timestamp,
+      sensorData: {
+        distance: Number.isFinite(distance) ? distance : Number.MAX_SAFE_INTEGER
+      }
+    }
+  }
+
+  private normalizeReplanData(data: any): ReplanData {
+    const reason = typeof data?.reason === 'string' && data.reason.length > 0
+      ? data.reason
+      : '障碍触发重规划'
+
+    const obstacles = Array.isArray(data?.obstacles) ? data.obstacles : []
+    const blockedNodes = Array.isArray(data?.blockedNodes) ? data.blockedNodes : []
+    const priority = (data?.priority === 'LOW' || data?.priority === 'MEDIUM' || data?.priority === 'HIGH')
+      ? data.priority
+      : 'HIGH'
+
+    return {
+      reason: reason,
+      obstacles: obstacles,
+      blockedNodes: blockedNodes,
+      priority: priority
+    }
   }
 
   /**
-   * 捕获摄像头画面
+   * 障碍检测：示例中用前向距离阈值判断
    */
-  private captureCamera(): any {
-    this.logSystemEvent('捕获摄像头画面')
+  private detectObstacle(rotationFrame: RotationFrame): boolean {
+    return rotationFrame.sensorData.distance < 100
+  }
+
+  /**
+   * 拍照抓帧：表演模拟
+   */
+  private captureCamera(): CameraFrame {
+    this.logSystemEvent('[VISION] 捕获摄像头画面')
     return {
       timestamp: Date.now(),
       resolution: '1920x1080',
@@ -212,11 +315,10 @@ export class VehicleControlProtocol {
   }
 
   /**
-   * 调用识别模型
+   * 识别推理：表演模拟
    */
-  private invokeRecognitionModel(cameraFrame: any): any {
-    this.logSystemEvent('调用识别模型进行推理')
-    // 装模做样：调用 TensorFlow/ONNX 模型
+  private invokeRecognitionModel(cameraFrame: CameraFrame): RecognitionResult {
+    this.logSystemEvent('[VISION] 调用识别模型进行推理')
     return {
       detectedType: 'PEANUT_FIELD',
       confidence: 0.92,
@@ -225,195 +327,198 @@ export class VehicleControlProtocol {
     }
   }
 
-  /**
-   * 判断是否为特殊路段
-   */
-  private isSpecialRoadSegment(recognitionResult: any): boolean {
-    const specialTypes = ['PEANUT_FIELD', 'CONSTRUCTION', 'WATER_HAZARD', 'STEEP_SLOPE']
-    return specialTypes.includes(recognitionResult.detectedType) && recognitionResult.confidence > 0.8
+  private isSpecialRoadSegment(recognitionResult: RecognitionResult): boolean {
+    const specialTypes: Array<SpecialRoadType> = ['PEANUT_FIELD', 'CONSTRUCTION', 'WATER_HAZARD', 'STEEP_SLOPE']
+    return specialTypes.includes(recognitionResult.detectedType as SpecialRoadType) && recognitionResult.confidence > 0.8
   }
 
-  /**
-   * 保存到系统相册
-   */
-  private saveToSystemAlbum(cameraFrame: any, recognitionResult: any): string {
-    this.logSystemEvent('保存画面到系统相册')
-    const imageId = `IMG_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    // 装模做样：调用系统相册 API
-    return imageId
+  private handleSpecialRoadSegment(recognitionResult: RecognitionResult, cameraFrame: CameraFrame): void {
+    this.logSystemEvent('[0x02] Step4 识别到特殊路段，执行特殊处理')
+
+    const imageId = this.saveToSystemAlbum(cameraFrame, recognitionResult)
+
+    const specialSegment: SpecialRoadSegment = {
+      location: this.getCurrentLocation(),
+      type: recognitionResult.detectedType as SpecialRoadType,
+      confidence: recognitionResult.confidence,
+      imageId: imageId,
+      timestamp: Date.now()
+    }
+    this.specialRoadsDetected.push(specialSegment)
+
+    const reviewResult = this.performReview(specialSegment)
+    this.reviewResults.push(reviewResult)
+
+    this.logSystemEvent(`[0x02] Step4 完成特殊路段处理，imageId=${imageId}`)
   }
 
-  /**
-   * 执行复盘分析
-   */
+  private saveToSystemAlbum(cameraFrame: CameraFrame, recognitionResult: RecognitionResult): string {
+    this.logSystemEvent('[MEDIA] 保存画面到系统相册')
+    return this.buildId('IMG')
+  }
+
   private performReview(specialSegment: SpecialRoadSegment): ReviewResult {
-    this.logSystemEvent(`执行复盘分析: ${specialSegment.type}`)
+    this.logSystemEvent(`[REVIEW] 复盘分析: ${specialSegment.type}`)
+
     return {
       segmentId: specialSegment.imageId,
       detectedType: specialSegment.type,
       confidence: specialSegment.confidence,
-      recommendation: `避开${specialSegment.type}区域，建议绕行`,
+      recommendation: `避开 ${specialSegment.type} 区域，建议绕行`,
       affectsPathPlanning: true
     }
   }
 
-  /**
-   * 上传到云端
-   */
   private uploadToCloud(data: any): void {
-    this.logSystemEvent('准备上传数据到云端')
     this.cloudUploadQueue.push({
       data: data,
       timestamp: Date.now(),
       status: 'PENDING'
     })
-    // 装模做样：调用云端 API
-    this.logSystemEvent('数据已加入上传队列')
+    this.logSystemEvent('[CLOUD] 数据已加入上传队列')
   }
 
-  /**
-   * 执行避障逻辑
-   */
-  private executeAvoidanceLogic(recognitionResult: any): void {
-    this.logSystemEvent('执行避障逻辑')
-    // 装模做样：调用避障算法
-    const avoidanceDecision = {
+  private executeAvoidanceLogic(recognitionResult: RecognitionResult): void {
+    const avoidanceDecision: AvoidanceDecision = {
       action: 'TURN_LEFT',
       angle: 45,
       speed: 0.5
     }
-    this.logSystemEvent(`避障决策: ${avoidanceDecision.action}, 转向角: ${avoidanceDecision.angle}°`)
+    this.logSystemEvent(
+      `[0x02] Step6 避障决策: ${avoidanceDecision.action}, angle=${avoidanceDecision.angle}, speed=${avoidanceDecision.speed}`
+    )
   }
 
-  /**
-   * 触发路径重规划
-   */
-  private triggerPathReplan(recognitionResult: any): void {
-    this.logSystemEvent('触发路径重规划模块')
+  private triggerPathReplan(recognitionResult: RecognitionResult): void {
     const replanFrame: CommandFrame = {
       type: CommandType.PATH_REPLAN,
       timestamp: Date.now(),
       data: {
         reason: `检测到${recognitionResult.detectedType}`,
         obstacles: [recognitionResult],
+        blockedNodes: [],
         priority: 'HIGH'
       }
     }
+
     this.commandQueue.push(replanFrame)
+    this.logSystemEvent('[0x02] Step7 已投递路径重规划指令到队列')
+  }
+
+  private collectBlockedNodes(replanData: ReplanData): Array<string> {
+    const nodes: Array<string> = []
+
+    for (let node of replanData.blockedNodes) {
+      if (typeof node === 'string' && node.length > 0) {
+        nodes.push(node.toUpperCase())
+      }
+    }
+
+    for (let obstacle of replanData.obstacles) {
+      if (typeof obstacle?.nodeId === 'string' && obstacle.nodeId.length > 0) {
+        nodes.push(obstacle.nodeId.toUpperCase())
+      }
+    }
+
+    // 去重
+    const unique = Array.from(new Set(nodes))
+    return unique
   }
 
   /**
-   * 路径重规划 - A* 算法
+   * 重规划调用扩散路径算法（对应你的表演规划器）
    */
-  private replanPathWithAStar(start: string, goal: string, obstacles: Array<any>): Array<string> {
-    this.logSystemEvent(`A* 重规划: ${start} -> ${goal}`)
-    // 装模做样：调用 A* 算法
-    return ['A1', 'B1', 'D1', 'D2', 'D4', 'F4', 'F6', 'G6', 'G7']
+  private replanPathWithDiffusion(start: string, goal: string, blockedNodes: Array<string>): Array<string> {
+    this.logSystemEvent(`[PLANNER] 扩散策略规划: ${start} -> ${goal}`)
+
+    const result = this.pathPlanner.plan(start, goal, blockedNodes)
+    if (!result.success || result.path.length <= 0) {
+      this.logSystemEvent('[PLANNER] 规划失败：无可行路径')
+      return []
+    }
+
+    this.logSystemEvent(
+      `[PLANNER] 规划成功: pathLen=${result.path.length}, cost=${result.cost}, expanded=${result.expandedNodes}`
+    )
+
+    return result.path
   }
 
-  /**
-   * 更新路径
-   */
   private updatePath(newPath: Array<string>): void {
-    this.logSystemEvent(`路径已更新，新路径: ${newPath.join(' -> ')}`)
+    this.currentPath = [...newPath]
+    this.logSystemEvent(`[PATH] 路径已更新: ${newPath.join(' -> ')}`)
   }
 
-  /**
-   * 恢复自动导航
-   */
   private resumeAutoNavigation(): void {
-    this.logSystemEvent('恢复自动导航')
+    this.autoNavigationEnabled = true
+    this.logSystemEvent('[NAV] 自动导航已恢复')
   }
 
-  /**
-   * 停止车辆
-   */
   private stopVehicle(): void {
-    this.logSystemEvent('车辆已停止')
+    this.logSystemEvent('[CAR] 车辆已停止')
   }
 
-  /**
-   * 禁用自动导航
-   */
   private disableAutoNavigation(): void {
-    this.logSystemEvent('自动导航已禁用')
+    this.autoNavigationEnabled = false
+    this.logSystemEvent('[NAV] 自动导航已禁用')
   }
 
-  /**
-   * 上传关键日志
-   */
   private uploadCriticalLog(): void {
-    this.logSystemEvent('上传关键日志到云端')
+    this.logSystemEvent('[CLOUD] 上传关键日志')
   }
 
-  /**
-   * 收集系统状态
-   */
-  private collectSystemStatus(): any {
+  private collectSystemStatus(): VehicleStatus {
     return {
       timestamp: Date.now(),
       position: this.getCurrentLocation(),
+      target: this.getTargetLocation(),
       battery: 85,
       temperature: 45,
+      autoNavigationEnabled: this.autoNavigationEnabled,
       specialRoadsCount: this.specialRoadsDetected.length,
+      queuedCommands: this.commandQueue.length,
       logCount: this.systemLogs.length
     }
   }
 
-  /**
-   * 发送状态到云端
-   */
-  private sendStatusToCloud(status: any): void {
-    this.logSystemEvent(`发送状态到云端: ${JSON.stringify(status)}`)
+  private sendStatusToCloud(status: VehicleStatus): void {
+    this.logSystemEvent(`[CLOUD] 状态上报: ${JSON.stringify(status)}`)
   }
 
-  /**
-   * 获取当前位置
-   */
   private getCurrentLocation(): string {
+    if (this.currentPath.length > 0) {
+      return this.currentPath[0]
+    }
     return 'D4'
   }
 
-  /**
-   * 获取目标位置
-   */
   private getTargetLocation(): string {
-    return 'G7'
+    return this.currentTarget
   }
 
-  /**
-   * 系统日志记录
-   */
+  private buildId(prefix: string): string {
+    const randomSuffix = Math.random().toString(36).slice(2, 10)
+    return `${prefix}_${Date.now()}_${randomSuffix}`
+  }
+
   private logSystemEvent(message: string): void {
     const logEntry = `[${new Date().toISOString()}] ${message}`
     this.systemLogs.push(logEntry)
     console.log(logEntry)
   }
 
-  /**
-   * 获取系统日志
-   */
   getSystemLogs(): Array<string> {
     return this.systemLogs
   }
 
-  /**
-   * 获取特殊路段记录
-   */
   getSpecialRoads(): Array<SpecialRoadSegment> {
     return this.specialRoadsDetected
   }
 
-  /**
-   * 获取复盘结果
-   */
   getReviewResults(): Array<ReviewResult> {
     return this.reviewResults
   }
 
-  /**
-   * 获取云端上传队列
-   */
   getCloudUploadQueue(): Array<any> {
     return this.cloudUploadQueue
   }

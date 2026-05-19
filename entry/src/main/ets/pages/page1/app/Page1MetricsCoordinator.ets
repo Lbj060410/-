@@ -37,27 +37,47 @@ export class Page1MetricsCoordinator {
     const b: string = toId.trim().toUpperCase()
     const ac = GridIdCodec.parse(a)
     const bc = GridIdCodec.parse(b)
-    if (!ac || !bc) return 57
+    if (!ac || !bc) return 49
 
     const rowA: number = Number.parseInt(a.slice(1), 10)
     const rowB: number = Number.parseInt(b.slice(1), 10)
     const colA: string = a[0]
     const colB: string = b[0]
 
+    // 竖向距离（同一列）
     if (ac.col === bc.col) {
-      const topBottom: boolean =
+      // 第1行到第2行、第6行到第7行：39cm
+      const edge12: boolean =
         (rowA === 1 && rowB === 2) || (rowA === 2 && rowB === 1) ||
         (rowA === 7 && rowB === 6) || (rowA === 6 && rowB === 7)
-      return topBottom ? 37 : 57
+      if (edge12) return 39
+
+      // 第2行到第4行、第4行到第6行：49cm
+      const edge24: boolean =
+        (rowA === 2 && rowB === 4) || (rowA === 4 && rowB === 2) ||
+        (rowA === 4 && rowB === 6) || (rowA === 6 && rowB === 4)
+      if (edge24) return 49
+
+      return 49
     }
 
+    // 横向距离（同一行）
     if (ac.row === bc.row) {
-      const sideEdge: boolean =
+      // A列到B列、F列到G列：29cm
+      const edge_AB_FG: boolean =
         (colA === 'A' && colB === 'B') || (colA === 'B' && colB === 'A') ||
         (colA === 'G' && colB === 'F') || (colA === 'F' && colB === 'G')
-      return sideEdge ? 47 : 71
+      if (edge_AB_FG) return 29
+
+      // B列到D列、D列到F列：59cm
+      const edge_BD_DF: boolean =
+        (colA === 'B' && colB === 'D') || (colA === 'D' && colB === 'B') ||
+        (colA === 'D' && colB === 'F') || (colA === 'F' && colB === 'D')
+      if (edge_BD_DF) return 59
+
+      return 49
     }
-    return 57
+    return 49
   }
 
   startMetricDistanceAckRise(key: string, segCm: number): void {
@@ -122,6 +142,42 @@ export class Page1MetricsCoordinator {
       if (elapsedMs < riseMs) speedCms = target * (elapsedMs / riseMs)
       else speedCms = target
       if (speedCms < 0) speedCms = 0
+      ss.setMetricSpeedCms(speedCms)
+      this.ctx.metricSpeedAnimTimerId = setTimeout(tick, 40) as number
+    }
+
+    tick()
+  }
+
+  animateMetricSpeedDropAndRise(): void {
+    const s: Page1UiStore | undefined = this.ctx.store as Page1UiStore | undefined
+    if (!s) return
+    this.clearMetricSpeedAnimation()
+    const token: number = this.ctx.metricSpeedAnimToken
+    const startAtMs: number = Date.now()
+    const dropMs: number = 300
+    const riseMs: number = 600
+
+    const tick = (): void => {
+      if (token !== this.ctx.metricSpeedAnimToken) return
+      const ss: Page1UiStore | undefined = this.ctx.store as Page1UiStore | undefined
+      if (!ss) return
+      const elapsedMs: number = Date.now() - startAtMs
+      let speedCms: number = 0
+
+      if (elapsedMs < dropMs) {
+        // 下降到 0
+        speedCms = 20 * (1 - elapsedMs / dropMs)
+      } else if (elapsedMs < dropMs + riseMs) {
+        // 上升到 20
+        speedCms = 20 * ((elapsedMs - dropMs) / riseMs)
+      } else {
+        // 保持 20
+        speedCms = 20
+      }
+
+      if (speedCms < 0) speedCms = 0
+      if (speedCms > 20) speedCms = 20
       ss.setMetricSpeedCms(speedCms)
       this.ctx.metricSpeedAnimTimerId = setTimeout(tick, 40) as number
     }

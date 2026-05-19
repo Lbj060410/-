@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 代码指南：
  * 文件：pages/page1/components/CarStatusCard.ets
  * 用途：仅限 Page1 视觉组件（地图/状态/控制渲染）。
@@ -12,6 +12,10 @@ import { PoseSource } from '../types/PoseTypes'
 import { GridIdCodec, GridCoord } from '../app/PathPlannerAStar'
 import { Page1Theme } from '../Page1Theme'
 import { CARD_ACCENT, PATH_CARD, STATUS, CARD } from '../Page1Styles'
+import hilog from '@ohos.hilog'
+
+const METRIC_LOG_DOMAIN = 0xFF09
+const METRIC_LOG_TAG = 'metric'
 
 @Component
 export struct CarStatusCard {
@@ -23,6 +27,7 @@ export struct CarStatusCard {
   @State private lightText: string = '0'
   @State private renderTick: number = 0
   private syncTimerId: number = -1
+  private metricUiLogLastAtMs: number = 0
 
   aboutToAppear(): void {
     this.refreshViewState()
@@ -112,6 +117,22 @@ export struct CarStatusCard {
       this.headingDir = this.store.metricHeadingText
       this.distanceText = `${this.store.metricDistanceCm}`
       this.lightText = `${this.store.metricLightLux}`
+    }
+
+    const nowMs: number = Date.now()
+    if (nowMs - this.metricUiLogLastAtMs >= 300) {
+      this.metricUiLogLastAtMs = nowMs
+      hilog.info(
+        METRIC_LOG_DOMAIN,
+        METRIC_LOG_TAG,
+        '[ui] speedText=%{public}s headingText=%{public}s headingDir=%{public}s distanceText=%{public}s lightText=%{public}s renderTick=%{public}s',
+        this.speedText,
+        this.headingText,
+        this.headingDir,
+        this.distanceText,
+        this.lightText,
+        String(this.renderTick)
+      )
     }
   }
 

@@ -131,6 +131,8 @@ import { replayArchiveService } from '../../../services/replay/ReplayArchiveServ
 import hilog from '@ohos.hilog'
 
 const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 2500
+const METRIC_LOG_DOMAIN = 0xFF09
+const METRIC_LOG_TAG = 'metric'
 
 export class Page1Coordinator implements IPage1CoordinatorOps {
   store?: Page1UiStore
@@ -215,6 +217,8 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
   private metricDistanceAckTargetCm: number = 0
   private metricDistanceMotionKey: string = ''
   private metricDistanceMotionBaseCm: number = 0
+  private metricSimLastTickAtMs: number = 0
+  private metricLogLastAtMs: number = 0
   realSendConnectKickAtMs: number = 0
   private simLightBaseLux: number = 0
   private lastRxFrameDedupKey: string = ''
@@ -431,15 +435,140 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
   private onSimTelemetryTick(speed: number, headingDeg: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
+    const absSpeed: number = Math.max(0, Math.abs(speed))
+    const nowMs: number = Date.now()
+    const dtSec: number = this.metricSimLastTickAtMs > 0 ? Math.max(0, (nowMs - this.metricSimLastTickAtMs) / 1000) : 0
+    this.metricSimLastTickAtMs = nowMs
+
     if (!s.realSendEnabled) {
-      s.setMetricSpeedCms(0)
-      s.setMetricHeadingDeg(0)
-      s.setMetricDistanceCm(0)
-      s.setMetricLightLux(0)
+      // DRY_RUN：与方向一致，持续模拟速度/里程/光照，不再清零
+      const drySpeedCms: number = absSpeed > 0 ? absSpeed : 20
+      s.setMetricSpeedCms(drySpeedCms)
+      this.metricDistanceTotalCm += drySpeedCms * dtSec
+      s.setMetricDistanceCm(this.metricDistanceTotalCm)
+      if (this.simLightBaseLux <= 0) {
+        this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
+      }
+      const dryJitter: number = Math.floor(Math.random() * 21) - 10
+      s.setMetricLightLux(this.simLightBaseLux + dryJitter)
+      this.animateMetricHeadingTo(headingDeg)
       return
     }
-    void speed
+
+    const realSpeedCms: number = absSpeed > 0 ? absSpeed : s.metricSpeedCms
+    s.setMetricSpeedCms(realSpeedCms)
+    this.metricDistanceTotalCm += realSpeedCms * dtSec
+    s.setMetricDistanceCm(this.metricDistanceTotalCm)
     this.animateMetricHeadingTo(headingDeg)
+
+    // 真车模式：持续更新光照强度
+    if (this.simLightBaseLux <= 0) {
+      this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
+    }
+    const jitter: number = Math.floor(Math.random() * 21) - 10
+    s.setMetricLightLux(this.simLightBaseLux + jitter)
+  }
+
+  private onNodeArrived(): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+
+    // 1. 速度：下降到0，再上升到20
+    this.animateMetricSpeedDropAndRise()
+
+    // 2. 距离：累加当前边的距离
+    if (s.pathNodes.length > 0 && s.pathIndex < s.pathNodes.length - 1) {
+      const curNode: string = s.pathNodes[s.pathIndex]
+      const nextNode: string = s.pathNodes[s.pathIndex + 1]
+      const edgeDist: number = this.edgeDistanceCm(curNode, nextNode)
+      this.metricDistanceTotalCm += edgeDist
+      s.setMetricDistanceCm(this.metricDistanceTotalCm)
+      s.pushLog(`[节点到达] ${curNode} -> ${nextNode}, 距离 +${edgeDist}cm, 总计 ${this.metricDistanceTotalCm}cm`)
+    }
+  }
+
+  private edgeDistanceCm(fromId: string, toId: string): number {
+    const a: string = fromId.trim().toUpperCase()
+    const b: string = toId.trim().toUpperCase()
+    const ac = GridIdCodec.parse(a)
+    const bc = GridIdCodec.parse(b)
+    if (!ac || !bc) return 49
+
+    const rowA: number = Number.parseInt(a.slice(1), 10)
+    const rowB: number = Number.parseInt(b.slice(1), 10)
+    const colA: string = a[0]
+    const colB: string = b[0]
+
+    // 竖向距离（同一列）
+    if (ac.col === bc.col) {
+      // 第1行到第2行、第6行到第7行：39cm
+      const edge12: boolean =
+        (rowA === 1 && rowB === 2) || (rowA === 2 && rowB === 1) ||
+        (rowA === 7 && rowB === 6) || (rowA === 6 && rowB === 7)
+      if (edge12) return 39
+
+      // 第2行到第4行、第4行到第6行：49cm
+      const edge24: boolean =
+        (rowA === 2 && rowB === 4) || (rowA === 4 && rowB === 2) ||
+        (rowA === 4 && rowB === 6) || (rowA === 6 && rowB === 4)
+      if (edge24) return 49
+
+      return 49
+    }
+
+    // 横向距离（同一行）
+    if (ac.row === bc.row) {
+      // A列到B列、F列到G列：29cm
+      const edge_AB_FG: boolean =
+        (colA === 'A' && colB === 'B') || (colA === 'B' && colB === 'A') ||
+        (colA === 'G' && colB === 'F') || (colA === 'F' && colB === 'G')
+      if (edge_AB_FG) return 29
+
+      // B列到D列、D列到F列：59cm
+      const edge_BD_DF: boolean =
+        (colA === 'B' && colB === 'D') || (colA === 'D' && colB === 'B') ||
+        (colA === 'D' && colB === 'F') || (colA === 'F' && colB === 'D')
+      if (edge_BD_DF) return 59
+
+      return 49
+    }
+    return 49
+  }
+
+  private animateMetricSpeedDropAndRise(): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    this.clearMetricSpeedAnimation()
+    const token: number = this.metricSpeedAnimToken
+    const startAtMs: number = Date.now()
+    const dropMs: number = 300
+    const riseMs: number = 600
+
+    const tick = (): void => {
+      if (token !== this.metricSpeedAnimToken) return
+      const ss: Page1UiStore | undefined = this.store as Page1UiStore | undefined
+      if (!ss) return
+      const elapsedMs: number = Date.now() - startAtMs
+      let speedCms: number = 0
+
+      if (elapsedMs < dropMs) {
+        // 下降到 0
+        speedCms = 20 * (1 - elapsedMs / dropMs)
+      } else if (elapsedMs < dropMs + riseMs) {
+        // 上升到 20
+        speedCms = 20 * ((elapsedMs - dropMs) / riseMs)
+      } else {
+        // 保持 20
+        speedCms = 20
+      }
+
+      if (speedCms < 0) speedCms = 0
+      if (speedCms > 20) speedCms = 20
+      ss.setMetricSpeedCms(speedCms)
+      this.metricSpeedAnimTimerId = setTimeout(tick, 40) as number
+    }
+
+    tick()
   }
 
   bind(store: Page1UiStore): void {
@@ -464,11 +593,18 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.lastBdLogCount = 0
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
+    this.metricSimLastTickAtMs = 0
     store.setMetricSpeedCms(0)
     store.setMetricHeadingDeg(0)
     store.setMetricDistanceCm(0)
     store.setMetricLightLux(0)
     this.metricHeadingTargetDeg = store.metricHeadingDeg
+
+    // 绑定节点到达回调
+    store.onNodeArrivedCallback = (): void => {
+      this.onNodeArrived()
+    }
+
     this.proto.bindTcp(this.tcp)
     this.bindTcpCallbacks()
   }
@@ -535,6 +671,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = 0
     this.simLightBaseLux = 0
+    this.metricSimLastTickAtMs = 0
     if (this.store) {
       this.store.setMetricSpeedCms(0)
       this.store.setMetricLightLux(0)
@@ -1218,16 +1355,21 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       })
   }
 
-   setTrajectoryPlanEndpoints(startPoint: string, endPoint: string): void {
+  setTrajectoryPlanEndpoints(startPoint: string, endPoint: string): void {
     this.trajectoryPlanStartPoint = startPoint.trim().toUpperCase()
     this.trajectoryPlanEndPoint = endPoint.trim().toUpperCase()
   }
 
-   updatePoseAndTelemetryForDisplay(xNorm: number, yNorm: number, headingDeg: number, speed: number): void {
+  updatePoseAndTelemetryForDisplay(xNorm: number, yNorm: number, headingDeg: number, speed: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
 
     const nowMs: number = Date.now()
+    const prevX: number = s.pose.xNorm
+    const prevY: number = s.pose.yNorm
+    const dtSec: number = this.metricSimLastTickAtMs > 0 ? Math.max(0, (nowMs - this.metricSimLastTickAtMs) / 1000) : 0
+    this.metricSimLastTickAtMs = nowMs
+
     s.setPose({
       tsMs: nowMs,
       xNorm: xNorm,
@@ -1248,7 +1390,54 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       lightLux: s.telemetry.lightLux,
       rfid: s.telemetry.rfid
     })
+
+    // 与方向同链路实时刷新其余三个卡片指标
+    const deltaNorm: number = this.normDistance(prevX, prevY, xNorm, yNorm)
+    let speedCms: number = Math.max(0, Math.abs(speed))
+    if (speedCms <= 0.01 && deltaNorm > 0) {
+      // 某些阶段 speed 传 0，但位置仍在平滑移动，用位移估算速度
+      const distByNormCm: number = deltaNorm * 250
+      speedCms = dtSec > 0 ? distByNormCm / dtSec : distByNormCm
+    }
+
+    s.setMetricSpeedCms(speedCms)
+
+    let distanceIncCm: number = 0
+    if (dtSec > 0 && speedCms > 0.01) {
+      distanceIncCm = speedCms * dtSec
+    } else if (deltaNorm > 0) {
+      distanceIncCm = deltaNorm * 250
+    }
+    if (distanceIncCm > 0) {
+      this.metricDistanceTotalCm += distanceIncCm
+      s.setMetricDistanceCm(this.metricDistanceTotalCm)
+    }
+
+    if (this.simLightBaseLux <= 0) {
+      this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
+    }
+    const lightJitter: number = Math.floor(Math.random() * 21) - 10
+    s.setMetricLightLux(this.simLightBaseLux + lightJitter)
+
     this.animateMetricHeadingTo(headingDeg)
+
+    const nowLogMs: number = Date.now()
+    if (nowLogMs - this.metricLogLastAtMs >= 250) {
+      this.metricLogLastAtMs = nowLogMs
+      hilog.info(
+        METRIC_LOG_DOMAIN,
+        METRIC_LOG_TAG,
+        '[core] speedIn=%{public}s speedMetric=%{public}s heading=%{public}s dist=%{public}s light=%{public}s realSend=%{public}s pose=(%{public}s,%{public}s)',
+        speed.toFixed(2),
+        s.metricSpeedCms.toFixed(2),
+        String(Math.round(s.metricHeadingDeg)),
+        String(s.metricDistanceCm),
+        String(s.metricLightLux),
+        String(s.realSendEnabled),
+        xNorm.toFixed(3),
+        yNorm.toFixed(3)
+      )
+    }
   }
 
    updateHeadingOnlyAtCurrentPose(headingDeg: number): void {
@@ -1265,6 +1454,12 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 
   private clamp01(v: number): number {
     return clamp01Value(v)
+  }
+
+  private normDistance(ax: number, ay: number, bx: number, by: number): number {
+    const dx: number = bx - ax
+    const dy: number = by - ay
+    return Math.sqrt(dx * dx + dy * dy)
   }
 
   private cancelMapPoseAnimation(): void {
@@ -1883,11 +2078,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
-
-
-
-
-
 
 
 

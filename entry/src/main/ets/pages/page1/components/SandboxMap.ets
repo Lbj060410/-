@@ -763,16 +763,33 @@ export struct SandboxMap {
   @Builder
   private buildPlaceBubble(kind: 'home' | 'company', nodeId: string, text: string): void {
     if (this.shouldShowPlaceBubble(nodeId)) {
-      Text(text)
-        .fontSize(12)
-        .fontColor('#FFFFFF')
-        .fontWeight(FontWeight.Bold)
-        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      Stack({ alignContent: Alignment.Bottom }) {
+        // 气泡主体
+        Column() {
+          Text(text)
+            .fontSize(16)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Bold)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+
+        }
+        .width(120)
         .backgroundColor(this.placeBubbleBg(kind))
-        .borderRadius(10)
-        .border({ width: 1, color: 'rgba(255,255,255,0.28)' })
-        .position(this.placeBubblePosById(nodeId))
-        .zIndex(9)
+        .borderRadius(12)
+        .border({ width: 2, color: 'rgba(255,255,255,0.4)' })
+        .shadow({ radius: 8, color: 'rgba(0,0,0,0.3)', offsetX: 0, offsetY: 4 })
+
+        // 指向箭头（三角形）
+        Polygon({ width: 20, height: 16 })
+          .points([[10, 16], [0, 0], [20, 0]])
+          .fill(this.placeBubbleBg(kind))
+          .stroke(Color.Transparent)
+          .position({ x: 50, y: 100 })
+      }
+      .width(120)
+      .height(120)
+      .position(this.placeBubblePosById(nodeId))
+      .zIndex(9)
     }
   }
 
@@ -797,10 +814,11 @@ export struct SandboxMap {
   private placeBubblePos(node: GridNode): XYPos {
     const centerX: number = node.xNorm * this.store.mapW
     const centerY: number = node.yNorm * this.store.mapH
-    const yOffset: number = this.mapPlacedMarkerSize() * 0.65
+    const bubbleWidth: number = 120
+    const bubbleHeight: number = 120
     return {
-      x: centerX - 34,
-      y: centerY - yOffset
+      x: centerX - bubbleWidth / 2,
+      y: centerY - bubbleHeight - 12
     }
   }
 

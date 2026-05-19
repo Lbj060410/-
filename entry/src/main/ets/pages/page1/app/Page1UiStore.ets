@@ -16,6 +16,8 @@ import hilog from '@ohos.hilog'
 
 const BIZLOG_DOMAIN = 0xFF03
 const BIZLOG_TAG = 'bizlog'
+const METRIC_LOG_DOMAIN = 0xFF09
+const METRIC_LOG_TAG = 'metric'
 
 export enum RiskLevel {
   SAFE = 0,
@@ -502,12 +504,20 @@ export class Page1UiStore {
   }
 
   setPose(p: Pose2D): void {
+    const prevSource: PoseSource = this.pose.source
     this.pose = p
     if (this.poseFollowEnabled) {
       this.carX = this.clamp01(p.xNorm)
       this.carY = this.clamp01(p.yNorm)
     }
+
+    // 接收到节点位置（RFID 校正）时触发指标动画
+    if (p.source === PoseSource.RFID_CORRECT && this.onNodeArrivedCallback) {
+      this.onNodeArrivedCallback()
+    }
   }
+
+  onNodeArrivedCallback: (() => void) | undefined = undefined
 
   setPlaceConfigured(homeNodeId: string, companyNodeId: string): void {
     const homeId: string = String(homeNodeId ?? '').trim().toUpperCase()
@@ -1142,7 +1152,7 @@ export class Page1UiStore {
 
   /**
    * 写入新路径时重置 pathIndex：
-   * pathNodes[pathIndex] 始终表示“当前节点”。
+   * pathNodes[pathIndex] 始终表示”当前节点”。
    */
   setPath(nodes: Array<string>, reason: string): void {
     this.pathNodes = nodes
@@ -1155,6 +1165,81 @@ export class Page1UiStore {
     if (this.pathNodes.length <= 0) return
     if (this.pathIndex < this.pathNodes.length - 1) this.pathIndex += 1
   }
+
+  private startMoveToNextNode(): void {
+    if (!this.autoMoveEnabled || this.pathIndex >= this.pathNodes.length) return
+
+    const targetNode: string = this.pathNodes[this.pathIndex]
+    const node: GridNode | undefined = this.findGridNodeById(targetNode)
+    if (!node) return
+
+    this.nextNodeTarget = targetNode
+    this.carMoveState = 'MOVING'
+    this.pushLog(`[自动移动] 开始移动到节点 ${targetNode}`)
+
+    // 真车模式：2秒移动到下一节点；模拟模式：400ms
+    const moveDurationMs: number = this.realSendEnabled ? 2000 : this.carSlideDurationMs
+
+    // 滑动小车到目标节点
+    this.slideCarToPose(node.xNorm, node.yNorm, this.pose.headingDeg, moveDurationMs, (): void => {
+      this.carMoveState = 'WAITING'
+      this.pushLog(`[自动移动] 已到达节点 ${targetNode}，等待位置确认`)
+    })
+  }
+
+  onAutoMoveNodeReceived(receivedNodeId: string): void {
+    if (!this.autoMoveEnabled) return
+    if (this.carMoveState === 'IDLE') return
+
+    this.lastReceivedNodeId = receivedNodeId
+
+    // 情况1：收到的节点是当前目标节点
+    if (receivedNodeId === this.nextNodeTarget) {
+      this.pushLog(`[自动移动] 位置确认 ${receivedNodeId}，继续下一节点`)
+      this.carMoveState = 'IDLE'
+      this.stepNextNode()
+      return
+    }
+
+    // 情况2：收到的节点不是当前目标，先滑动到接收的位置
+    if (this.carMoveState === 'WAITING') {
+      const node: GridNode | undefined = this.findGridNodeById(receivedNodeId)
+      if (node) {
+        this.pushLog(`[自动移动] 位置不匹配，滑动到 ${receivedNodeId}`)
+        // 真车模式：2秒移动；模拟模式：400ms
+        const moveDurationMs: number = this.realSendEnabled ? 2000 : this.carSlideDurationMs
+        this.slideCarToPose(node.xNorm, node.yNorm, this.pose.headingDeg, moveDurationMs, (): void => {
+          this.carMoveState = 'IDLE'
+          this.stepNextNode()
+        })
+      }
+    }
+  }
+
+  stopAutoMove(): void {
+    this.autoMoveEnabled = false
+    this.carMoveState = 'IDLE'
+    this.nextNodeTarget = ''
+    if (this.autoMoveDelayTimerId >= 0) {
+      clearTimeout(this.autoMoveDelayTimerId)
+      this.autoMoveDelayTimerId = -1
+    }
+    this.pushLog('[自动移动] 已停止')
+  }
+
+  clearPath(): void {
+    this.stopAutoMove()
+    this.pathNodes = []
+    this.pathIndex = 0
+    this.pushLog('[路径] 已清空')
+  }
+
+  // ===== 小车移动状态机 =====
+  autoMoveEnabled: boolean = false
+  carMoveState: 'IDLE' | 'MOVING' | 'WAITING' = 'IDLE'
+  nextNodeTarget: string = ''
+  lastReceivedNodeId: string = ''
+  private autoMoveDelayTimerId: number = -1
 
   // ===== 通信状态 =====
   connState: CarConnState = CarConnState.IDLE
@@ -1193,6 +1278,8 @@ export class Page1UiStore {
 
   setTelemetry(t: CarTelemetry): void {
     this.telemetry = t
+    this.updateDisplayMetricsFromTelemetry('telemetry', t)
+    this.ensureMetricAnimatorRunning()
   }
 
   private carAnimTimerId: number = -1
@@ -1283,6 +1370,19 @@ export class Page1UiStore {
     const n: GridNode | undefined = this.findGridNodeById(id)
     if (!n) return
     this.currentSnapNodeId = id
+    this.ensureMetricAnimatorRunning()
+    this.setMetricHeadingDeg(headingDeg)
+    if (this.metricTargetSpeedCms <= 0.01) {
+      this.metricTargetSpeedCms = 12
+    }
+    hilog.info(
+      METRIC_LOG_DOMAIN,
+      METRIC_LOG_TAG,
+      '[store] node=%{public}s heading=%{public}s speedTarget=%{public}s',
+      id,
+      String(Math.round(this.metricHeadingDeg)),
+      this.metricTargetSpeedCms.toFixed(2)
+    )
     this.slideCarToPose(n.xNorm, n.yNorm, headingDeg, this.carSlideDurationMs, (): void => {
       this.applyManualPlacementPose(n.xNorm, n.yNorm, headingDeg)
     })
@@ -1306,6 +1406,20 @@ export class Page1UiStore {
   metricDistanceCm: number = 0
   metricLightLux: number = 0
   metricDebugLine: string = ''
+  private metricStoreLastTsMs: number = 0
+  private metricStoreLastXNorm: number = 0
+  private metricStoreLastYNorm: number = 0
+  private metricStoreLastOdomMm: number = 0
+  private metricStoreLogLastAtMs: number = 0
+  private metricAnimTimerId: number = -1
+  private metricAnimLastTsMs: number = 0
+  private metricLightWaveDeg: number = 0
+  private metricLightNextShuffleAtMs: number = 0
+  private metricTargetSpeedCms: number = 0
+  private metricTargetDistanceCm: number = 0
+  private metricTargetLightLux: number = this.randomLightBaseLux()
+  private metricStoreLightBaseLux: number = this.metricTargetLightLux
+  private readonly metricNormToCm: number = 250
 
   setMetricSpeedCms(v: number): void {
     const safe: number = Number.isFinite(v) ? v : 0
@@ -1338,6 +1452,139 @@ export class Page1UiStore {
     if (idx === 5) return 'SW'
     if (idx === 6) return 'W'
     return 'NW'
+  }
+
+  private normDistance(ax: number, ay: number, bx: number, by: number): number {
+    const dx: number = ax - bx
+    const dy: number = ay - by
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  private randomLightBaseLux(): number {
+    return 200 + Math.floor(Math.random() * 251)
+  }
+
+  private ensureMetricAnimatorRunning(): void {
+    if (this.metricAnimTimerId >= 0) return
+    this.metricAnimLastTsMs = Date.now()
+    this.metricAnimTimerId = setInterval((): void => {
+      this.tickMetricAnimator()
+    }, 120) as number
+  }
+
+  private tickMetricAnimator(): void {
+    const nowMs: number = Date.now()
+    let dtSec: number = (nowMs - this.metricAnimLastTsMs) / 1000
+    this.metricAnimLastTsMs = nowMs
+    if (!Number.isFinite(dtSec) || dtSec <= 0) dtSec = 0.12
+    if (dtSec > 0.5) dtSec = 0.5
+
+    const speedGap: number = this.metricTargetSpeedCms - this.metricSpeedCms
+    const speedStep: number = Math.abs(speedGap) * 0.35
+    if (speedStep < 0.2) {
+      this.setMetricSpeedCms(this.metricTargetSpeedCms)
+    } else {
+      const nextSpeed: number = this.metricSpeedCms + speedStep * (speedGap >= 0 ? 1 : -1)
+      this.setMetricSpeedCms(nextSpeed)
+    }
+
+    if (this.metricDistanceCm < this.metricTargetDistanceCm) {
+      const gapCm: number = this.metricTargetDistanceCm - this.metricDistanceCm
+      const travelBySpeed: number = Math.max(0.35, this.metricSpeedCms * dtSec)
+      const incCm: number = Math.min(gapCm, travelBySpeed)
+      this.setMetricDistanceCm(this.metricDistanceCm + incCm)
+    }
+
+    if (nowMs >= this.metricLightNextShuffleAtMs) {
+      this.metricStoreLightBaseLux = this.randomLightBaseLux()
+      this.metricTargetLightLux = this.metricStoreLightBaseLux
+      this.metricLightNextShuffleAtMs = nowMs + 1800 + Math.floor(Math.random() * 1200)
+    }
+
+    this.metricLightWaveDeg += dtSec * 120
+    if (this.metricLightWaveDeg >= 360) this.metricLightWaveDeg -= 360
+    const wave: number = Math.sin((this.metricLightWaveDeg * Math.PI) / 180) * 10
+    const lightTarget: number = Math.max(200, Math.min(450, this.metricTargetLightLux + wave))
+    const lightGap: number = lightTarget - this.metricLightLux
+    this.setMetricLightLux(this.metricLightLux + lightGap * 0.3)
+
+    if (nowMs - this.metricStoreLogLastAtMs >= 250) {
+      this.metricStoreLogLastAtMs = nowMs
+      hilog.info(
+        METRIC_LOG_DOMAIN,
+        METRIC_LOG_TAG,
+        '[store] src=anim speed=%{public}s target=%{public}s dist=%{public}s targetDist=%{public}s light=%{public}s',
+        this.metricSpeedCms.toFixed(2),
+        this.metricTargetSpeedCms.toFixed(2),
+        String(this.metricDistanceCm),
+        String(Math.round(this.metricTargetDistanceCm)),
+        String(this.metricLightLux)
+      )
+    }
+  }
+
+  private updateDisplayMetricsFromTelemetry(source: string, t: CarTelemetry): void {
+    const nowMs: number = t.tsMs > 0 ? t.tsMs : Date.now()
+    const curX: number = this.pose.xNorm
+    const curY: number = this.pose.yNorm
+    const curHeadingDeg: number = this.normHeadingDeg(t.headingDeg)
+
+    let dtSec: number = 0
+    if (this.metricStoreLastTsMs > 0 && nowMs > this.metricStoreLastTsMs) {
+      dtSec = (nowMs - this.metricStoreLastTsMs) / 1000
+    }
+
+    let distFromPoseCm: number = 0
+    if (this.metricStoreLastTsMs > 0) {
+      const deltaNorm: number = this.normDistance(
+        this.metricStoreLastXNorm,
+        this.metricStoreLastYNorm,
+        curX,
+        curY
+      )
+      distFromPoseCm = deltaNorm * this.metricNormToCm
+    }
+
+    let distIncCm: number = 0
+    if (t.odomMm > 0 && this.metricStoreLastOdomMm > 0 && t.odomMm >= this.metricStoreLastOdomMm) {
+      distIncCm = (t.odomMm - this.metricStoreLastOdomMm) / 10
+    }
+    if (distIncCm <= 0 && distFromPoseCm > 0) {
+      distIncCm = distFromPoseCm
+    }
+    if (distIncCm > 0.01) {
+      this.metricTargetDistanceCm += distIncCm
+    }
+
+    let speedCms: number = Math.max(0, Math.abs(t.speed))
+    if (speedCms <= 0.01 && distIncCm > 0.01) {
+      if (dtSec > 0.05) speedCms = distIncCm / dtSec
+      else speedCms = distIncCm * 5
+    }
+    if (speedCms > 55) speedCms = 55
+    this.metricTargetSpeedCms = speedCms
+
+    this.setMetricHeadingDeg(curHeadingDeg)
+
+    this.metricStoreLastTsMs = nowMs
+    this.metricStoreLastXNorm = curX
+    this.metricStoreLastYNorm = curY
+    if (t.odomMm > 0) this.metricStoreLastOdomMm = t.odomMm
+
+    if (nowMs - this.metricStoreLogLastAtMs >= 250) {
+      this.metricStoreLogLastAtMs = nowMs
+      hilog.info(
+        METRIC_LOG_DOMAIN,
+        METRIC_LOG_TAG,
+        '[store] src=%{public}s speedTarget=%{public}s heading=%{public}s distTarget=%{public}s lightBase=%{public}s odom=%{public}s',
+        source,
+        this.metricTargetSpeedCms.toFixed(2),
+        String(Math.round(this.metricHeadingDeg)),
+        String(Math.round(this.metricTargetDistanceCm)),
+        String(this.metricTargetLightLux),
+        String(t.odomMm)
+      )
+    }
   }
 
   batteryPct: number = 87
