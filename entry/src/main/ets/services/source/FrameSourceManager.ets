@@ -9,6 +9,7 @@ import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
 import { HttpSnapshotService } from './HttpSnapshotService'
 import { VideoStore } from '../../state/VideoStore'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 export enum FrameSourceType {
   HTTP = 0
@@ -145,6 +146,11 @@ export class FrameSourceManager {
       if (this.consecutiveHttpFailCount >= 2) {
         this.store.setError(msg)
       }
+      bengkuiMasterError(
+        'FrameSourceManager.loopOnce',
+        e,
+        `url=${url},failStreak=${this.consecutiveHttpFailCount},timeout=${this.resolveRequestTimeoutMs()}`
+      )
       this.updateDiag(0)
       this.maybeLogFrameFail(msg)
       this.notifyFrameHealth(false, msg)
@@ -201,7 +207,9 @@ export class FrameSourceManager {
     this.timerId = setTimeout(() => {
       this.timerId = -1
       if (!this.isSessionActive(token)) return
-      void this.loopOnce(url, token)
+      void this.loopOnce(url, token).catch((e: Object): void => {
+        bengkuiMasterError('FrameSourceManager.scheduleNextLoop.loopOnce', e, `url=${url}`)
+      })
     }, safeDelayMs) as number
   }
 
@@ -275,7 +283,8 @@ export class FrameSourceManager {
     this.lastLiveSizeProbeAtMs = nowMs
     void pm.getImageInfo().then((info: image.ImageInfo): void => {
       this.store.setLiveFrameSize(info.size.width, info.size.height)
-    }).catch((_): void => {
+    }).catch((e: Object): void => {
+      bengkuiMasterError('FrameSourceManager.updateLiveSizeIfNeeded.getImageInfo', e)
       this.store.setLiveFrameSize(0, 0)
     })
   }
@@ -303,11 +312,16 @@ export class FrameSourceManager {
         return await src.createPixelMap({
           desiredPixelFormat: image.PixelMapFormat.RGBA_8888
         } as Object)
-      } catch (_) {
+      } catch (e) {
+        bengkuiMasterError('FrameSourceManager.jpegToPixelMap.createPixelMap.rgba8888', e, `bytes=${jpeg.byteLength}`)
         return await src.createPixelMap()
       }
     } finally {
-      src.release()
+      try {
+        src.release()
+      } catch (e) {
+        bengkuiMasterError('FrameSourceManager.jpegToPixelMap.release', e)
+      }
     }
   }
 

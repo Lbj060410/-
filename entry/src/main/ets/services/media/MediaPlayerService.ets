@@ -7,6 +7,7 @@
  */
 import media from '@ohos.multimedia.media'
 import resourceManager from '@ohos.resourceManager'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 export class MediaPlayerService {
   private avPlayer: media.AVPlayer | undefined = undefined
@@ -28,6 +29,7 @@ export class MediaPlayerService {
 
     player.on('error', (err) => {
       console.error(`AVPlayer error: ${err.code}, ${err.message}`)
+      bengkuiMasterError('MediaPlayerService.player.onError', err)
       this.ready = false
       if (this.readyResolver) {
         this.readyResolver(false)
@@ -37,6 +39,7 @@ export class MediaPlayerService {
         player.reset()
       } catch (e) {
         console.error('player.reset failed')
+        bengkuiMasterError('MediaPlayerService.player.onError.reset', e)
       }
     })
 
@@ -53,6 +56,7 @@ export class MediaPlayerService {
           this.avPlayer.prepare()
         } catch (e) {
           console.error('player.prepare failed')
+          bengkuiMasterError('MediaPlayerService.stateChange.initialized.prepare', e)
         }
         return
       }
@@ -62,6 +66,7 @@ export class MediaPlayerService {
           this.avPlayer.play()
         } catch (e) {
           console.error('player.play failed')
+          bengkuiMasterError('MediaPlayerService.stateChange.prepared.play', e)
         }
         return
       }
@@ -103,6 +108,7 @@ export class MediaPlayerService {
       this.avPlayer.reset()
     } catch (e) {
       console.error('player.reset failed')
+      bengkuiMasterError('MediaPlayerService.reset', e)
     }
   }
 
@@ -111,6 +117,7 @@ export class MediaPlayerService {
       this.avPlayer?.play()
     } catch (e) {
       console.error('player.play failed')
+      bengkuiMasterError('MediaPlayerService.play', e)
     }
   }
 
@@ -119,6 +126,7 @@ export class MediaPlayerService {
       this.avPlayer?.pause()
     } catch (e) {
       console.error('player.pause failed')
+      bengkuiMasterError('MediaPlayerService.pause', e)
     }
   }
 
@@ -132,6 +140,7 @@ export class MediaPlayerService {
         if (done) return
         done = true
         this.readyResolver = null
+        bengkuiMasterError('MediaPlayerService.waitForPlaybackReady.timeout', undefined, `timeoutMs=${timeoutMs}`)
         resolve(false)
       }, timeoutMs) as number
 
@@ -144,4 +153,3 @@ export class MediaPlayerService {
     })
   }
 }
-

@@ -37,6 +37,7 @@ import {
 import { RecognitionReportService } from './RecognitionReportService'
 import { CarTaskSnapshotArchiveService } from './CarTaskSnapshotArchiveService'
 import { replayArchiveService } from '../replay/ReplayArchiveService'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 const LOG_DOMAIN: number = 0xFF24
 const LOG_TAG: string = 'RecogScheduler'
@@ -584,12 +585,14 @@ export class RecognitionScheduler {
       } catch (e) {
         hilog.warn(LOG_DOMAIN, LOG_TAG, '自动回传失败(不影响主流程): %{public}s',
           e instanceof Error ? e.message : String(e))
+        bengkuiMasterError('RecognitionScheduler.runTask.maybeAutoReport', e)
       }
 
       this.store.appendRecogEvent(this.toEvent(task.id, RecognitionStage.DONE, result.ok ? 'SUCCESS' : 'FAILED'))
     } catch (e) {
       if (token !== this.runToken) return
       if (!this.enabled) return
+      bengkuiMasterError('RecognitionScheduler.runTask', e, `kind=${task.kind},subtype=${task.subtype}`)
 
       const endAt: number = Date.now()
       const costMsTotal: number = endAt - startAt
@@ -834,6 +837,7 @@ export class RecognitionScheduler {
       } catch (e) {
         hilog.warn(LOG_DOMAIN, LOG_TAG, '抓取车端快照失败，继续降级路径: %{public}s',
           e instanceof Error ? e.message : String(e))
+        bengkuiMasterError('RecognitionScheduler.captureCarTaskSnapshot.httpSnapshot', e, `url=${url}`)
       }
     }
 
@@ -944,6 +948,7 @@ export class RecognitionScheduler {
     } catch (e) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, '克隆PixelMap失败: %{public}s',
         e instanceof Error ? e.message : String(e))
+      bengkuiMasterError('RecognitionScheduler.clonePixelMap', e)
       return undefined
     } finally {
       try { packer.release() } catch (_) { /* 资源释放失败可安全忽略 */ }
@@ -965,6 +970,7 @@ export class RecognitionScheduler {
     } catch (e) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, 'ROI裁剪失败(不阻断推理): %{public}s',
         e instanceof Error ? e.message : String(e))
+      bengkuiMasterError('RecognitionScheduler.cropPixelMapByRoi', e)
       // ROI crop failure should not block inference.
     }
   }
@@ -997,6 +1003,7 @@ export class RecognitionScheduler {
 
     return await new Promise<T>((resolve, reject) => {
       const id: number = setTimeout(() => {
+        bengkuiMasterError('RecognitionScheduler.withTimeout.timeout', undefined, `timeoutMs=${timeoutMs}`)
         reject(new TimeoutError())
       }, timeoutMs) as number
 
@@ -1005,6 +1012,7 @@ export class RecognitionScheduler {
         resolve(v)
       }).catch((err: object) => {
         try { clearTimeout(id) } catch (_) { /* 资源释放失败可安全忽略 */ }
+        bengkuiMasterError('RecognitionScheduler.withTimeout.reject', err, `timeoutMs=${timeoutMs}`)
         reject(err)
       })
     })
@@ -1135,6 +1143,7 @@ export class RecognitionScheduler {
     } catch (err) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, '序列化错误对象失败: %{public}s',
         err instanceof Error ? err.message : String(err))
+      bengkuiMasterError('RecognitionScheduler.errorToText.jsonSerialize', err)
       return 'unknown error'
     }
   }

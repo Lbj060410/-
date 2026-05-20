@@ -14,11 +14,9 @@ import { page2Coordinator } from './page2/Page2Coordinator'
 import { page1Store } from './page1/app/Page1UiStore'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
-import hilog from '@ohos.hilog'
+import { bengkuiMasterError, bengkuiMasterErrText } from '../utils/BengkuiMasterLogger'
 
 const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
-const BENGKUI_LOG_DOMAIN: number = 0xFF0B
-const BENGKUI_LOG_TAG: string = 'bengkui'
 const SPLASH_SLOGAN: string = '为让物流运输更高效，更安全，更智能，让每一次物流运输都智行无忧'
 interface Page4PlaceBindingPayload {
   homeNodeId?: string
@@ -39,26 +37,20 @@ struct Index {
   private splashHardTimeoutId: number = -1
 
   aboutToAppear(): void {
-    this.logBengkui('Index.aboutToAppear begin')
     try {
       this.restorePlaceConfiguredOnAppEnter()
-      this.logBengkui('restorePlaceConfiguredOnAppEnter done')
     } catch (e) {
-      this.logBengkui(`restorePlaceConfiguredOnAppEnter throw: ${this.errText(e)}`)
+      bengkuiMasterError('Index.aboutToAppear.restorePlaceConfiguredOnAppEnter', e)
     }
     // Page2 识别链路需要在非 Page2 页面也持续工作；入口页先以后台低频模式拉起。
     try {
       page2Coordinator.enterBackgroundMode()
-      this.logBengkui('page2Coordinator.enterBackgroundMode done')
     } catch (e) {
-      this.logBengkui(`page2Coordinator.enterBackgroundMode throw: ${this.errText(e)}`)
+      bengkuiMasterError('Index.aboutToAppear.page2Coordinator.enterBackgroundMode', e)
     }
     void page2Coordinator.start()
-      .then((): void => {
-        this.logBengkui('page2Coordinator.start resolved')
-      })
       .catch((e: Object): void => {
-        this.logBengkui(`page2Coordinator.start rejected: ${this.errText(e)}`)
+        bengkuiMasterError('Index.aboutToAppear.page2Coordinator.start', e)
       })
     this.clearSplashTimer()
     this.clearSplashAnimTimer()
@@ -68,7 +60,6 @@ struct Index {
     this.splashScale = 0.86
     this.splashTextLen = 0
     this.splashAnimTimerId = setTimeout((): void => {
-      this.logBengkui('splash anim timer fired')
       this.splashAnimTimerId = -1
       this.splashScale = 1
     }, 30) as number
@@ -88,18 +79,14 @@ struct Index {
     this.splashHardTimeoutId = setTimeout((): void => {
       this.splashHardTimeoutId = -1
       if (!this.showSplash) return
-      this.logBengkui('splash hard-timeout fired -> force hide')
       this.clearSplashTimer()
       this.clearSplashTextTimer()
       this.clearSplashAnimTimer()
       this.showSplash = false
     }, 6500) as number
-    this.logBengkui('splash wait text complete then +1000ms')
-    this.logBengkui('Index.aboutToAppear end')
   }
 
   aboutToDisappear(): void {
-    this.logBengkui('Index.aboutToDisappear')
     this.clearSplashTimer()
     this.clearSplashAnimTimer()
     this.clearSplashTextTimer()
@@ -112,37 +99,41 @@ struct Index {
     let f: fs.File | undefined = undefined
     try {
       const bindingPath: string = `${getContext(this).filesDir}/${PAGE4_PLACE_BINDING_FILE}`
-      this.logBengkui(`restore begin path=${bindingPath}`)
       f = fs.openSync(bindingPath, fs.OpenMode.READ_ONLY)
-      this.logBengkui('restore openSync ok')
       const st: fs.Stat = fs.statSync(bindingPath)
       const size: number = Number(st.size)
-      this.logBengkui(`restore stat size=${size}`)
       if (Number.isFinite(size) && size > 0 && size <= 4096) {
         const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
         const readLen: number = fs.readSync(f.fd, buf)
-        this.logBengkui(`restore readLen=${readLen}`)
         if (readLen > 0) {
           const bytes: Uint8Array = new Uint8Array(buf, 0, readLen)
           const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(bytes, { stream: false })
           const parsed: Page4PlaceBindingPayload = JSON.parse(txt) as Page4PlaceBindingPayload
           home = String(parsed.homeNodeId ?? '').trim().toUpperCase()
           company = String(parsed.companyNodeId ?? '').trim().toUpperCase()
-          this.logBengkui(`restore parsed home=${home} company=${company}`)
         }
       }
-    } catch (_) {
+    } catch (e) {
       home = ''
       company = ''
-      this.logBengkui('restore catch -> reset empty')
+      const msg: string = this.errText(e).toLowerCase()
+      const notFound: boolean =
+        msg.indexOf('no such file or directory') >= 0 ||
+        msg.indexOf('enoent') >= 0 ||
+        msg.indexOf('file not found') >= 0
+      if (!notFound) {
+        bengkuiMasterError(
+          'Index.restorePlaceConfiguredOnAppEnter',
+          e,
+          `bindingPath=${getContext(this).filesDir}/${PAGE4_PLACE_BINDING_FILE}`
+        )
+      }
     } finally {
       if (f) {
         try { fs.closeSync(f.fd) } catch (_) {}
-        this.logBengkui('restore closeSync done')
       }
     }
     page1Store.setPlaceConfigured(home, company)
-    this.logBengkui(`setPlaceConfigured home=${home} company=${company}`)
   }
 
   build() {
@@ -199,18 +190,14 @@ struct Index {
   private armSplashExit(delayMs: number): void {
     if (!this.showSplash) return
     this.clearSplashTimer()
-    this.logBengkui(`splash timer arm ${delayMs}ms`)
     this.splashTimerId = setTimeout((): void => {
-      this.logBengkui('splash timer fired')
       this.splashTimerId = -1
       this.showSplash = false
-      this.logBengkui('showSplash=false')
     }, Math.max(0, Math.trunc(delayMs))) as number
   }
 
   private skipSplashNow(): void {
     if (!this.showSplash) return
-    this.logBengkui('skipSplashNow by click')
     this.clearSplashTimer()
     this.clearSplashTextTimer()
     this.clearSplashAnimTimer()
@@ -220,7 +207,6 @@ struct Index {
 
   private clearSplashTimer(): void {
     if (this.splashTimerId >= 0) {
-      this.logBengkui(`clearSplashTimer id=${this.splashTimerId}`)
       clearTimeout(this.splashTimerId)
       this.splashTimerId = -1
     }
@@ -228,7 +214,6 @@ struct Index {
 
   private clearSplashAnimTimer(): void {
     if (this.splashAnimTimerId >= 0) {
-      this.logBengkui(`clearSplashAnimTimer id=${this.splashAnimTimerId}`)
       clearTimeout(this.splashAnimTimerId)
       this.splashAnimTimerId = -1
     }
@@ -236,7 +221,6 @@ struct Index {
 
   private clearSplashTextTimer(): void {
     if (this.splashTextTimerId >= 0) {
-      this.logBengkui(`clearSplashTextTimer id=${this.splashTextTimerId}`)
       clearInterval(this.splashTextTimerId)
       this.splashTextTimerId = -1
     }
@@ -244,7 +228,6 @@ struct Index {
 
   private clearSplashHardTimeout(): void {
     if (this.splashHardTimeoutId >= 0) {
-      this.logBengkui(`clearSplashHardTimeout id=${this.splashHardTimeoutId}`)
       clearTimeout(this.splashHardTimeoutId)
       this.splashHardTimeoutId = -1
     }
@@ -257,20 +240,8 @@ struct Index {
     return SPLASH_SLOGAN.substring(0, len)
   }
 
-  private logBengkui(msg: string): void {
-    hilog.info(BENGKUI_LOG_DOMAIN, BENGKUI_LOG_TAG, '%{public}s', msg)
-  }
-
   private errText(e: Object): string {
-    if (e instanceof Error) {
-      const m: string = e.message.trim()
-      return m.length > 0 ? m : 'Error(no-message)'
-    }
-    try {
-      const s: string = JSON.stringify(e)
-      if (s.length > 0 && s !== '{}') return s
-    } catch (_) {}
-    return String(e)
+    return bengkuiMasterErrText(e)
   }
 
   @Builder

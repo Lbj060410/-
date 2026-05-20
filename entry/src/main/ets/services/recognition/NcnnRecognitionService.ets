@@ -16,6 +16,7 @@ import { IRecognitionService } from './RecognitionService'
 import { BBoxNorm, RecognitionCoreResult } from './RecognitionResult'
 import { getLibEntryLastError, resolveLibEntryApi } from './LibEntryBridge'
 import { parseAndPostprocessNcnnBoxes } from '../../utils/BackgroundCompute'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 interface RawBox {
   cls: number
@@ -78,6 +79,7 @@ export class NcnnRecognitionService implements IRecognitionService {
         return this.errorResult(t0, `[${this.diagTag}] model load failed`)
       }
     } catch (e) {
+      bengkuiMasterError('NcnnRecognitionService.recognize.ensureModelLoaded', e, `model=${this.activeModelName}`)
       return this.errorResult(t0, `[${this.diagTag}] model load failed: ${e}`)
     }
 
@@ -125,6 +127,7 @@ export class NcnnRecognitionService implements IRecognitionService {
         errorText: ''
       }
     } catch (e) {
+      bengkuiMasterError('NcnnRecognitionService.recognize.infer', e, `model=${this.activeModelName}`)
       return this.errorResult(t0, `[${this.diagTag}] infer error: ${e}`)
     }
   }
@@ -193,6 +196,11 @@ export class NcnnRecognitionService implements IRecognitionService {
         if (!canFallback) throw primaryErr
 
         console.warn(`[${this.diagTag}] model load failed: ${this.activeModelName}, fallback => ${this.fallbackModelName}, err=${String(primaryErr)}`)
+        bengkuiMasterError(
+          'NcnnRecognitionService.ensureModelLoaded.primaryLoadFailed',
+          primaryErr,
+          `active=${this.activeModelName},fallback=${this.fallbackModelName}`
+        )
         this.activeModelName = this.fallbackModelName
         this.fallbackUsed = true
         await this.loadModelByName(this.activeModelName)
@@ -218,6 +226,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       const paramObj: Object = await this.getRawFileContentCompat(rm, paramFileName)
       paramBuf = this.toArrayBuffer(paramObj, paramFileName)
     } catch (e) {
+      bengkuiMasterError('NcnnRecognitionService.loadModelByName.getRawFileContent.param', e, `file=${paramFileName}`)
       throw new Error(`[${this.diagTag}] getRawFileContent failed: ${paramFileName}, ${String(e)}`)
     }
 
@@ -226,6 +235,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       const binObj: Object = await this.getRawFileContentCompat(rm, binFileName)
       binBuf = this.toArrayBuffer(binObj, binFileName)
     } catch (e) {
+      bengkuiMasterError('NcnnRecognitionService.loadModelByName.getRawFileContent.bin', e, `file=${binFileName}`)
       throw new Error(`[${this.diagTag}] getRawFileContent failed: ${binFileName}, ${String(e)}`)
     }
 
@@ -241,6 +251,11 @@ export class NcnnRecognitionService implements IRecognitionService {
     if (!ok) {
       const nativeErr: string = (typeof libentry.getLastError === 'function') ? libentry.getLastError() : ''
       console.error(`NCNNLOAD|model=${targetModelName}|ok=0|param=${paramBuf.byteLength}|bin=${binBuf.byteLength}|err=${nativeErr.length > 0 ? nativeErr : '-'}`)
+      bengkuiMasterError(
+        'NcnnRecognitionService.loadModelByName.nativeLoadFalse',
+        nativeErr,
+        `model=${targetModelName},param=${paramBuf.byteLength},bin=${binBuf.byteLength}`
+      )
       throw new Error(`[${this.diagTag}] native loadNcnnModel false: ${targetModelName}, err=${nativeErr}`)
     }
 
@@ -362,6 +377,7 @@ export class NcnnRecognitionService implements IRecognitionService {
       this.ipcLastCostMs = Date.now() - t0
       const errText: string = e instanceof Error ? e.message : String(e)
       console.error(`[${this.diagTag}] local detect failed: ${errText}`)
+      bengkuiMasterError('NcnnRecognitionService.detectWithIpcOrFallback', e, `model=${this.activeModelName},w=${w},h=${h}`)
       this.maybeLogPerf()
       throw e
     }
@@ -381,6 +397,11 @@ export class NcnnRecognitionService implements IRecognitionService {
     }
     const nativeErr: string = (typeof libentry.getLastError === 'function') ? String(libentry.getLastError()) : ''
     if (nativeErr.length > 0) {
+      bengkuiMasterError(
+        'NcnnRecognitionService.detectOnMainFallback.nativeErr',
+        nativeErr,
+        `model=${this.activeModelName},w=${w},h=${h}`
+      )
       throw new Error(`fallback detect failed: ${nativeErr}`)
     }
     return json

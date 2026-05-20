@@ -129,6 +129,7 @@ import {
 import { TimerManager } from './Page1TimerManager'
 import { replayArchiveService } from '../../../services/replay/ReplayArchiveService'
 import hilog from '@ohos.hilog'
+import { bengkuiMasterError } from '../../../utils/BengkuiMasterLogger'
 
 const MOTION_SEND_SINGLE_FLIGHT_HOLD_MS = 2500
 const METRIC_LOG_DOMAIN = 0xFF09
@@ -717,20 +718,21 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
   private startRuntimeLoop(): void {
     if (this.runtimeTimerId >= 0) return
     this.runtimeTickBusy = false
-    this.runtimeTimerId = setInterval((): void => {
-      if (this.runtimeTickBusy) return
-      this.runtimeTickBusy = true
-      const nowMs: number = Date.now()
-      void this.onRuntimeTick(nowMs).catch((e: Object): void => {
+      this.runtimeTimerId = setInterval((): void => {
+        if (this.runtimeTickBusy) return
+        this.runtimeTickBusy = true
+        const nowMs: number = Date.now()
+        void this.onRuntimeTick(nowMs).catch((e: Object): void => {
         const s: Page1UiStore | undefined = this.store
-        if (s) {
-          const msg: string = e instanceof Error ? e.message : String(e)
-          s.pushLog(`RUNTIME_TICK_ERR: ${msg}`)
-        }
-      }).finally((): void => {
-        this.runtimeTickBusy = false
-      })
-    }, P1C.SIM_TICK_MS) as number
+          if (s) {
+            const msg: string = e instanceof Error ? e.message : String(e)
+            s.pushLog(`RUNTIME_TICK_ERR: ${msg}`)
+          }
+          bengkuiMasterError('Page1Coordinator.startRuntimeLoop.onRuntimeTick', e)
+        }).finally((): void => {
+          this.runtimeTickBusy = false
+        })
+      }, P1C.SIM_TICK_MS) as number
   }
 
   private stopRuntimeLoop(): void {
@@ -1062,6 +1064,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : String(e)
       s.pushLog(`清图发送失败: ${msg}`)
+      bengkuiMasterError('Page1Coordinator.resetNetworkMap', e)
     }
   }
 
@@ -1352,6 +1355,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       .catch((err: Object): void => {
         const message: string = (err as Error).message
         s.pushLog(`${lineByResult(false)} err=${message}`)
+        bengkuiMasterError('Page1Coordinator.uploadTrajectoryNode', err)
       })
   }
 
@@ -1714,7 +1718,9 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     const safeHoldMs: number = Math.max(0, Math.round(holdMs))
     this.emergencyAutoRecoverTimerId = setTimeout((): void => {
       this.emergencyAutoRecoverTimerId = -1
-      void this.recoverFromEmergency(1000)
+      void this.recoverFromEmergency(1000).catch((e: Object): void => {
+        bengkuiMasterError('Page1Coordinator.armEmergencyAutoRecover.recoverFromEmergency', e, `reason=${reason}`)
+      })
       const s: Page1UiStore | undefined = this.store
       if (s) {
         s.pushLog(`EMERGENCY AUTO_RECOVER: reason=${reason}, delay=${safeHoldMs}ms`)
@@ -2078,8 +2084,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
-
-
 
 
 

@@ -1,5 +1,6 @@
 import taskpool from '@ohos.taskpool'
 import image from '@ohos.multimedia.image'
+import { bengkuiMasterError } from './BengkuiMasterLogger'
 
 export interface JpegDecodeRgbaResult {
   ok: boolean
@@ -128,7 +129,8 @@ export async function validateJpegBuffer(data: ArrayBuffer): Promise<boolean> {
     const task: taskpool.Task = new taskpool.Task(validateJpegBufferTask, data)
     const ok: boolean = await taskpool.execute(task) as boolean
     return !!ok
-  } catch (_) {
+  } catch (e) {
+    bengkuiMasterError('BackgroundCompute.validateJpegBuffer.taskpool.execute', e, `bytes=${data.byteLength}`)
     return false
   }
 }
@@ -142,7 +144,12 @@ export async function parseAndPostprocessNcnnBoxes(
     const task: taskpool.Task = new taskpool.Task(parseAndPostprocessNcnnBoxesTask, json, confThresh, nmsThresh)
     const out: Array<RawBoxLite> = await taskpool.execute(task) as Array<RawBoxLite>
     return Array.isArray(out) ? out : []
-  } catch (_) {
+  } catch (e) {
+    bengkuiMasterError(
+      'BackgroundCompute.parseAndPostprocessNcnnBoxes.taskpool.execute',
+      e,
+      `jsonLen=${json.length},conf=${confThresh},nms=${nmsThresh}`
+    )
     return []
   }
 }
@@ -155,7 +162,8 @@ export async function decodeJpegToRgba(jpeg: ArrayBuffer): Promise<JpegDecodeRgb
       return { ok: false, width: 0, height: 0 }
     }
     return out
-  } catch (_) {
+  } catch (e) {
+    bengkuiMasterError('BackgroundCompute.decodeJpegToRgba.taskpool.execute', e, `bytes=${jpeg.byteLength}`)
     return { ok: false, width: 0, height: 0 }
   }
 }

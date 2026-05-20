@@ -10,6 +10,7 @@ import socket from '@ohos.net.socket'
 import { CarConnectionState } from './CarConnectionState'
 import { CAR_TCP_PORT } from '../../config/DeviceNetworkConfig'
 import hilog from '@ohos.hilog'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 const DOMAIN = 0xFF01
 
@@ -247,7 +248,12 @@ export class CarTcpService {
     this.lastErrorText = ''
 
     this.logInfo(TAG_CONNECTSS, `连接`)
-    await this.connectInternal()
+    try {
+      await this.connectInternal()
+    } catch (e) {
+      bengkuiMasterError('CarTcpService.connect.connectInternal', e, `ip=${this.currentIp},port=${this.currentPort}`)
+      throw e
+    }
   }
 
   /**
@@ -325,6 +331,7 @@ export class CarTcpService {
       this.lastErrorText = this.formatSocketError(err, '连接异常')
       this.updateState(CarConnectionState.FAILED, this.lastErrorText)
       this.logError(TAG_CONNECTSS, this.lastErrorText)
+      bengkuiMasterError('CarTcpService.tcp.onError', err, `ip=${this.currentIp},port=${this.currentPort}`)
       void this.disposeSocket(tcp)
       this.tryReconnect()
     })
@@ -391,6 +398,7 @@ export class CarTcpService {
       this.lastErrorText = this.formatSocketError(err, `连接失败 ${this.currentIp}:${this.currentPort}`)
       this.updateState(CarConnectionState.FAILED, this.lastErrorText)
       this.logError(TAG_CONNECTSS, this.lastErrorText)
+      bengkuiMasterError('CarTcpService.tcp.connectCallback', err, `ip=${this.currentIp},port=${this.currentPort}`)
       void this.disposeSocket(tcp)
       this.tryReconnect()
     })
@@ -431,6 +439,7 @@ export class CarTcpService {
     } catch (e) {
       this.lastErrorText = this.formatSocketError(e, '发送失败')
       this.logError(TAG_CONNECTSS, this.lastErrorText)
+      bengkuiMasterError('CarTcpService.send', e, `bytes=${data.byteLength}`)
       await this.disposeSocket()
       this.tryReconnect()
     }
@@ -469,7 +478,9 @@ export class CarTcpService {
       }
 
       this.logInfo(TAG_CONNECTSS, '发送心跳包')
-      void this.send(this.heartbeatData)
+      void this.send(this.heartbeatData).catch((e: Object): void => {
+        bengkuiMasterError('CarTcpService.heartbeat.send', e)
+      })
     }, this.heartbeatIntervalMs) as number
   }
 
@@ -513,7 +524,9 @@ export class CarTcpService {
     this.reconnectTimerId = setTimeout(() => {
       this.reconnectTimerId = -1
       if (!this.manualDisconnect) {
-        void this.connectInternal()
+        void this.connectInternal().catch((e: Object): void => {
+          bengkuiMasterError('CarTcpService.reconnect.connectInternal', e, `ip=${this.currentIp},port=${this.currentPort}`)
+        })
       }
     }, delay) as number
   }
@@ -583,6 +596,7 @@ export class CarTcpService {
     } catch (e) {
       const warn: string = this.formatSocketError(e, 'setExtraOptions failed')
       this.logWarn(TAG_CONNECTSS, warn)
+      bengkuiMasterError('CarTcpService.applyExtraOptions', e)
     }
   }
 
@@ -604,6 +618,7 @@ export class CarTcpService {
     } catch (e) {
       const errText: string = this.formatSocketError(e, '关闭资源失败')
       this.logError(TAG_SENDAMSTER, errText)
+      bengkuiMasterError('CarTcpService.disposeSocket.close', e)
     }
   }
 

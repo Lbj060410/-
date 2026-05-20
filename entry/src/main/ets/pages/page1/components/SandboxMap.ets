@@ -14,8 +14,6 @@ import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
 import hilog from '@ohos.hilog'
 
-const BENGKUI_LOG_DOMAIN: number = 0xFF0B
-const BENGKUI_LOG_TAG: string = 'bengkui'
 const SHANTUI_LOG_DOMAIN: number = 0xFF0C
 const SHANTUI_LOG_TAG: string = 'shantui'
 
@@ -114,7 +112,6 @@ export struct SandboxMap {
     // 每次进入页面都回到 ROUTE 级缩放（1.2 <= zoom < 2.2）。
     this.zoomScale = this.DEFAULT_ROUTE_ZOOM
     this.pinchStartZoomScale = this.DEFAULT_ROUTE_ZOOM
-    this.logBengkui('SandboxMap.aboutToAppear')
     this.clampAll()
     this.syncCameraFollow()
 
@@ -132,7 +129,6 @@ export struct SandboxMap {
   }
 
   aboutToDisappear(): void {
-    this.logBengkui('SandboxMap.aboutToDisappear')
     this.stopFollowTimer()
   }
 
@@ -145,10 +141,6 @@ export struct SandboxMap {
       clearInterval(this.flowAnimTimerId)
       this.flowAnimTimerId = -1
     }
-  }
-
-  private logBengkui(msg: string): void {
-    hilog.info(BENGKUI_LOG_DOMAIN, BENGKUI_LOG_TAG, '%{public}s', msg)
   }
 
   private logShantui(msg: string): void {

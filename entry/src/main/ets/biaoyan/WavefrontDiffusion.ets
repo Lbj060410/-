@@ -1,5 +1,5 @@
 ﻿/**
- * 表演文件：路径扩散（Wavefront Diffusion）规划器
+ * 文件：路径扩散（Wavefront Diffusion）规划器
  * 用途：演示基于扩散势场的路径搜索流程（非项目正式业务逻辑）
  */
 
@@ -134,48 +134,40 @@ export class AStarPathPlanner {
     }
 
     // 第一步：由目标点向外扩散，构建势场（distanceMap）
+    //1.扩散数据结构的初始化：确定波源、准备容器，并配置初始状态
     const distanceMap: Map<string, number> = new Map()
     const queue: Array<string> = [goal]
     let head = 0
     let expandedCount = 0
-
     distanceMap.set(goal, 0)
-
+    // 1.1进入BFS扩散循环,用于构建距离场
     while (head < queue.length) {
       const current = queue[head]
       head++
       expandedCount++
-
       const currentDistance = distanceMap.get(current)
       if (currentDistance === undefined) {
         continue
       }
-
+      // 1.2在循环中，会遍历所有的邻居节点
       const neighbors = this.adjacencyList.get(current) || []
       for (let neighbor of neighbors) {
         if (blockedSet.has(neighbor)) {
           continue
         }
-
         if (distanceMap.has(neighbor)) {
           continue
         }
+        //2.在过滤掉阻塞邻居后，调用距离方法，最终得到一个"距离地图"，用于路径回溯
+        this.distance(distanceMap,neighbor,currentDistance)
 
-        distanceMap.set(neighbor, currentDistance + 1)
         queue.push(neighbor)
       }
     }
+    //3循环结束后，开始路径回溯，首先检查起点是否被BFS覆盖
+        this.cover(distanceMap,start,expandedCount)
 
-    if (!distanceMap.has(start)) {
-      return {
-        success: false,
-        path: [],
-        cost: 0,
-        expandedNodes: expandedCount
-      }
-    }
-
-    // 第二步：沿势场梯度回溯（每一步都走向更小的距离）
+    // 3.1若通过，则按照BFS距离场回溯路径
     const path: Array<string> = [start]
     let current = start
     const maxSteps = this.adjacencyList.size + 1
@@ -213,10 +205,8 @@ export class AStarPathPlanner {
       const next = candidates[0]
       const nextDistance = distanceMap.get(next) ?? Number.MAX_SAFE_INTEGER
 
-      // 必须严格下降，避免原地震荡
-      if (nextDistance >= currentDistance) {
-        break
-      }
+      // 4.最后调用关键的严格下降判断方法，避免震荡并提前终止无效搜索
+      this.decrease(nextDistance,currentDistance)
 
       path.push(next)
       current = next
@@ -245,4 +235,23 @@ export class AStarPathPlanner {
   getAdjacencyList(): Map<string, Array<string>> {
     return this.adjacencyList
   }
+  private distance(distanceMap: Map<string, number>, neighbor: string, currentDistance: number): void {
+    distanceMap.set(neighbor, currentDistance + 1)
+  }
+  private cover(distanceMap: Map<string, number>, start:string,expandedCount: number){
+    if (!distanceMap.has(start)) {
+      return {
+        success: false,
+        path: [],
+        cost: 0,
+        expandedNodes: expandedCount
+      }
+  }
+}
+
+  private  decrease(nextDistance: number, currentDistance: number): boolean {
+    return nextDistance >= currentDistance
+  }
+
+
 }

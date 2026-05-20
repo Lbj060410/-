@@ -20,6 +20,7 @@ import {
   TENCENT_ASR_VOICE_FORMAT
 } from '../../config/TencentAsrConfig'
 import { TencentSignUtil } from './TencentSignUtil'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 interface RealtimeResultItem {
   index?: number
@@ -160,11 +161,16 @@ export class TencentAsrRealtimeService {
       if (err) return
       const msg: string = this.decodeWsMessage(data)
       s.lastServerMessage = msg
-      this.onServerMessage(s, msg)
+      try {
+        this.onServerMessage(s, msg)
+      } catch (e) {
+        bengkuiMasterError('TencentAsrRealtimeService.socket.onMessage', e)
+      }
     })
     s.socket.on('error', (err): void => {
       const message: string = err ? String(err.message ?? err.code ?? 'websocket error') : 'websocket error'
       s.lastError = message
+      bengkuiMasterError('TencentAsrRealtimeService.socket.onError', err)
     })
     s.socket.on('close', (err, data): void => {
       void err
@@ -182,6 +188,7 @@ export class TencentAsrRealtimeService {
       const payload: RealtimeResultPayload = JSON.parse(message) as RealtimeResultPayload
       if ((payload.code ?? 0) !== 0) {
         const msg: string = payload.message ?? `code=${payload.code}`
+        bengkuiMasterError('TencentAsrRealtimeService.onServerMessage.codeNonZero', msg)
         this.finishReject(s, new Error(msg))
         return
       }
@@ -204,6 +211,7 @@ export class TencentAsrRealtimeService {
       }
     } catch (e) {
       // ignore non-json message
+      bengkuiMasterError('TencentAsrRealtimeService.onServerMessage.parse', e)
     }
   }
 
@@ -281,7 +289,10 @@ export class TencentAsrRealtimeService {
     try {
       await socket.close({ code: 1000, reason: 'done' })
     } catch (e) {
-      try { await socket.close() } catch (e2) {}
+      bengkuiMasterError('TencentAsrRealtimeService.safeCloseSocket.close1000', e)
+      try { await socket.close() } catch (e2) {
+        bengkuiMasterError('TencentAsrRealtimeService.safeCloseSocket.closeFallback', e2)
+      }
     }
   }
 }

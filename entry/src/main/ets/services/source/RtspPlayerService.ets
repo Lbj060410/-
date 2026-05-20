@@ -9,6 +9,7 @@
 import media from '@ohos.multimedia.media'
 import resourceManager from '@ohos.resourceManager'
 import { VideoStore, RtspState } from '../../state/VideoStore'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 export class RtspPlayerService {
   private store: VideoStore
@@ -32,9 +33,11 @@ export class RtspPlayerService {
         const msg = `${err.code}: ${err.message}`
         this.store.setRtspState(RtspState.ERROR, 'error')
         this.store.setError(msg)
+        bengkuiMasterError('RtspPlayerService.player.onError', err)
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'createAVPlayer failed'
+      bengkuiMasterError('RtspPlayerService.initIfNeeded.createAVPlayer', e)
       throw new Error(msg)
     } finally {
       this.initInFlight = false
@@ -76,6 +79,7 @@ export class RtspPlayerService {
       const msg = e instanceof Error ? e.message : 'playRtsp failed'
       this.store.setRtspState(RtspState.ERROR, 'error')
       this.store.setError(msg)
+      bengkuiMasterError('RtspPlayerService.playRtsp', e, `url=${url}`)
       return false
     }
   }
@@ -104,6 +108,7 @@ export class RtspPlayerService {
       const msg = e instanceof Error ? e.message : 'playLocal failed'
       this.store.setRtspState(RtspState.ERROR, 'local error')
       this.store.setError(msg)
+      bengkuiMasterError('RtspPlayerService.playLocalRawfile', e, `name=${name}`)
       return false
     }
   }
@@ -113,8 +118,8 @@ export class RtspPlayerService {
     if (!this.player) return
     try {
       await this.player.pause()
-    } catch (_) {
-      // ignore
+    } catch (e) {
+      bengkuiMasterError('RtspPlayerService.pause', e)
     }
   }
 
@@ -122,8 +127,8 @@ export class RtspPlayerService {
     if (!this.player) return
     try {
       await this.player.stop()
-    } catch (_) {
-      // ignore
+    } catch (e) {
+      bengkuiMasterError('RtspPlayerService.stop', e)
     }
   }
 }

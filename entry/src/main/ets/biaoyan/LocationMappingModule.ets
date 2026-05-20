@@ -167,6 +167,8 @@ export class LocationMappingModule {
     const traceId = this.buildId('LBS')
     const raw = userInput || ''
     const text = raw.trim()
+    const a=raw.trim()
+
 
     console.log(`[位置映射/${traceId}] 收到输入: "${raw}"`)
 
@@ -228,7 +230,6 @@ export class LocationMappingModule {
   bindLocationToRealWorld(nodeId: string, realWorldInfo: any): void {
     const node = (nodeId || '').toUpperCase()
     const mapping = PoiMappingConfig.getMappingByNode(node)
-
     console.log(`[位置绑定] 节点=${node}`)
     console.log(`[位置绑定] 业务信息=${JSON.stringify(realWorldInfo)}`)
 

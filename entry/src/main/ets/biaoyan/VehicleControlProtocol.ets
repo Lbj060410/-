@@ -176,7 +176,6 @@ export class VehicleControlProtocol {
 
     const rotationFrame = this.normalizeRotationFrame(frame.data)
     this.logSystemEvent(`[0x02] Step1 接收回传帧 ts=${rotationFrame.timestamp}`)
-
     const obstacleDetected = this.detectObstacle(rotationFrame)
     if (!obstacleDetected) {
       this.logSystemEvent('[0x02] Step2 未检测到障碍，流程结束')

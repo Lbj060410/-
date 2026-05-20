@@ -27,6 +27,7 @@ import { BBoxNorm, RecognitionResult } from '../../services/recognition/Recognit
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 import { validateJpegBuffer } from '../../utils/BackgroundCompute'
 import { saveSignalCarBatch, SignalCarPayload } from '../../services/webpageinteraction/webconnect'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 const PAGE2_LAST_ENDPOINT_PATH: string = '/data/storage/el2/base/haps/entry/files/page2_last_endpoint.json'
 
@@ -128,32 +129,36 @@ export class Page2Coordinator {
       // Page2 帧处理入口：
       // 1) 实时识别只在识别开关开启时工作
       // 2) 识别任务按时间节流并防重入，避免抢占预览线程
-      const now: number = Date.now()
-      const overloaded: boolean = this.isVideoOverloaded()
-      this.tuneReplayIngestCadence(now)
-      if (now - this.lastReplayIngestAtMs >= this.dynamicReplayIngestIntervalMs) {
-        this.lastReplayIngestAtMs = now
-        page2ReplayService.ingestFrameJpeg(frame.jpeg, now)
-      }
-      const allowReplayCapture: boolean = !overloaded || this.pageBackgroundMode
-      if (allowReplayCapture) {
-        this.maybeAutoSnapshotFromVision(pm, now)
-        this.maybeRecordShigongReplay(now)
-      }
-      if (!videoStore.recognitionEnabled) return
-      this.tuneLiveRecognitionCadence(now)
-      this.refreshRecognitionPause(now)
-      if (now < this.recognitionPauseUntilMs) return
-      if (this.shouldSkipLiveRecognition(frame, now)) return
+      try {
+        const now: number = Date.now()
+        const overloaded: boolean = this.isVideoOverloaded()
+        this.tuneReplayIngestCadence(now)
+        if (now - this.lastReplayIngestAtMs >= this.dynamicReplayIngestIntervalMs) {
+          this.lastReplayIngestAtMs = now
+          page2ReplayService.ingestFrameJpeg(frame.jpeg, now)
+        }
+        const allowReplayCapture: boolean = !overloaded || this.pageBackgroundMode
+        if (allowReplayCapture) {
+          this.maybeAutoSnapshotFromVision(pm, now)
+          this.maybeRecordShigongReplay(now)
+        }
+        if (!videoStore.recognitionEnabled) return
+        this.tuneLiveRecognitionCadence(now)
+        this.refreshRecognitionPause(now)
+        if (now < this.recognitionPauseUntilMs) return
+        if (this.shouldSkipLiveRecognition(frame, now)) return
 
-      if (now - this.lastLiveSubmitAtMs < this.currentLiveIntervalMs) return
-      if (this.liveDecodeBusy) return
+        if (now - this.lastLiveSubmitAtMs < this.currentLiveIntervalMs) return
+        if (this.liveDecodeBusy) return
 
-      this.lastLiveSubmitAtMs = now
-      this.liveDecodeBusy = true
-      void this.dispatchLiveRecognition(frame, pm).finally((): void => {
-        this.liveDecodeBusy = false
-      })
+        this.lastLiveSubmitAtMs = now
+        this.liveDecodeBusy = true
+        void this.dispatchLiveRecognition(frame, pm).finally((): void => {
+          this.liveDecodeBusy = false
+        })
+      } catch (e) {
+        bengkuiMasterError('Page2Coordinator.frames.onFrame', e)
+      }
     })
   }
 
@@ -218,7 +223,9 @@ export class Page2Coordinator {
           console.warn(`[Page2] snapshot endpoint switched reason=${reason} url=${one}`)
           switched = true
           break
-        } catch (_) {}
+        } catch (e) {
+          bengkuiMasterError('Page2Coordinator.tryRecoverSnapshotEndpoint.probe', e)
+        }
       }
       if (!switched) {
         console.warn(`[Page2] snapshot endpoint recover skipped: no better url, reason=${reason}`)
@@ -586,6 +593,7 @@ export class Page2Coordinator {
     } catch (e) {
       const errMsg: string = e instanceof Error ? e.message : 'prewarm failed'
       console.error('[Page2] prewarm failed:', errMsg)
+      bengkuiMasterError('Page2Coordinator.prewarm', e)
     } finally {
       if (token === this.lifeToken) this.prewarming = false
     }
@@ -610,6 +618,7 @@ export class Page2Coordinator {
     this.resetVideoConnStateForNewSession()
     this.rtsp.pause().catch((e: Error): void => {
       console.error('[Page2] rtsp pause error:', e.message)
+      bengkuiMasterError('Page2Coordinator.stop.rtspPause', e)
     })
 
     videoStore.setStatus('Page2 stopped')
@@ -668,7 +677,11 @@ export class Page2Coordinator {
   private ensurePulseTimer(): void {
     if (this.pulseTimerId !== -1) return
     this.pulseTimerId = setInterval((): void => {
-      this.maybeLogPerfPulse(Date.now())
+      try {
+        this.maybeLogPerfPulse(Date.now())
+      } catch (e) {
+        bengkuiMasterError('Page2Coordinator.pulseTimer', e)
+      }
     }, this.pulseTimerIntervalMs) as number
   }
 
@@ -705,6 +718,7 @@ export class Page2Coordinator {
     } catch (e) {
       const errMsg: string = e instanceof Error ? e.message : 'page2 live recognition frame decode failed'
       console.error('[Page2] dispatchLiveRecognition error:', errMsg)
+      bengkuiMasterError('Page2Coordinator.dispatchLiveRecognition', e)
     }
   }
 
@@ -716,11 +730,14 @@ export class Page2Coordinator {
         return await src.createPixelMap({
           desiredPixelFormat: image.PixelMapFormat.RGBA_8888
         } as Object)
-      } catch (_) {
+      } catch (e) {
+        bengkuiMasterError('Page2Coordinator.jpegToPixelMap.rgba8888', e, `bytes=${jpeg.byteLength}`)
         return await src.createPixelMap()
       }
     } finally {
-      try { src.release() } catch (_) {}
+      try { src.release() } catch (e) {
+        bengkuiMasterError('Page2Coordinator.jpegToPixelMap.release', e)
+      }
     }
   }
 
@@ -870,6 +887,7 @@ export class Page2Coordinator {
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : 'signal upload failed'
       console.warn(`[Page2] signal upload failed: ${msg}`)
+      bengkuiMasterError('Page2Coordinator.maybeUploadTrafficSignal', e)
     } finally {
       this.signalUploadBusy = false
     }
@@ -995,10 +1013,12 @@ export class Page2Coordinator {
       const data: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 90 })
       return await this.jpegToPixelMap(data)
     } catch (e) {
-      void e
+      bengkuiMasterError('Page2Coordinator.clonePixelMap', e)
       return undefined
     } finally {
-      try { packer.release() } catch (_) {}
+      try { packer.release() } catch (e) {
+        bengkuiMasterError('Page2Coordinator.clonePixelMap.release', e)
+      }
     }
   }
 
