@@ -165,7 +165,7 @@ export class AStarPathPlanner {
       }
     }
     //3循环结束后，开始路径回溯，首先检查起点是否被BFS覆盖
-        this.cover(distanceMap,start,expandedCount)
+      this.cover(distanceMap,start,expandedCount)
 
     // 3.1若通过，则按照BFS距离场回溯路径
     const path: Array<string> = [start]

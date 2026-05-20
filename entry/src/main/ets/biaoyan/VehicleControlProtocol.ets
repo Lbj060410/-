@@ -163,35 +163,23 @@ export class VehicleControlProtocol {
 
   /**
    * 0x02 障碍检测：
-   * 1. 读传感器回传
-   * 2. 判断是否触发障碍
-   * 3. 触发识别
-   * 4. 特殊路段处理
-   * 5. 上报云端
-   * 6. 执行避障
-   * 7. 触发重规划
+
    */
   private handleObstacleDetection(frame: CommandFrame): void {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
-
-    const rotationFrame = this.normalizeRotationFrame(frame.data)
-    this.logSystemEvent(`[0x02] Step1 接收回传帧 ts=${rotationFrame.timestamp}`)
-    const obstacleDetected = this.detectObstacle(rotationFrame)
-    if (!obstacleDetected) {
-      this.logSystemEvent('[0x02] Step2 未检测到障碍，流程结束')
-      return
-    }
-
+    //1.接收到回传帧后，系统首先调用障碍方法，判断距离值是否低于阈值
+    this.barrier(frame)
     this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
-
+    //2.若检测到障碍，则触发摄像头抓拍并调用AI模型识别画面内容
     const cameraFrame = this.captureCamera()
     const recognitionResult = this.invokeRecognitionModel(cameraFrame)
+    //3.当识别结果为花生地、施工路段等特殊路况时，系统将当前画面写入系统相册，用于本地复盘，生成包含避让建议及路径影响标记的复盘结果
     this.logSystemEvent(
       `[0x02] Step3 识别结果 type=${recognitionResult.detectedType}, confidence=${recognitionResult.confidence}`
     )
-
-    if (this.isSpecialRoadSegment(recognitionResult)) {
-      this.handleSpecialRoadSegment(recognitionResult, cameraFrame)
+    //4.与此同时，系统记录日志、将特殊路段信息上传云端，并执行避障决策
+    if (this.jilu(recognitionResult)) {
+      this.shangchuan(recognitionResult, cameraFrame)
     }
 
     this.logSystemEvent('[0x02] Step5 上传障碍事件到云端队列')
@@ -202,10 +190,10 @@ export class VehicleControlProtocol {
       reviewResults: this.reviewResults,
       timestamp: Date.now()
     })
+    //5.最后，系统自动向命令队列投递路径重规划指令，确保车辆遇障后能够自动避让
+    this.replan(recognitionResult)
 
-    this.executeAvoidanceLogic(recognitionResult)
     this.triggerPathReplan(recognitionResult)
-
     this.logSystemEvent('=== 0x02 障碍检测流程结束 ===')
   }
 
@@ -326,12 +314,12 @@ export class VehicleControlProtocol {
     }
   }
 
-  private isSpecialRoadSegment(recognitionResult: RecognitionResult): boolean {
+  private jilu(recognitionResult: RecognitionResult): boolean {
     const specialTypes: Array<SpecialRoadType> = ['PEANUT_FIELD', 'CONSTRUCTION', 'WATER_HAZARD', 'STEEP_SLOPE']
     return specialTypes.includes(recognitionResult.detectedType as SpecialRoadType) && recognitionResult.confidence > 0.8
   }
 
-  private handleSpecialRoadSegment(recognitionResult: RecognitionResult, cameraFrame: CameraFrame): void {
+  private shangchuan(recognitionResult: RecognitionResult, cameraFrame: CameraFrame): void {
     this.logSystemEvent('[0x02] Step4 识别到特殊路段，执行特殊处理')
 
     const imageId = this.saveToSystemAlbum(cameraFrame, recognitionResult)
@@ -377,7 +365,7 @@ export class VehicleControlProtocol {
     this.logSystemEvent('[CLOUD] 数据已加入上传队列')
   }
 
-  private executeAvoidanceLogic(recognitionResult: RecognitionResult): void {
+  private replan(recognitionResult: RecognitionResult): void {
     const avoidanceDecision: AvoidanceDecision = {
       action: 'TURN_LEFT',
       angle: 45,
@@ -520,5 +508,14 @@ export class VehicleControlProtocol {
 
   getCloudUploadQueue(): Array<any> {
     return this.cloudUploadQueue
+  }
+  private barrier(frame:CommandFrame){
+    const rotationFrame = this.normalizeRotationFrame(frame.data)
+    this.logSystemEvent(`[0x02] Step1 接收回传帧 ts=${rotationFrame.timestamp}`)
+    const obstacleDetected = this.detectObstacle(rotationFrame)
+    if (!obstacleDetected) {
+      this.logSystemEvent('[0x02] Step2 未检测到障碍，流程结束')
+      return
+    }
   }
 }

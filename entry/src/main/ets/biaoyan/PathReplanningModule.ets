@@ -6,6 +6,7 @@
 
 import { AStarPathPlanner } from './WavefrontDiffusion'
 
+//1.我已专门设置了路径规划的结果对象，用于接收算法返回的规划数据
 export interface PathPlanResult {
   success: boolean
   path: Array<string>
@@ -97,6 +98,19 @@ interface PlannerOutput {
   selectedPath: Array<string>
   selectedStrategy: string
   diagnostics: ReplanDiagnostics
+}
+
+// 重规划执行上下文（用于成功/失败处理参数封装）
+interface ReplanExecutionGuard {
+  oldPath: Array<string>
+  oldTarget: string
+  newTarget: string
+  currentPos: string
+  blockedNodes: Array<string>
+  startTime: number
+  diagnostics: ReplanDiagnostics
+  newPath?: Array<string>
+  strategyId?: string
 }
 
 export class PathReplanningModule {
@@ -197,24 +211,25 @@ export class PathReplanningModule {
     try {
       const oldPath = [...this.currentPath]
       const oldTarget = this.currentTarget
+      //1.运行期间临时修改目的地时，自动以当前位置为新起点，结合阻塞信息重新规划并生成最优路线
+      const start = this.NodeId(currentPos)
+      const end = this.NodeId(newTarget)
 
-      const normalizedStart = this.normalizeNodeId(currentPos)
-      const normalizedTarget = this.normalizeNodeId(newTarget)
       const normalizedBlockedNodes = this.normalizeBlockedNodes(blockedNodes)
       const blockedEdgeSet = this.normalizeBlockedEdges(blockedEdges)
 
       const edgeTouchNodes = this.extractNodesFromBlockedEdges(blockedEdgeSet)
       const blockedNodesForLog = this.mergeUniqueNodes(normalizedBlockedNodes, edgeTouchNodes)
 
-      console.log(`[Replan/${traceId}] 请求: ${normalizedStart} -> ${normalizedTarget}`)
+      console.log(`[Replan/${traceId}] 请求: ${start} -> ${end}`)
       console.log(`[Replan/${traceId}] 阻塞节点: ${normalizedBlockedNodes.length > 0 ? normalizedBlockedNodes.join(', ') : '无'}`)
       console.log(`[Replan/${traceId}] 边关联节点(风险锚点): ${edgeTouchNodes.length > 0 ? edgeTouchNodes.join(', ') : '无'}`)
       console.log(`[Replan/${traceId}] 阻塞边: ${blockedEdgeSet.size > 0 ? blockedEdges.join(', ') : '无'}`)
 
       const plannerOutput = this.runHybridPlanner(
         traceId,
-        normalizedStart,
-        normalizedTarget,
+        start,
+        end,
         normalizedBlockedNodes,
         edgeTouchNodes,
         blockedEdgeSet,
@@ -223,29 +238,26 @@ export class PathReplanningModule {
 
       this.lastDiagnostics = plannerOutput.diagnostics
 
-      if (plannerOutput.selectedPath.length <= 0) {
-        return this.handleReplanFailure(
-          oldPath,
-          oldTarget,
-          normalizedTarget,
-          normalizedStart,
-          blockedNodesForLog,
-          startTime,
-          plannerOutput.diagnostics
-        )
-      }
-
-      return this.handleReplanSuccess(
+      // 构建统一上下文
+      const guard: ReplanExecutionGuard = {
         oldPath,
         oldTarget,
-        plannerOutput.selectedPath,
-        normalizedTarget,
-        normalizedStart,
-        blockedNodesForLog,
+        newTarget: end,
+        currentPos: start,
+        blockedNodes: blockedNodesForLog,
         startTime,
-        plannerOutput.selectedStrategy,
-        plannerOutput.diagnostics
-      )
+        diagnostics: plannerOutput.diagnostics
+      }
+
+      //2.规划失败时清空当前路径列表并返回失败状态，避免执行旧路径
+      if (plannerOutput.selectedPath.length <= 0) {
+        return this.handleReplanFailure(guard)
+      }
+
+      guard.newPath = plannerOutput.selectedPath
+      guard.strategyId = plannerOutput.selectedStrategy
+      //3.规划成功时替换为新路径列表。同时调用日志方法，将新旧路径写入回放，支持后续诊断分析
+      return this.handleReplanSuccess(guard)
     } finally {
       this.isReplanning = false
     }
@@ -442,10 +454,10 @@ export class PathReplanningModule {
 
           const priority =
             hops +
-            turns * profile.turnWeight +
-            risk * profile.riskWeight +
-            (1 - continuity) * profile.continuityWeight +
-            h * profile.heuristicWeight
+              turns * profile.turnWeight +
+              risk * profile.riskWeight +
+              (1 - continuity) * profile.continuityWeight +
+              h * profile.heuristicWeight
 
           nextFrontier.push({
             node: neighbor,
@@ -510,10 +522,10 @@ export class PathReplanningModule {
 
     const finalScore =
       hops * 1.00 +
-      turns * 0.58 +
-      risk * 1.30 +
-      (1 - continuity) * 0.85 +
-      candidate.expandedNodes * 0.002
+        turns * 0.58 +
+        risk * 1.30 +
+        (1 - continuity) * 0.85 +
+        candidate.expandedNodes * 0.002
 
     return {
       strategyId: candidate.strategyId,
@@ -563,80 +575,65 @@ export class PathReplanningModule {
   /**
    * 规划失败处理
    */
-  private handleReplanFailure(
-    oldPath: Array<string>,
-    oldTarget: string,
-    newTarget: string,
-    currentPos: string,
-    blockedNodes: Array<string>,
-    startTime: number,
-    diagnostics: ReplanDiagnostics
-  ): PathPlanResult {
-    console.log(`[重规划失败] 无法规划到 ${newTarget}`)
+  private handleReplanFailure(guard: ReplanExecutionGuard): PathPlanResult {
+    console.log(`[重规划失败] 无法规划到 ${guard.newTarget}`)
 
     this.currentPath = []
     this.currentTarget = ''
 
     this.recordReplanLog(
-      oldPath,
+      guard.oldPath,
       [],
-      oldTarget,
-      newTarget,
-      currentPos,
-      blockedNodes,
+      guard.oldTarget,
+      guard.newTarget,
+      guard.currentPos,
+      guard.blockedNodes,
       'FAILED',
-      startTime,
-      diagnostics
+      guard.startTime,
+      guard.diagnostics
     )
 
     return this.createPlanResult(
       false,
       [],
-      `无法规划到目标 ${newTarget}，已清空路径列表`
+      `无法规划到目标 ${guard.newTarget}，已清空路径列表`
     )
   }
 
   /**
    * 规划成功处理
    */
-  private handleReplanSuccess(
-    oldPath: Array<string>,
-    oldTarget: string,
-    newPath: Array<string>,
-    newTarget: string,
-    currentPos: string,
-    blockedNodes: Array<string>,
-    startTime: number,
-    strategyId: string,
-    diagnostics: ReplanDiagnostics
-  ): PathPlanResult {
+  private handleReplanSuccess(guard: ReplanExecutionGuard): PathPlanResult {
+    const newPath = guard.newPath!
+    const strategyId = guard.strategyId!
+
     console.log(`[重规划成功] 策略=${strategyId}, 新路径: ${newPath.join(' -> ')}`)
 
     this.currentPath = [...newPath]
-    this.currentTarget = newTarget
+    this.currentTarget = guard.newTarget
 
     this.recordReplanLog(
-      oldPath,
+      guard.oldPath,
       newPath,
-      oldTarget,
-      newTarget,
-      currentPos,
-      blockedNodes,
+      guard.oldTarget,
+      guard.newTarget,
+      guard.currentPos,
+      guard.blockedNodes,
       'SUCCESS',
-      startTime,
-      diagnostics
+      guard.startTime,
+      guard.diagnostics
     )
 
-    this.logPathTransition(oldPath, newPath, oldTarget, newTarget, currentPos, blockedNodes, strategyId)
+    this.logPathTransition(guard.oldPath, newPath, guard.oldTarget, guard.newTarget, guard.currentPos, guard.blockedNodes, strategyId)
 
-    const riskIndex = diagnostics.candidates.length > 0
-      ? diagnostics.candidates[0].riskIndex
+    const riskIndex = guard.diagnostics.candidates.length > 0
+      ? guard.diagnostics.candidates[0].riskIndex
       : 0
 
     return this.createPlanResult(
       true,
       newPath,
-      `成功重规划到 ${newTarget}（策略=${strategyId}）`,
+      `成功重规划到 ${guard.newTarget}（策略=${strategyId}）`,
       riskIndex
     )
   }
@@ -707,7 +704,7 @@ export class PathReplanningModule {
   private normalizeBlockedNodes(nodes: Array<string>): Array<string> {
     const out: Array<string> = []
     for (let node of nodes) {
-      const normalized = this.normalizeNodeId(node)
+      const normalized = this.NodeId(node)
       if (this.isValidNode(normalized) && !out.includes(normalized)) {
         out.push(normalized)
       }
@@ -924,7 +921,7 @@ export class PathReplanningModule {
     return [matches[0], matches[1]]
   }
 
-  private normalizeNodeId(nodeId: string): string {
+  private NodeId(nodeId: string): string {
     return (nodeId || '').trim().toUpperCase()
   }
 
