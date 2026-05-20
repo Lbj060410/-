@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"1afd9a00-07f5-419f-8241-ddf91b46ed13","timestamp":"2026-04-10T05:36:55.477Z","cwd":"F:\\openclaw-main\\openclaw-main\\workspace"}
+{"type":"model_change","id":"c0b5a1e1","parentId":null,"timestamp":"2026-04-10T05:36:55.482Z","provider":"deepseek","modelId":"deepseek-chat"}
+{"type":"thinking_level_change","id":"fd13bba8","parentId":"c0b5a1e1","timestamp":"2026-04-10T05:36:55.482Z","thinkingLevel":"off"}
+{"type":"custom","customType":"model-snapshot","data":{"timestamp":1775799415486,"provider":"deepseek","modelApi":"openai-completions","modelId":"deepseek-chat"},"id":"c4d9efc1","parentId":"fd13bba8","timestamp":"2026-04-10T05:36:55.486Z"}
+{"type":"message","id":"bd3df690","parentId":"c4d9efc1","timestamp":"2026-04-10T05:36:55.496Z","message":{"role":"user","content":[{"type":"text","text":"你好"}],"timestamp":1775799415492}}
+{"type":"message","id":"e1b307e0","parentId":"bd3df690","timestamp":"2026-04-10T05:36:58.237Z","message":{"role":"assistant","content":[{"type":"text","text":"你好！我是你的个人助手。有什么我可以帮助你的吗？"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-chat","usage":{"input":13279,"output":13,"cacheRead":0,"cacheWrite":0,"totalTokens":13292,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1775799415494}}
