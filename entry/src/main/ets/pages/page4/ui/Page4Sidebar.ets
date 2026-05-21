@@ -1,4 +1,4 @@
-import { Page1Theme } from '../../page1/Page1Theme'
+﻿import { Page1Theme } from '../../page1/Page1Theme'
 import { HistorySession } from '../modules/Page4SessionModule'
 import { PAGE4_BUTTON, PAGE4_PANEL, page4BtnBg, page4BtnBorder, page4BtnFg } from '../Page4Styles'
 
@@ -20,11 +20,11 @@ export function Page4Sidebar(props: Page4SidebarProps): void {
           .fontColor(Page1Theme.TEXT_PRIMARY)
       }
       Column() {
-        Text('智能助理')
+        Text('\u667a\u80fd\u52a9\u7406')
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor(Page1Theme.TEXT_PRIMARY)
-        Text('随时待命')
+        Text('\u968f\u65f6\u5f85\u547d')
           .fontSize(12)
           .fontColor(Page1Theme.SUCCESS)
           .margin({ top: 2 })
@@ -35,7 +35,7 @@ export function Page4Sidebar(props: Page4SidebarProps): void {
     .padding({ top: 40, left: 24, right: 24, bottom: 20 })
 
     Column() {
-      Text('历史记录')
+      Text('\u5386\u53f2\u8bb0\u5f55')
         .fontSize(12)
         .fontColor(Page1Theme.TEXT_TERTIARY)
         .fontWeight(FontWeight.Bold)

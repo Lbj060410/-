@@ -1414,11 +1414,9 @@ export class Page1UiStore {
   private metricAnimTimerId: number = -1
   private metricAnimLastTsMs: number = 0
   private metricLightWaveDeg: number = 0
-  private metricLightNextShuffleAtMs: number = 0
   private metricTargetSpeedCms: number = 0
   private metricTargetDistanceCm: number = 0
   private metricTargetLightLux: number = this.randomLightBaseLux()
-  private metricStoreLightBaseLux: number = this.metricTargetLightLux
   private readonly metricNormToCm: number = 250
 
   setMetricSpeedCms(v: number): void {
@@ -1442,6 +1440,13 @@ export class Page1UiStore {
     this.metricLightLux = Math.max(0, Math.round(safe))
   }
 
+  resetMetricLightBaseLux(baseLux?: number): void {
+    this.metricTargetLightLux = this.normalizeMetricLightBaseLux(baseLux)
+    this.metricLightWaveDeg = 0
+    this.setMetricLightLux(this.metricTargetLightLux)
+    this.ensureMetricAnimatorRunning()
+  }
+
   private headingTextFromDeg(v: number): string {
     const idx: number = Math.round(this.normHeadingDeg(v) / 45) % 8
     if (idx === 0) return 'N'
@@ -1460,8 +1465,13 @@ export class Page1UiStore {
     return Math.sqrt(dx * dx + dy * dy)
   }
 
+  private normalizeMetricLightBaseLux(baseLux?: number): number {
+    if (!Number.isFinite(baseLux)) return this.randomLightBaseLux()
+    return Math.max(250, Math.min(400, Math.round(baseLux as number)))
+  }
+
   private randomLightBaseLux(): number {
-    return 200 + Math.floor(Math.random() * 251)
+    return 250 + Math.floor(Math.random() * 151)
   }
 
   private ensureMetricAnimatorRunning(): void {
@@ -1495,16 +1505,14 @@ export class Page1UiStore {
       this.setMetricDistanceCm(this.metricDistanceCm + incCm)
     }
 
-    if (nowMs >= this.metricLightNextShuffleAtMs) {
-      this.metricStoreLightBaseLux = this.randomLightBaseLux()
-      this.metricTargetLightLux = this.metricStoreLightBaseLux
-      this.metricLightNextShuffleAtMs = nowMs + 1800 + Math.floor(Math.random() * 1200)
+    if (this.metricLightLux <= 0) {
+      this.setMetricLightLux(this.metricTargetLightLux)
     }
 
     this.metricLightWaveDeg += dtSec * 120
     if (this.metricLightWaveDeg >= 360) this.metricLightWaveDeg -= 360
     const wave: number = Math.sin((this.metricLightWaveDeg * Math.PI) / 180) * 10
-    const lightTarget: number = Math.max(200, Math.min(450, this.metricTargetLightLux + wave))
+    const lightTarget: number = this.metricTargetLightLux + wave
     const lightGap: number = lightTarget - this.metricLightLux
     this.setMetricLightLux(this.metricLightLux + lightGap * 0.3)
 

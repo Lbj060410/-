@@ -136,7 +136,11 @@ const POI_ALIAS_TO_NODE: Record<string, string> = {
   '中心仓库': 'F6',
   '快递点': 'A1',
   '工业园': 'A7',
-  '滕王阁': 'B2'
+  '滕王阁': 'B2',
+  '珠宝街':'A7',
+  '八一广场':'A6',
+  '紫荆夜市':"A5",
+
 }
 
 export class AIAssistantModule {
@@ -182,20 +186,20 @@ export class AIAssistantModule {
         return this.buildErrorResponse(startTime, 'EMPTY_INPUT', '输入为空，请重新描述需求')
       }
 
-      // Step1: 本地解析 + 目的地提取
+      // 1.首先调用文本解析方法提取目的地并保存至历史记录，同时通过关键词匹配识别指令意图
       const parseResult = this.parseText(normalizedInput)
+      // 2.若判定为导航意图，系统将目的地传入导航校验方法，验证通过后启动导航流程
       this.textParseHistory.push(parseResult)
-
-      // Step2: 本地意图初判（轻量路由）
+      //3.若判定为车辆控制意图，系统将解析指令中的动作关键词如前进、后退、左转、右转等，命中后直接调用动作协调器的执行方法下发控制指令，无需额外的路由环节
       const intentResult = this.recognizeIntent(normalizedInput)
       this.intentHistory.push(intentResult)
       this.lastIntent = intentResult.intentType
 
-      // Step3: 构建会话上下文并调用 DeepSeek（模拟）
       this.appendContext('user', normalizedInput, {
         parseResult: parseResult,
         intentResult: intentResult
       })
+      //4.若以上两种意图均未匹配，系统自动降级至对话兜底模式，由openclaw，理解用户意图，并生成澄清回复，引导用户补充关键信息
 
       const llmReply = this.invokeDeepSeekModelSimulated(traceId, normalizedInput, parseResult, intentResult)
       this.openClawLog.push(llmReply)

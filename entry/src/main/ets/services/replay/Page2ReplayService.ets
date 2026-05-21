@@ -59,6 +59,9 @@ export class Page2ReplayService {
   private lastShigongAtMs: number = 0
   private lastUltrasonicAtMs: number = 0
   private lastTrafficSignalAtMs: number = 0
+  private lastTrafficReplayTaskId: string = ''
+  private lastTrafficReplayColor: string = ''
+  private lastTrafficReplayAtMs: number = 0
   private lastVisionTaskId: string = ''
   private lastVisionAtMs: number = 0
 
@@ -156,6 +159,37 @@ export class Page2ReplayService {
       buttonName: 'Traffic Signal 0x06',
       resultText: note.length > 0 ? note : '收到 0x06 交通灯识别触发',
       decisionText: '收到0x06，已触发交通灯识别并截取画面',
+      decisionImageRef,
+      clipFrameRefs
+    })
+  }
+
+  async onTrafficLightRecognition(result: RecognitionResult): Promise<void> {
+    if (!result.ok || result.subtype !== RecognitionSubtype.TRAFFIC_LIGHT || result.boxes.length <= 0) return
+    const color: string = this.pickTrafficLightColor(result)
+    if (color !== 'red' && color !== 'green') return
+
+    const nowMs: number = Date.now()
+    if (result.taskId.length > 0 &&
+      result.taskId === this.lastTrafficReplayTaskId &&
+      color === this.lastTrafficReplayColor) return
+    if (color === this.lastTrafficReplayColor && nowMs - this.lastTrafficReplayAtMs < 1500) return
+
+    this.lastTrafficReplayTaskId = result.taskId
+    this.lastTrafficReplayColor = color
+    this.lastTrafficReplayAtMs = nowMs
+
+    const id: string = this.nextId('obs')
+    const clipFrameRefs: Array<string> = await this.saveRecentClipFrames(id, 2000)
+    const decisionImageRef: string = await this.saveDecisionImage(id, `traffic_${color}`)
+    const colorText: string = color === 'red' ? 'Red' : 'Green'
+    this.pushObstacle({
+      id,
+      tsMs: nowMs,
+      triggerType: 'VISION',
+      buttonName: `Traffic ${colorText}`,
+      resultText: this.formatResultText(result),
+      decisionText: `${colorText} traffic light recognized`,
       decisionImageRef,
       clipFrameRefs
     })
@@ -335,10 +369,10 @@ export class Page2ReplayService {
   }
 
   private pushObstacle(item: Page2ObstacleReplayItem): void {
-    const cap: number = this.obstacleCap()
     const next: Array<Page2ObstacleReplayItem> = [item]
     let sameTypeCount: number = 1
     const bucket: string = this.obstacleBucket(item)
+    const cap: number = this.obstacleCapForBucket(bucket)
     for (let i: number = 0; i < this.obstacleItems.length; i++) {
       const oldItem: Page2ObstacleReplayItem = this.obstacleItems[i]
       if (this.obstacleBucket(oldItem) === bucket) {
@@ -387,12 +421,19 @@ export class Page2ReplayService {
     return MAX_OBSTACLE_ITEMS_PER_TYPE
   }
 
+  private obstacleCapForBucket(bucket: string): number {
+    if (bucket === 'TRAFFIC_RED' || bucket === 'TRAFFIC_GREEN') return 1
+    return this.obstacleCap()
+  }
+
   private galleryCap(): number {
     return MAX_GALLERY_ITEMS_PER_TYPE
   }
 
   private obstacleBucket(item: Page2ObstacleReplayItem): string {
     if (item.triggerType === 'ULTRASONIC_01') return 'ULTRASONIC_01'
+    if (item.buttonName === 'Traffic Red') return 'TRAFFIC_RED'
+    if (item.buttonName === 'Traffic Green') return 'TRAFFIC_GREEN'
     return 'VISION_OBSTACLE'
   }
 
@@ -434,6 +475,21 @@ export class Page2ReplayService {
       out.push(`${one.label} ${(Math.max(0, one.score) * 100).toFixed(1)}% ${xywh}`)
     }
     return out.join('\n')
+  }
+
+  private pickTrafficLightColor(result: RecognitionResult): string {
+    let bestLabel: string = ''
+    let bestScore: number = -1
+    for (let i: number = 0; i < result.boxes.length; i++) {
+      const one: BBoxNorm = result.boxes[i]
+      const label: string = one.label.trim().toLowerCase()
+      if (label !== 'red' && label !== 'green' && label !== 'yellow') continue
+      if (one.score > bestScore) {
+        bestScore = one.score
+        bestLabel = label
+      }
+    }
+    return bestLabel
   }
 
   private galleryButtonName(result: RecognitionResult): string {

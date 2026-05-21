@@ -326,6 +326,23 @@ export class CarProtocolService {
   async clearWarehouseNode(): Promise<number> {
     return await this.Send0C(0x11, undefined, false)
   }
+  //地图预设1
+  async PresetOne(): Promise<number> {
+    return await this.Send0C(0x12, undefined, false)
+  }
+  //地图预设2
+  async PresetTow(): Promise<number> {
+    return await this.Send0C(0x13, undefined, false)
+  }
+
+  //地图预设3
+  async PresetThree(): Promise<number> {
+    return await this.Send0C(0x14, undefined, false)
+  }
+  //地图预设4
+  async PresetFour(): Promise<number> {
+    return await this.Send0C(0x15, undefined, false)
+  }
 
   // 一键清图
   async  resetNetworkMap(): Promise<number> {

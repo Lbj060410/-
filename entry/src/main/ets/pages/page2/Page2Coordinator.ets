@@ -27,7 +27,7 @@ import { BBoxNorm, RecognitionResult } from '../../services/recognition/Recognit
 import { page2ReplayService } from '../../services/replay/Page2ReplayService'
 import { validateJpegBuffer } from '../../utils/BackgroundCompute'
 import { saveSignalCarBatch, SignalCarPayload } from '../../services/webpageinteraction/webconnect'
-import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
+import { bengkuiMasterError, isBengkuiIgnorableCameraHttpError } from '../../utils/BengkuiMasterLogger'
 
 const PAGE2_LAST_ENDPOINT_PATH: string = '/data/storage/el2/base/haps/entry/files/page2_last_endpoint.json'
 
@@ -224,7 +224,9 @@ export class Page2Coordinator {
           switched = true
           break
         } catch (e) {
-          bengkuiMasterError('Page2Coordinator.tryRecoverSnapshotEndpoint.probe', e)
+          if (!isBengkuiIgnorableCameraHttpError(e)) {
+            bengkuiMasterError('Page2Coordinator.tryRecoverSnapshotEndpoint.probe', e)
+          }
         }
       }
       if (!switched) {
@@ -1045,6 +1047,10 @@ export class Page2Coordinator {
   private maybeAutoSnapshotFromVision(currentPm: image.PixelMap, nowMs: number): void {
     // traffic 实时模式下关闭自动快照归档，避免 clone/写盘抬高延迟，导致 LIVE 长期掉帧。
     if (videoStore.page2TrafficEnabled) {
+      const trafficResult: RecognitionResult | undefined = this.latestSuccessfulPage2LiveResult()
+      if (trafficResult && trafficResult.subtype === RecognitionSubtype.TRAFFIC_LIGHT) {
+        void page2ReplayService.onTrafficLightRecognition(trafficResult)
+      }
       if (nowMs - this.lastTrafficRealtimeHintAtMs >= 2000) {
         this.lastTrafficRealtimeHintAtMs = nowMs
         console.info('[Page2] traffic mode: skip auto snapshot archive for realtime refresh')

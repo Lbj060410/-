@@ -181,6 +181,25 @@ function handleBCFrame(ctx: IPage1CoordinatorOps, s: Page1UiStore, f: CarProtoFr
     }
     return
   }
+  if (data1 === 0x07) {
+    // data1=0x07: 上报特殊路段
+    // 约定解析：07 <fromCol><fromRow><toCol><toRow>
+    if (d.length >= 5) {
+      const fromId: string = decodeNodeAscii(d[1], d[2])
+      const toId: string = decodeNodeAscii(d[3], d[4])
+      if (fromId.length > 0 && toId.length > 0) {
+        const edgeId: string = `${fromId}|${toId}`
+        if (s.upsertSpecialRoadPoint(edgeId)) {
+          s.pushLog(`RX CCF5 BC: 特殊路段 edge=${fromId}|${toId} seq=${f.seq}`)
+          return
+        }
+      }
+      s.pushLog(`RX CCF5 BC: 特殊路段(点位无效) data=${bytesToHex(d)} seq=${f.seq}`)
+      return
+    }
+    s.pushLog(`RX CCF5 BC: 特殊路段(格式异常) data=${bytesToHex(d)} seq=${f.seq}`)
+    return
+  }
   if (data1 === 0x03) {
     s.setAction('小车已通过道闸')
     s.pushLog(`RX CCF5 BC: 小车已通过道闸 seq=${f.seq}`)
@@ -258,6 +277,14 @@ function summarizeBcFrame(f: CarProtoFrame): string {
       return `上报障碍路段 edge=${fromId.length > 0 ? fromId : '??'}|${toId.length > 0 ? toId : '??'}`
     }
     return '上报障碍路段(格式异常)'
+  }
+  if (data1 === 0x07) {
+    if (d.length >= 5) {
+      const fromId: string = decodeNodeAscii(d[1], d[2])
+      const toId: string = decodeNodeAscii(d[3], d[4])
+      return `上报特殊路段 edge=${fromId.length > 0 ? fromId : '??'}|${toId.length > 0 ? toId : '??'}`
+    }
+    return '上报特殊路段(格式异常)'
   }
   if (data1 === 0x03) return '小车已通过道闸'
   if (data1 === 0x04) return '上报入库完成'

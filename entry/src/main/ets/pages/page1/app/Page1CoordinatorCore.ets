@@ -400,9 +400,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.lightMetricQueryEnabled = true
     this.lightMetricReady = false
     this.lightMetricLastQueryAtMs = Date.now()
-    this.simLightBaseLux = 0
-    const s: Page1UiStore | undefined = this.store
-    if (s) s.setMetricLightLux(0)
   }
 
   private onLightLuxReceived(lux: number): void {
@@ -412,8 +409,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     if (!Number.isFinite(lux) || lux < 0) return
     this.lightMetricReady = true
     this.lightMetricLastQueryAtMs = Date.now()
-    this.simLightBaseLux = Math.round(lux)
-    s.setMetricLightLux(this.simLightBaseLux)
   }
 
   private async tryQueryLightMetricOnceOnPageOpen(): Promise<void> {
@@ -433,6 +428,21 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     }
   }
 
+  private nextMetricLightBaseLux(): number {
+    return 250 + Math.floor(Math.random() * 151)
+  }
+
+  private resetMetricLightCard(baseLux?: number): void {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    if (Number.isFinite(baseLux)) {
+      this.simLightBaseLux = Math.max(250, Math.min(400, Math.round(baseLux as number)))
+    } else {
+      this.simLightBaseLux = this.nextMetricLightBaseLux()
+    }
+    s.resetMetricLightBaseLux(this.simLightBaseLux)
+  }
+
   private onSimTelemetryTick(speed: number, headingDeg: number): void {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
@@ -447,11 +457,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       s.setMetricSpeedCms(drySpeedCms)
       this.metricDistanceTotalCm += drySpeedCms * dtSec
       s.setMetricDistanceCm(this.metricDistanceTotalCm)
-      if (this.simLightBaseLux <= 0) {
-        this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
-      }
-      const dryJitter: number = Math.floor(Math.random() * 21) - 10
-      s.setMetricLightLux(this.simLightBaseLux + dryJitter)
       this.animateMetricHeadingTo(headingDeg)
       return
     }
@@ -461,13 +466,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.metricDistanceTotalCm += realSpeedCms * dtSec
     s.setMetricDistanceCm(this.metricDistanceTotalCm)
     this.animateMetricHeadingTo(headingDeg)
-
-    // 真车模式：持续更新光照强度
-    if (this.simLightBaseLux <= 0) {
-      this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
-    }
-    const jitter: number = Math.floor(Math.random() * 21) - 10
-    s.setMetricLightLux(this.simLightBaseLux + jitter)
   }
 
   private onNodeArrived(): void {
@@ -577,7 +575,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.clearMetricSpeedAnimation()
     this.clearMetricHeadingAnimation()
     this.clearMetricDistanceAckAnimation()
-    this.simLightBaseLux = 0
     this.metricDistanceTotalCm = 0
     this.metricDistanceAckKey = ''
     this.metricDistanceAckTargetCm = 0
@@ -598,7 +595,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     store.setMetricSpeedCms(0)
     store.setMetricHeadingDeg(0)
     store.setMetricDistanceCm(0)
-    store.setMetricLightLux(0)
+    this.resetMetricLightCard()
     this.metricHeadingTargetDeg = store.metricHeadingDeg
 
     // 绑定节点到达回调
@@ -675,8 +672,8 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.metricSimLastTickAtMs = 0
     if (this.store) {
       this.store.setMetricSpeedCms(0)
-      this.store.setMetricLightLux(0)
       this.store.setMetricDistanceCm(this.metricDistanceTotalCm)
+      this.resetMetricLightCard()
     }
     this.clearEmergencyAlarmTimer()
     this.clearEmergencyAutoRecoverTimer()
@@ -867,7 +864,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     s.setMetricSpeedCms(0)
     s.setMetricHeadingDeg(keepHeadingDeg)
     s.setMetricDistanceCm(0)
-    s.setMetricLightLux(0)
+    this.resetMetricLightCard()
 
     this.logicalHeadingDeg = this.normToCardinal(keepHeadingDeg)
     this.logicalHeadingInited = true
@@ -1065,6 +1062,130 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       const msg: string = e instanceof Error ? e.message : String(e)
       s.pushLog(`清图发送失败: ${msg}`)
       bengkuiMasterError('Page1Coordinator.resetNetworkMap', e)
+    }
+  }
+
+  async presetOneByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    try {
+      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+      if (this.canRealSend()) {
+        s.bumpTx()
+        const seq: number = await this.proto.PresetOne()
+        s.pushLog(`预设1(CCF5): seq=${seq}`)
+      } else {
+        s.pushLog('预设1(DRY_RUN)')
+      }
+
+      s.clearBlockedNodes()
+      s.clearGaragePoints()
+      s.clearTrafficLightPoints()
+      s.clearWarehousePoints()
+      s.clearGatePoints()
+
+      const trafficEdge: string = RouteEdgeCodec.normalize('B6', 'B4')
+      const gateEdge: string = RouteEdgeCodec.normalize('B2', 'B4')
+      const obstacleEdgeA: string = RouteEdgeCodec.normalize('F2', 'F4')
+      const obstacleEdgeB: string = RouteEdgeCodec.normalize('D2', 'D4')
+
+      const applied: Array<string> = []
+      if (s.upsertGaragePoint('F7')) applied.push('车库=F7')
+      if (s.upsertTrafficLightPoint(trafficEdge, 270)) applied.push(`交通灯=${trafficEdge}`)
+      if (s.upsertWarehousePoint('B1')) applied.push('仓库=B1')
+      if (s.upsertWarehousePoint('F1')) applied.push('仓库=F1')
+      if (s.upsertGatePoint(gateEdge)) applied.push(`道闸=${gateEdge}`)
+      if (s.addBlockedEdgeIfAbsent(obstacleEdgeA, 'PRESET_ONE')) applied.push(`障碍=${obstacleEdgeA}`)
+      if (s.addBlockedEdgeIfAbsent(obstacleEdgeB, 'PRESET_ONE')) applied.push(`障碍=${obstacleEdgeB}`)
+
+      s.setAction('预设1已应用')
+      s.pushLog(`预设1：${applied.join('，')}`)
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`预设1应用失败: ${msg}`)
+      bengkuiMasterError('Page1Coordinator.presetOneByUi', e)
+    }
+  }
+
+  async presetTwoByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    try {
+      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+      if (this.canRealSend()) {
+        s.bumpTx()
+        const seq: number = await this.proto.PresetTow()
+        s.pushLog(`预设2(CCF5): seq=${seq}`)
+      } else {
+        s.pushLog('预设2(DRY_RUN)')
+      }
+
+      s.clearBlockedNodes()
+      s.clearGaragePoints()
+      s.clearTrafficLightPoints()
+      s.clearWarehousePoints()
+      s.clearGatePoints()
+
+      const trafficEdge: string = RouteEdgeCodec.normalize('B6', 'B4')
+      const applied: Array<string> = []
+      if (s.upsertTrafficLightPoint(trafficEdge, 270)) applied.push(`交通灯=${trafficEdge}`)
+      s.setAction('预设2已应用')
+      s.pushLog(`预设2：${applied.join('，')}`)
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`预设2应用失败: ${msg}`)
+      bengkuiMasterError('Page1Coordinator.presetTwoByUi', e)
+    }
+  }
+
+  async presetThreeByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    try {
+      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+      if (this.canRealSend()) {
+        s.bumpTx()
+        const seq: number = await this.proto.PresetThree()
+        s.pushLog(`预设3(CCF5): seq=${seq}`)
+      } else {
+        s.pushLog('预设3(DRY_RUN)')
+      }
+      s.setAction('预设3已发送')
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`预设3应用失败: ${msg}`)
+      bengkuiMasterError('Page1Coordinator.presetThreeByUi', e)
+    }
+  }
+
+  async presetFourByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    try {
+      this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+      if (this.canRealSend()) {
+        s.bumpTx()
+        const seq: number = await this.proto.PresetFour()
+        s.pushLog(`预设4(CCF5): seq=${seq}`)
+      } else {
+        s.pushLog('预设4(DRY_RUN)')
+      }
+
+      s.clearBlockedNodes()
+      s.clearGaragePoints()
+      s.clearTrafficLightPoints()
+      s.clearWarehousePoints()
+      s.clearGatePoints()
+
+      const applied: Array<string> = []
+      if (s.upsertWarehousePoint('B1')) applied.push('仓库=B1')
+      if (s.upsertWarehousePoint('F1')) applied.push('仓库=F1')
+      s.setAction('预设4已应用')
+      s.pushLog(`预设4：${applied.join('，')}`)
+    } catch (e) {
+      const msg: string = e instanceof Error ? e.message : String(e)
+      s.pushLog(`预设4应用失败: ${msg}`)
+      bengkuiMasterError('Page1Coordinator.presetFourByUi', e)
     }
   }
 
@@ -1416,12 +1537,6 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
       this.metricDistanceTotalCm += distanceIncCm
       s.setMetricDistanceCm(this.metricDistanceTotalCm)
     }
-
-    if (this.simLightBaseLux <= 0) {
-      this.simLightBaseLux = 200 + Math.floor(Math.random() * 101)
-    }
-    const lightJitter: number = Math.floor(Math.random() * 21) - 10
-    s.setMetricLightLux(this.simLightBaseLux + lightJitter)
 
     this.animateMetricHeadingTo(headingDeg)
 
@@ -2084,10 +2199,4 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
-
-
-
-
-
-
 

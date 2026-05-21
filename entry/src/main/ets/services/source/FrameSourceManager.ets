@@ -9,7 +9,7 @@ import image from '@ohos.multimedia.image'
 type PixelMap = image.PixelMap
 import { HttpSnapshotService } from './HttpSnapshotService'
 import { VideoStore } from '../../state/VideoStore'
-import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
+import { bengkuiMasterError, isBengkuiIgnorableCameraHttpError } from '../../utils/BengkuiMasterLogger'
 
 export enum FrameSourceType {
   HTTP = 0
@@ -146,11 +146,13 @@ export class FrameSourceManager {
       if (this.consecutiveHttpFailCount >= 2) {
         this.store.setError(msg)
       }
-      bengkuiMasterError(
-        'FrameSourceManager.loopOnce',
-        e,
-        `url=${url},failStreak=${this.consecutiveHttpFailCount},timeout=${this.resolveRequestTimeoutMs()}`
-      )
+      if (!isBengkuiIgnorableCameraHttpError(e)) {
+        bengkuiMasterError(
+          'FrameSourceManager.loopOnce',
+          e,
+          `url=${url},failStreak=${this.consecutiveHttpFailCount},timeout=${this.resolveRequestTimeoutMs()}`
+        )
+      }
       this.updateDiag(0)
       this.maybeLogFrameFail(msg)
       this.notifyFrameHealth(false, msg)

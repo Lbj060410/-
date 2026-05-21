@@ -253,6 +253,51 @@ export struct Page1View {
                 .onClick((): void => {
                   void page1Coordinator.onAction(Page1Action.UTURN)
                 })
+
+              Button('预设1')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.presetOneByUi()
+
+                })
+
+              Button('预设2')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.presetTwoByUi()
+                })
+
+              Button('预设3')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.presetThreeByUi()
+                })
+
+              Button('预设4')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.presetFourByUi()
+                })
             }
             .width('30%')
             .height('100%')

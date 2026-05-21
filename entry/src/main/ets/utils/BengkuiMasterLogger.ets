@@ -32,6 +32,16 @@ export function bengkuiMasterErrText(err: BengkuiErrLike): string {
   return normalizeText(String(err))
 }
 
+export function isBengkuiIgnorableCameraHttpError(err: BengkuiErrLike): boolean {
+  const text: string = bengkuiMasterErrText(err).toLowerCase()
+  if (text.length <= 0) return false
+  if (text.indexOf('code=2300028') >= 0) return true
+  if (text.indexOf('timeout was reached') >= 0) return true
+  if (text.indexOf('code=2300056') >= 0) return true
+  if (text.indexOf('failure when receiving data from the peer') >= 0) return true
+  return false
+}
+
 function shouldLog(sig: string): boolean {
   const nowMs: number = Date.now()
   const lastAtMs: number = recentLogAtBySig[sig] ?? 0

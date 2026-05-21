@@ -176,7 +176,8 @@ export class LocationMappingModule {
       return this.failResult('输入为空')
     }
 
-    // Step1: 优先直接解析节点编码（例如 D4）
+    // 1.首先调用文本解析方法，提取用户输入中的节点编码或地名信息。若输入为节点编码，则直接匹配并返回结果
+    const d=this.extractNodeId(text)
     const directNode = this.extractNodeId(text)
     if (directNode && this.isValidNode(directNode)) {
       const result = this.successResult(directNode, `节点直达:${directNode}`)
@@ -184,17 +185,18 @@ export class LocationMappingModule {
       return result
     }
 
-    // Step2: 先用本地 alias 做一次低延迟匹配
+    // 2.若非节点编码，系统则通过本地别名配置,进行低延迟匹配，命中后直接返回对应节点
     const localAliasNode = PoiMappingConfig.getNodeByName(text)
-
-    // Step3: 模拟百度地图实时定位 + 逆地理编码 + POI 检索
+    /* 3.若本地匹配未命中，系统自动调用百度地图定位接口，依次获取实时定位、逆地理编码及周边POI搜索结果，
+     并将这些数据交由 OpenClaw 智能体 进行多源信息融合决策，
+     通过四类信号进行加权评分，OpenClaw 智能体综合选出得分最高的候选节点*/
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)
     this.lastRealtimeSnapshot = realtime
 
     const reverse = this.callBaiduReverseGeocode(traceId, realtime)
     const pois = this.callBaiduNearbySearch(traceId, text, realtime)
 
-    // Step4: 多源信息融合决策（像大模型 tool-call 后的 structured fusion）
+    // 4.若融合置信度低于阈值，OpenClaw 智能体返回失败状态并清空无效结果
     const decision = this.fuseLocationSignals(traceId, text, localAliasNode, reverse, pois, realtime)
 
     if (!decision.chosenNode || decision.confidence < 0.35) {
@@ -209,7 +211,7 @@ export class LocationMappingModule {
       )
       return this.failResult('未找到可落地的网格点位')
     }
-
+  //5.若融合成功，则将映射结果传递至扩散策略路径规划模块
     const result = this.successResult(decision.chosenNode, decision.chosenAlias)
     this.recordFusion(
       traceId,

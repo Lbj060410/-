@@ -207,7 +207,6 @@ export class AStarPathPlanner {
 
       // 4.最后调用关键的严格下降判断方法，避免震荡并提前终止无效搜索
       this.decrease(nextDistance,currentDistance)
-
       path.push(next)
       current = next
     }

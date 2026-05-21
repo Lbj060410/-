@@ -163,7 +163,6 @@ export class VehicleControlProtocol {
 
   /**
    * 0x02 障碍检测：
-
    */
   private handleObstacleDetection(frame: CommandFrame): void {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
