@@ -1,5 +1,6 @@
 import {
   buildOpenClawChatCompletionsUrl,
+  buildOpenClawGatewayWsUrl,
   buildPcToolGatewayUrl,
   buildTabletCompanionUrl,
   OPENCLAW_CHAT_MODEL,
@@ -10,6 +11,7 @@ import {
   TABLET_COMPANION_READ_TIMEOUT_MS
 } from '../../../config/DeviceNetworkConfig'
 import { OpenClawGatewayClient, OpenClawChatMessage } from '../../../services/assistant/OpenClawGatewayClient'
+import { OpenClawGatewayWsClient } from '../../../services/assistant/OpenClawGatewayWsClient'
 import { PcToolGatewayClient } from '../../../services/assistant/PcToolGatewayClient'
 import { TabletCompanionClient } from '../../../services/assistant/TabletCompanionClient'
 
@@ -17,6 +19,7 @@ export interface Page4GatewayState {
   lastGoodOpenClawHost: string
   openClawHostCooldownUntilMs: Record<string, number>
   openClawHostCooldownMs: number
+  openClawWsSessionKey?: string
 }
 
 export class Page4GatewayLayer {
@@ -93,7 +96,10 @@ export class Page4GatewayLayer {
       const host: string = normal[i]
       let exists: boolean = false
       for (let j: number = 0; j < out.length; j++) {
-        if (out[j] === host) { exists = true; break }
+        if (out[j] === host) {
+          exists = true
+          break
+        }
       }
       if (!exists) out.push(host)
     }
@@ -126,8 +132,7 @@ export class Page4GatewayLayer {
           state = this.markOpenClawHostSuccess(state, host)
           return { ok: true, summary: this.summarizePcToolText(toolName, result.text), state }
         }
-        const errText: string = this.normalizeGatewayErrorText(result.errorText)
-        errs.push(`${host}/${k + 1}:${errText}`)
+        errs.push(`${host}/${k + 1}:${this.normalizeGatewayErrorText(result.errorText)}`)
       }
       state = this.markOpenClawHostFail(state, host)
     }
@@ -143,7 +148,7 @@ export class Page4GatewayLayer {
     tokens: Array<string>,
     nodeId: string = TABLET_COMPANION_NODE_ID
   ): Promise<{ ok: boolean, summary: string, state: Page4GatewayState }> {
-    if (hosts.length <= 0) return { ok: false, summary: '未检测到平板伴侣代理主机地址。', state }
+    if (hosts.length <= 0) return { ok: false, summary: '未检测到平板伴侣主机地址。', state }
     const errs: Array<string> = []
     for (let i: number = 0; i < hosts.length; i++) {
       const host: string = hosts[i]
@@ -161,8 +166,7 @@ export class Page4GatewayLayer {
           state = this.markOpenClawHostSuccess(state, host)
           return { ok: true, summary: this.summarizeTabletCompanionText(action, result.text), state }
         }
-        const errText: string = this.normalizeGatewayErrorText(result.errorText)
-        errs.push(`${host}/${k + 1}:${errText}`)
+        errs.push(`${host}/${k + 1}:${this.normalizeGatewayErrorText(result.errorText)}`)
       }
       state = this.markOpenClawHostFail(state, host)
     }
@@ -177,13 +181,44 @@ export class Page4GatewayLayer {
     tokens: Array<string>,
     connectTimeoutMs: number,
     readTimeoutMs: number,
-    model: string = OPENCLAW_CHAT_MODEL
+    model: string = OPENCLAW_CHAT_MODEL,
+    streamCallbacks?: {
+      onStarted?: (runId: string) => void
+      onDelta?: (text: string, runId: string) => void
+    }
   ): Promise<{ ok: boolean, text: string, error: string, state: Page4GatewayState }> {
     const errs: Array<string> = []
+    const mergedPrompt: string = this.buildWsPromptFromMessages(messages)
+    const wsTimeoutMs: number = Math.max(5000, Math.min(readTimeoutMs, 12000))
     for (let i: number = 0; i < hosts.length; i++) {
       const host: string = hosts[i]
       for (let k: number = 0; k < tokens.length; k++) {
         const token: string = tokens[k]
+        const sessionKey: string = this.ensureOpenClawWsSessionKey(state)
+
+        if (mergedPrompt.length > 0) {
+          const wsClient: OpenClawGatewayWsClient = new OpenClawGatewayWsClient({
+            url: buildOpenClawGatewayWsUrl(host),
+            bearerToken: token,
+            connectTimeoutMs,
+            readTimeoutMs: wsTimeoutMs
+          })
+          const wsResult = await wsClient.chat({
+            sessionKey,
+            message: mergedPrompt,
+            timeoutMs: wsTimeoutMs,
+            onStarted: streamCallbacks?.onStarted,
+            onDelta: streamCallbacks?.onDelta
+          })
+          if (wsResult.ok && wsResult.text.trim().length > 0) {
+            state = this.markOpenClawHostSuccess(state, host)
+            return { ok: true, text: wsResult.text, error: '', state }
+          }
+          if (wsResult.errorText.trim().length > 0) {
+            errs.push(`${host}/${k + 1} WS ${this.normalizeGatewayErrorText(wsResult.errorText)}`)
+          }
+        }
+
         const client: OpenClawGatewayClient = new OpenClawGatewayClient({
           endpoint: buildOpenClawChatCompletionsUrl(host),
           bearerToken: token,
@@ -203,5 +238,33 @@ export class Page4GatewayLayer {
     }
     return { ok: false, text: '', error: errs.join(' || '), state }
   }
-}
 
+  private static buildWsPromptFromMessages(messages: Array<OpenClawChatMessage>): string {
+    if (messages.length <= 0) return ''
+    const systemParts: Array<string> = []
+    const convoParts: Array<string> = []
+    for (let i: number = 0; i < messages.length; i++) {
+      const one: OpenClawChatMessage = messages[i]
+      const content: string = one.content.trim()
+      if (content.length <= 0) continue
+      if (one.role === 'system') {
+        systemParts.push(content)
+        continue
+      }
+      const who: string = one.role === 'assistant' ? '助手' : '用户'
+      convoParts.push(`${who}：${content}`)
+    }
+    const blocks: Array<string> = []
+    if (systemParts.length > 0) blocks.push(systemParts.join('\n\n'))
+    if (convoParts.length > 0) blocks.push(convoParts.join('\n'))
+    return blocks.join('\n\n').trim()
+  }
+
+  private static ensureOpenClawWsSessionKey(state: Page4GatewayState): string {
+    const existing: string = String(state.openClawWsSessionKey ?? '').trim()
+    if (existing.length > 0) return existing
+    const key: string = `agent:main:direct:page4-${Date.now()}`
+    state.openClawWsSessionKey = key
+    return key
+  }
+}

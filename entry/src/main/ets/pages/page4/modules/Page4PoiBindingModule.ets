@@ -1,4 +1,5 @@
 import fs from '@ohos.file.fs'
+import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export type Page4PlaceRole = 'home' | 'company'
 
@@ -68,8 +69,7 @@ export class Page4PoiBindingModule {
       if (one.name === '物流中心' || one.name === '快递点') continue
       dynamicAliases.push(`${one.name}->${one.destNodeId}`)
     }
-    const extraText: string = dynamicAliases.length > 0 ? `；自定义别名=${dynamicAliases.join('，')}` : ''
-    return `点位映射(${nodes.length}个节点)：\n${lines.join('\n')}\n物流中心/快递点：${formatPlaceBinding('home')}，${formatPlaceBinding('company')}${extraText}`
+    return Page4ReplyText.poiMappingSummary(lines, formatPlaceBinding('home'), formatPlaceBinding('company'), dynamicAliases)
   }
 
   static exportPoiMappingsToFile(
@@ -111,9 +111,7 @@ export class Page4PoiBindingModule {
   }
 
   static placeRoleText(role: '' | Page4PlaceRole): string {
-    if (role === 'home') return '物流中心'
-    if (role === 'company') return '快递点'
-    return '目标点位'
+    return Page4ReplyText.placeRoleText(role)
   }
 
   static parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
@@ -151,8 +149,7 @@ export class Page4PoiBindingModule {
   }
 
   static formatPlaceBinding(role: Page4PlaceRole, node: string, isValidNode: (id: string) => boolean): string {
-    const roleText: string = this.placeRoleText(role)
     const up: string = node.trim().toUpperCase()
-    return isValidNode(up) ? `${roleText}=${up}` : `${roleText}=未设置`
+    return Page4ReplyText.formatPlaceBinding(role, up, isValidNode(up))
   }
 }

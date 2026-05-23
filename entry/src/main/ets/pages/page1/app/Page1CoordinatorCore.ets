@@ -1189,6 +1189,10 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     }
   }
 
+  async jianchaconncet():Promise<void>{
+    const seq: number = await this.proto.connect()
+  }
+
   async sendTrafficLightByMapEdge(edgeId: string, dir: string | number): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return

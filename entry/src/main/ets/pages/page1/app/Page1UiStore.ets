@@ -1595,7 +1595,7 @@ export class Page1UiStore {
     }
   }
 
-  batteryPct: number = 87
+  batteryPct: number = 68
   logs: Array<string> = []
 
   // 统一日志入口：带毫秒时间戳，最多保留最近 60 条

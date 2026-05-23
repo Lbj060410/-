@@ -135,6 +135,7 @@ export class AStarPathPlanner {
 
     // 第一步：由目标点向外扩散，构建势场（distanceMap）
     //1.扩散数据结构的初始化：确定波源、准备容器，并配置初始状态
+    const a:Map<string,number>=new Map()
     const distanceMap: Map<string, number> = new Map()
     const queue: Array<string> = [goal]
     let head = 0

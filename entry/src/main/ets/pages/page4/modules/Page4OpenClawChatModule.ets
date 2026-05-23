@@ -15,21 +15,25 @@ export interface Page4OpenClawAnswerDeps {
   readTimeoutMs: () => number
   model: string
   pushAssistant: (text: string, typed?: boolean) => void
+  beginStreamingAssistant?: () => string
+  updateStreamingAssistant?: (msgId: string, text: string) => void
+  finishStreamingAssistant?: (msgId: string, text: string) => void
+  cancelStreamingAssistant?: (msgId: string) => void
   logInfo: (name: string, message: string) => void
   logError: (name: string, message: string) => void
 }
 
 export class Page4OpenClawChatModule {
-  static async answerByOpenClaw(deps: Page4OpenClawAnswerDeps): Promise<void> {
+  static async answerByOpenClaw(deps: Page4OpenClawAnswerDeps): Promise<boolean> {
     const tokenCandidates: Array<string> = deps.resolveTokenCandidates()
     if (tokenCandidates.length <= 0) {
       deps.pushAssistant('OpenClaw token 为空，请在 DeviceNetworkConfig.ets 配置 OPENCLAW_GATEWAY_TOKEN。')
-      return
+      return false
     }
     const hosts: Array<string> = deps.resolveHosts()
     if (hosts.length <= 0) {
       deps.pushAssistant('未检测到 OpenClaw 主机地址。请在 DeviceNetworkConfig.ets 设置 OPENCLAW_GATEWAY_HOST。')
-      return
+      return false
     }
     const reqMessages: Array<OpenClawChatMessage> = deps.buildOpenClawMessages()
     deps.setAssistantBusy(true)
@@ -37,6 +41,8 @@ export class Page4OpenClawChatModule {
       deps.setAssistantBusy(false)
       deps.pushAssistant('查询超时（45秒），请稍后重试。')
     }, 60000)
+    let streamMsgId: string = ''
+    let streamUpdated: boolean = false
     try {
       const connectTimeoutMs: number = deps.connectTimeoutMs()
       const readTimeoutMs: number = deps.readTimeoutMs()
@@ -48,24 +54,55 @@ export class Page4OpenClawChatModule {
         tokenCandidates,
         connectTimeoutMs,
         readTimeoutMs,
-        deps.model
+        deps.model,
+        {
+          onStarted: (_runId: string): void => {
+            if (!deps.beginStreamingAssistant) return
+            if (streamMsgId.length > 0) return
+            streamMsgId = deps.beginStreamingAssistant()
+          },
+          onDelta: (text: string, _runId: string): void => {
+            if (!deps.beginStreamingAssistant || !deps.updateStreamingAssistant) return
+            if (streamMsgId.length <= 0) streamMsgId = deps.beginStreamingAssistant()
+            streamUpdated = true
+            deps.updateStreamingAssistant(streamMsgId, text)
+          }
+        }
       )
       deps.applyGatewayState(rs.state)
       if (rs.ok) {
         deps.clearManagedTimer(timeoutId)
-        deps.logInfo('sendOpenClawSuccess', `chars=${rs.text.length}`)
+        const answerText: string = this.ensureVisibleReasoningText(rs.text)
+        deps.logInfo('sendOpenClawSuccess', `chars=${answerText.length}`)
         deps.setAssistantBusy(false)
-        deps.pushAssistant(rs.text, true)
-        return
+        if (streamMsgId.length > 0 && streamUpdated && deps.finishStreamingAssistant) {
+          deps.finishStreamingAssistant(streamMsgId, answerText)
+        } else {
+          if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
+          deps.pushAssistant(answerText, false)
+        }
+        return true
       }
+      if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
       deps.logError('sendOpenClawAllFailed', rs.error.length > 0 ? rs.error : 'unknown')
     } catch (e) {
+      if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
       const msg: string = e instanceof Error ? e.message : 'unknown error'
       deps.logError('sendOpenClawException', msg)
     } finally {
       deps.clearManagedTimer(timeoutId)
       deps.setAssistantBusy(false)
     }
+    return false
+  }
+
+  static ensureVisibleReasoningText(text: string): string {
+    const body: string = text.trim()
+    if (body.length <= 0) return body
+    if (body.indexOf('思考过程') >= 0 || body.indexOf('最终回答') >= 0 || body.indexOf('结论') >= 0) {
+      return body
+    }
+    return `思考过程：我正在结合当前地图、链路状态和你的指令做判断。\n最终回答：${body}`
   }
 
   static parsePlaceBindingPlanText(text: string): Page4PlaceBindingPlan | undefined {
@@ -102,3 +139,4 @@ export class Page4OpenClawChatModule {
     return s.trim()
   }
 }
+

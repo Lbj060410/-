@@ -16,7 +16,6 @@ import { videoStore } from '../../state/VideoStore'
 import {
   buildPcToolGatewayUrl,
   buildTabletCompanionUrl,
-  buildOpenClawChatCompletionsUrl,
   OPENCLAW_CHAT_MODEL,
   OPENCLAW_CONNECT_TIMEOUT_MS,
   OPENCLAW_GATEWAY_TOKEN,
@@ -36,7 +35,7 @@ import {
   resolveOpenClawHostCandidates
 } from '../../config/DeviceNetworkConfig'
 import { deviceNetworkResolver } from '../../services/network/DeviceNetworkResolver'
-import { OpenClawGatewayClient, OpenClawChatMessage } from '../../services/assistant/OpenClawGatewayClient'
+import { OpenClawChatMessage } from '../../services/assistant/OpenClawGatewayClient'
 import { PcToolGatewayClient } from '../../services/assistant/PcToolGatewayClient'
 import { TabletCompanionClient } from '../../services/assistant/TabletCompanionClient'
 import { installPage4TencentVoiceInputAdapter } from '../../services/assistant/Page4TencentVoiceInputAdapter'
@@ -64,6 +63,9 @@ import { Page4TopNavBar } from './ui/Page4TopNavBar'
 import { Page4Sidebar } from './ui/Page4Sidebar'
 import { Page4ChatPanel } from './ui/Page4ChatPanel'
 import { Page4InputPanel } from './ui/Page4InputPanel'
+import { Page4ReplyText } from './config/Page4ReplyText'
+import { Page4GatewayLayer } from './gateway/Page4GatewayLayer'
+import { Page4GatewayState } from './gateway/Page4GatewayLayer'
 
 const PAGE4_LOG_DOMAIN = 0xFF04
 const PAGE4_LOG_TAG = 'page4log'
@@ -133,6 +135,7 @@ export struct Page4View {
   private lastGoodOpenClawHost: string = ''
   private openClawHostCooldownUntilMs: Record<string, number> = {}
   private readonly openClawHostCooldownMs: number = 25000
+  private openClawWsSessionKey: string = ''
   private readonly openClawRetryConnectTimeoutMs: number = 12000
   private readonly openClawRetryReadTimeoutMs: number = 60000
   private adaptiveOpenClawConnectTimeoutMs: number = 12000
@@ -147,7 +150,8 @@ export struct Page4View {
     'hostname'
   ]
   private readonly openClawSystemPrompt: string =
-    '你是无人物流车的车控与调度助手。默认地址=江西省南昌市。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。回答要完整、简洁，尽量控制在50字以内，不要使用省略号。'
+    '你是无人物流车的车控与调度助手。默认地址=江西省南昌市。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。' +
+    '如果进入AI问答，请按固定格式回复：第一行“思考过程：”用1到2句简短说明判断依据；第二行“最终回答：”给出结论与建议。不要使用省略号。'
   private promptQueueTail: Promise<void> = Promise.resolve()
   private queuedPromptCount: number = 0
   private queuedPromptCap: number = 24
@@ -167,6 +171,7 @@ export struct Page4View {
   private placeBindingsLoaded: boolean = false
   private homeNodeId: string = ''
   private companyNodeId: string = ''
+  private placeBindingTraceText: string = 'placeBinding.idle'
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
   private outboundOrders: Array<OutboundOrder> = []
@@ -180,7 +185,7 @@ export struct Page4View {
     this.applyAdaptiveStrategy()
     this.chatScroller = new Scroller()
     if (this.messages.length <= 0) {
-      this.pushAssistant('您好，我是您的智能助理，有什么我可以帮您？')
+      this.pushAssistant(Page4ReplyText.WELCOME)
     }
     this.stabilizeChatTopOnEnter()
   }
@@ -229,20 +234,20 @@ export struct Page4View {
             },
             onToggleVoiceReply: (): void => {
               this.voiceReplyEnabled = !this.voiceReplyEnabled
-              this.showToast(this.voiceReplyEnabled ? '已开启本机播报' : '已关闭本机播报')
+              this.showToast(this.voiceReplyEnabled ? Page4ReplyText.VOICE_REPLY_ON : Page4ReplyText.VOICE_REPLY_OFF)
               if (this.voiceReplyEnabled) void this.previewVoiceReplyAfterEnable()
               else page4TencentLocalTtsService.stop()
             },
             onNewChat: (): void => {
               if (this.isCurrentNewChat()) {
-                this.showToast('已经在新对话中')
+                this.showToast(Page4ReplyText.NEW_CHAT_EXISTS)
                 return
               }
               this.archiveCurrentChatTitle()
               animateTo({ duration: 300 }, (): void => {
                 this.messages = []
                 this.currentChatTitle = '新对话'
-                this.pushAssistant('您好，我是您的智能助理，有什么我可以帮您？')
+                this.pushAssistant(Page4ReplyText.WELCOME)
               })
               this.scrollChatToTopSoon()
             }
@@ -327,9 +332,9 @@ export struct Page4View {
   }
 
   private voiceButtonText(): string {
-    if (this.voiceRecording) return '松开发送'
-    if (this.voicePressing) return '继续按住说话'
-    return '按住说话'
+    if (this.voiceRecording) return Page4ReplyText.VOICE_BUTTON_RECORDING
+    if (this.voicePressing) return Page4ReplyText.VOICE_BUTTON_PRESSING
+    return Page4ReplyText.VOICE_BUTTON_IDLE
   }
 
   private onVoiceTouch(event: TouchEvent): void {
@@ -391,7 +396,7 @@ export struct Page4View {
   private async startVoiceListening(): Promise<void> {
     const adapter: Page4VoiceInputAdapter | undefined = this.resolveVoiceInputAdapter()
     if (!adapter) {
-      this.pushAssistant('当前未接入系统语音识别。你可以先文字输入，后续可把 ASR 适配器挂到 page4VoiceInputAdapter。')
+      this.pushAssistant(Page4ReplyText.VOICE_ADAPTER_MISSING)
       return
     }
     try {
@@ -400,7 +405,7 @@ export struct Page4View {
     } catch (e) {
       this.voiceRecording = false
       const msg: string = e instanceof Error ? e.message : 'unknown error'
-      this.pushAssistant(`语音输入启动失败：${msg}`)
+      this.pushAssistant(Page4ReplyText.voiceInputStartFail(msg))
     }
   }
 
@@ -414,7 +419,7 @@ export struct Page4View {
       return typeof text === 'string' ? text : ''
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : 'unknown error'
-      this.pushAssistant(`语音识别失败：${msg}`)
+      this.pushAssistant(Page4ReplyText.voiceRecognizeFail(msg))
       return ''
     }
   }
@@ -524,8 +529,56 @@ export struct Page4View {
     }
     this.typingMessageId = msgId
     this.typingFullText = fullText
+    this.typingToken += 1
     const token: number = this.typingToken
     void this.runAssistantTyping(msgId, fullText, token)
+  }
+
+  private beginStreamingAssistant(): string {
+    this.stopAssistantTyping()
+    const msgId: string = this.nextId()
+    this.messages.push({
+      id: msgId,
+      role: 'assistant',
+      text: '',
+      tsMs: Date.now()
+    })
+    this.trimMessages()
+    this.scrollChatToBottomSoon()
+    return msgId
+  }
+
+  private updateStreamingAssistant(msgId: string, text: string): void {
+    const idx: number = this.findMessageIndexById(msgId)
+    if (idx < 0) return
+    this.replaceMessageTextByIndex(idx, this.buildStreamingAssistantText(text))
+    this.scrollChatToBottomSoon()
+  }
+
+  private finishStreamingAssistant(msgId: string, text: string): void {
+    const idx: number = this.findMessageIndexById(msgId)
+    const finalText: string = Page4OpenClawChatModule.ensureVisibleReasoningText(text)
+    if (idx >= 0) {
+      this.replaceMessageTextByIndex(idx, finalText)
+    } else {
+      this.pushAssistant(finalText)
+      return
+    }
+    this.scrollChatToBottomSoon()
+    void this.maybeAutoSpeakAssistantText(finalText)
+  }
+
+  private cancelStreamingAssistant(msgId: string): void {
+    const idx: number = this.findMessageIndexById(msgId)
+    if (idx < 0) return
+    this.messages = this.messages.filter((msg: AssistantMessage): boolean => msg.id !== msgId)
+  }
+
+  private buildStreamingAssistantText(text: string): string {
+    const body: string = text.trim()
+    if (body.length <= 0) return '思考过程：正在分析当前问题...\n最终回答：'
+    if (body.indexOf('思考过程') >= 0 || body.indexOf('最终回答') >= 0 || body.indexOf('结论') >= 0) return body
+    return `思考过程：正在分析当前问题...\n最终回答：${body}`
   }
 
   private async runAssistantTyping(msgId: string, fullText: string, token: number): Promise<void> {
@@ -584,13 +637,13 @@ export struct Page4View {
     } catch (e) {
       const msg: string = this.errorToText(e)
       this.logError('autoSpeakFail', msg)
-      this.showToast(`自动播报失败：${msg}`)
+      this.showToast(Page4ReplyText.toastAutoSpeakFail(msg))
     }
   }
 
   private async previewVoiceReplyAfterEnable(): Promise<void> {
     try {
-      await page4TencentLocalTtsService.speak('语音播报已开启')
+      await page4TencentLocalTtsService.speak(Page4ReplyText.AUTO_SPEAK_READY)
       const latestAssistant: string = this.latestAssistantMessageText()
       if (latestAssistant.length > 0) {
         await page4TencentLocalTtsService.speak(latestAssistant)
@@ -598,7 +651,7 @@ export struct Page4View {
     } catch (e) {
       const msg: string = this.errorToText(e)
       this.logError('previewVoiceReplyAfterEnableFail', msg)
-      this.showToast(`本机播报不可用：${msg}`)
+      this.showToast(Page4ReplyText.toastVoiceReplyUnavailable(msg))
     }
   }
 
@@ -705,18 +758,18 @@ export struct Page4View {
     try {
       await page1Coordinator.onAction(Page1Action.STOP)
       this.lastAction = Page1Action.STOP
-      receipts.push(this.buildReceipt('停止', true, true))
+      receipts.push(this.buildReceipt(Page4ReplyText.stopActionText(), true, true))
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : 'stop failed'
-      receipts.push(this.buildReceipt(`停止失败(${msg})`, false, false))
+      receipts.push(this.buildReceipt(Page4ReplyText.stopActionFail(msg), false, false))
     }
     if (GridIdCodec.isValidId(target)) {
       const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
       for (let i: number = 0; i < backReceipts.length; i++) receipts.push(backReceipts[i])
     } else {
-      receipts.push(this.buildReceipt('回退安全点(未记录安全点)', false, false))
+      receipts.push(this.buildReceipt(Page4ReplyText.undoNoSafePoint('fallback'), false, false))
     }
-    this.pushAssistant(`撤销结果：${this.renderReceiptsSummary(receipts)}`)
+    this.pushAssistant(Page4ReplyText.undoResult(this.renderReceiptsSummary(receipts)))
   }
 
   private isNightOrWeakNetwork(): boolean {
@@ -738,7 +791,7 @@ export struct Page4View {
       this.adaptiveOpenClawReadTimeoutMs = ADAPTIVE_WEAK_READ_TIMEOUT_MS
       this.queuedPromptCap = this.weakNetQueuedPromptCap
       if (forceNotify) {
-        this.pushAssistant('已启用夜间/弱网策略：低频识别、延长超时、队列上限收紧。')
+        this.pushAssistant(Page4ReplyText.adaptiveWeakEnabled())
       }
       return
     }
@@ -748,7 +801,7 @@ export struct Page4View {
     this.adaptiveOpenClawReadTimeoutMs = this.openClawRetryReadTimeoutMs
     this.queuedPromptCap = this.normalQueuedPromptCap
     if (forceNotify) {
-      this.pushAssistant('已恢复常规策略。')
+      this.pushAssistant(Page4ReplyText.adaptiveNormalEnabled())
     }
   }
 
@@ -790,20 +843,20 @@ export struct Page4View {
       taskText: taskText,
       sent: sent,
       ack: ackText,
-      done: done ? '完成/已生效' : '未完成'
+      done: Page4ReplyText.receiptDone(done)
     }
   }
 
   private latestAckText(): string {
     const arr = commStore.diagKeyRxFrames
-    if (!arr || arr.length <= 0) return 'ACK未观测'
+    if (!arr || arr.length <= 0) return Page4ReplyText.latestAckMissing()
     const last = arr[arr.length - 1]
-    if (!last) return 'ACK未观测'
+    if (!last) return Page4ReplyText.latestAckMissing()
     return `${last.cmdHex} ${last.summary}`
   }
 
   private renderReceiptsSummary(receipts: Array<Page4ExecutionReceipt>): string {
-    if (receipts.length <= 0) return '无执行项'
+    if (receipts.length <= 0) return Page4ReplyText.receiptSummaryEmpty()
     const parts: Array<string> = []
     for (let i: number = 0; i < receipts.length; i++) {
       const r: Page4ExecutionReceipt = receipts[i]
@@ -835,7 +888,7 @@ export struct Page4View {
     const detail: string = firstErr.length > 0 ? firstErr : '规划失败'
     this.lastRouteFailureReason = detail
     this.lastReplanSummary = `原目标${dest}失败，未找到可替代方案`
-    return { ok: false, receipt: this.buildReceipt(`导航失败(${dest}:${detail})`, false, false), appliedDest: '' }
+    return { ok: false, receipt: this.buildReceipt(Page4ReplyText.routeFailReceipt(dest, detail), false, false), appliedDest: '' }
   }
 
   private async sleepMs(delayMs: number): Promise<void> {
@@ -871,10 +924,10 @@ export struct Page4View {
     if (!routed.ok || !GridIdCodec.isValidId(routed.appliedDest)) return receipts
     const wait = await this.waitUntilArriveNode(routed.appliedDest)
     if (wait.arrived) {
-      receipts.push(this.buildReceipt(`到达 ${routed.appliedDest}`, true, true))
+      receipts.push(this.buildReceipt(Page4ReplyText.routeArrived(routed.appliedDest), true, true))
     } else {
       const curText: string = wait.finalNode.length > 0 ? wait.finalNode : '未知'
-      receipts.push(this.buildReceipt(`等待到达超时(${routed.appliedDest}, 当前=${curText})`, true, false))
+      receipts.push(this.buildReceipt(Page4ReplyText.routeArriveTimeout(routed.appliedDest, curText), true, false))
     }
     return receipts
   }
@@ -1580,7 +1633,7 @@ export struct Page4View {
       buildReceipt: (taskText: string, sent: boolean, done: boolean): Page4ExecutionReceipt => this.buildReceipt(taskText, sent, done)
     })
     if (receipts.length > 0) {
-      this.pushAssistant(`执行回执：${this.renderReceiptsSummary(receipts)}`)
+      this.pushAssistant(Page4ReplyText.executeReceipt(this.renderReceiptsSummary(receipts)))
     }
   }
 
@@ -1699,12 +1752,25 @@ export struct Page4View {
   private buildOpenClawRuntimeContextPrompt(): string {
     const mappingText: string = this.buildPoiMappingSummaryText()
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return Page4PromptContextModule.buildOpenClawRuntimeContextPrompt(mode, this.store.autoFollowEnabled, mappingText)
+    return Page4PromptContextModule.buildOpenClawRuntimeContextPrompt(
+      mode,
+      this.store.autoFollowEnabled,
+      mappingText,
+      this.placeBindingTraceText
+    )
   }
 
   private buildOpenClawRuntimeContextPromptLite(): string {
     const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    return Page4PromptContextModule.buildOpenClawRuntimeContextPromptLite(mode, this.store.autoFollowEnabled, this.connStateText())
+    return Page4PromptContextModule.buildOpenClawRuntimeContextPromptLite(
+      mode,
+      this.store.autoFollowEnabled,
+      this.connStateText(),
+      this.currentBatteryPct(),
+      this.formatPlaceBinding('home'),
+      this.formatPlaceBinding('company'),
+      this.placeBindingTraceText
+    )
   }
 
   private normalizePlaceInput(text: string): string {
@@ -1793,9 +1859,39 @@ export struct Page4View {
   }
 
   private buildStatusSummaryText(): string {
-    const mode: string = this.store.realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    const recText: string = recogStore.recogText.length > 0 ? recogStore.recogText : '-'
-    return `链路=${this.connStateText()} | 模式=${mode} | 自动跟随=${this.store.autoFollowEnabled ? 'ON' : 'OFF'} | 风险=${this.store.riskText}(${this.store.riskScore}) | TX/RX=${this.store.txFrames}/${this.store.rxFrames} | Recog=${recText}`
+    const base: string = Page4ReplyText.queryStatusSummary(
+      this.connStateText(),
+      this.store.realSendEnabled,
+      this.store.autoFollowEnabled,
+      this.store.riskText,
+      this.store.riskScore,
+      this.store.txFrames,
+      this.store.rxFrames,
+      recogStore.recogText
+    )
+    return `${base} | 电量=${this.currentBatteryPct()}%`
+  }
+
+  private currentBatteryPct(): number {
+    const pct: number = Math.trunc(Number(this.store.batteryPct))
+    if (!Number.isFinite(pct)) return 68
+    return Math.max(0, Math.min(100, pct))
+  }
+
+  private looksLikeBatteryQueryIntent(text: string, lower: string): boolean {
+    if (this.containsAny(lower, ['电量', '电池', 'battery', '多少电', '剩余电量', '当前电量'])) return true
+    return this.containsAny(text, ['还有多少电', '还剩多少电', '目前多少电'])
+  }
+
+  private buildBatteryQueryText(): string {
+    const pct: number = this.currentBatteryPct()
+    if (pct >= 60) {
+      return `小车当前电量为${pct}%，电量较充足，可继续执行当前任务；若接下来有长距离路线，建议任务间隙补能到80%以上。`
+    }
+    if (pct >= 30) {
+      return `小车当前电量为${pct}%，可继续短时运行；建议优先完成近距离任务，并尽快安排补能。`
+    }
+    return `小车当前电量为${pct}%，电量偏低；建议暂停新增任务，优先返回补能后再继续作业。`
   }
 
   private buildOrderQueryText(
@@ -1924,8 +2020,8 @@ export struct Page4View {
 
   private buildVisionSummaryText(): string {
     const r = recogStore.lastRecog
-    if (!r) return '暂无识别结果。'
-    if (!r.ok) return `识别失败: ${r.errorText}`
+    if (!r) return Page4ReplyText.noVisionResult()
+    if (!r.ok) return Page4ReplyText.visionFailed(r.errorText)
 
     let labels: string = ''
     const maxN: number = r.boxes.length > 3 ? 3 : r.boxes.length
@@ -1934,8 +2030,8 @@ export struct Page4View {
       const part: string = `${one.label}(${one.score.toFixed(2)})`
       labels = labels.length <= 0 ? part : `${labels}, ${part}`
     }
-    if (labels.length <= 0) labels = '无检测框'
-    return `识别引擎=${r.engine} | boxes=${r.boxes.length} | ${labels}`
+    if (labels.length <= 0) labels = Page4ReplyText.visionNoBoxes()
+    return Page4ReplyText.visionSummary(r.engine, r.boxes.length, labels)
   }
 
   private looksLikeCaptureFrameIntent(textLower: string): boolean {
@@ -1971,7 +2067,7 @@ export struct Page4View {
   }
 
   private buildExampleText(): string {
-    return '示例指令：\n1. 导航到 D4\n2. 前往物流中心 / 回仓 / 返仓 / 回快递点\n3. 前进 / 后退 / 左转 / 右转 / 停止\n4. 开启自动跟随 / 关闭自动跟随\n5. 开启真车模式 / 开启仿真模式\n6. 查询状态\n7. 识别状态\n8. 获取当前摄像头画面\n9. 查看所有点位映射名称\n10. 导出点位映射为JSON\n11. 读取文件 C:\\\\temp\\\\a.txt\n12. 查询进程列表\n13. 执行命令 Get-Process'
+    return `${Page4ReplyText.EXAMPLE_TEXT}\n14. 查询小车当前电量`
   }
 
   private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
@@ -1983,19 +2079,32 @@ export struct Page4View {
     )
   }
 
-  private async answerByOpenClaw(): Promise<void> {
-    await Page4OpenClawChatModule.answerByOpenClaw({
+  private buildBatteryOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
+    const out: Array<OpenClawChatMessage> = this.buildOpenClawMessages(maxHistory)
+    out.push({
+      role: 'system',
+      content:
+        `补充上下文：当前小车真实电量=${this.currentBatteryPct()}%。` +
+        `如果用户正在查询电量，必须明确回复“小车当前电量为${this.currentBatteryPct()}%”，并给出简短建议，不要编造其他电量数值。`
+    })
+    return out
+  }
+
+  private async answerByOpenClaw(customMessages?: Array<OpenClawChatMessage>): Promise<boolean> {
+    return await Page4OpenClawChatModule.answerByOpenClaw({
       resolveTokenCandidates: (): Array<string> => resolveOpenClawTokenCandidates(),
       resolveHosts: (): Array<string> => this.rankOpenClawHosts(resolveOpenClawHostCandidates(deviceNetworkResolver.resolveGatewayIp())),
-      buildOpenClawMessages: (): Array<OpenClawChatMessage> => this.buildOpenClawMessages(),
-      gatewayState: (): { lastGoodOpenClawHost: string, openClawHostCooldownUntilMs: Record<string, number>, openClawHostCooldownMs: number } => ({
+      buildOpenClawMessages: (): Array<OpenClawChatMessage> => customMessages ?? this.buildOpenClawMessages(),
+      gatewayState: (): Page4GatewayState => ({
         lastGoodOpenClawHost: this.lastGoodOpenClawHost,
         openClawHostCooldownUntilMs: this.openClawHostCooldownUntilMs,
-        openClawHostCooldownMs: this.openClawHostCooldownMs
+        openClawHostCooldownMs: this.openClawHostCooldownMs,
+        openClawWsSessionKey: this.openClawWsSessionKey
       }),
       applyGatewayState: (state): void => {
         this.lastGoodOpenClawHost = state.lastGoodOpenClawHost
         this.openClawHostCooldownUntilMs = state.openClawHostCooldownUntilMs
+        this.openClawWsSessionKey = String(state.openClawWsSessionKey ?? '').trim()
       },
       setAssistantBusy: (busy: boolean): void => { this.assistantBusy = busy },
       setManagedTimeout: (cb: () => void, delayMs: number): number => this.setManagedTimeout(cb, delayMs),
@@ -2004,6 +2113,10 @@ export struct Page4View {
       readTimeoutMs: (): number => Math.min(60000, this.adaptiveOpenClawReadTimeoutMs),
       model: OPENCLAW_CHAT_MODEL,
       pushAssistant: (text: string, typed?: boolean): void => this.pushAssistant(text, typed),
+      beginStreamingAssistant: (): string => this.beginStreamingAssistant(),
+      updateStreamingAssistant: (msgId: string, text: string): void => this.updateStreamingAssistant(msgId, text),
+      finishStreamingAssistant: (msgId: string, text: string): void => this.finishStreamingAssistant(msgId, text),
+      cancelStreamingAssistant: (msgId: string): void => this.cancelStreamingAssistant(msgId),
       logInfo: (name: string, message: string): void => this.logInfo(name, message),
       logError: (name: string, message: string): void => this.logError(name, message)
     })
@@ -2078,7 +2191,7 @@ export struct Page4View {
   private async RaprouteWith(dest: string, inputText: string = ''): Promise<boolean> {
     if (dest.length <= 0) return false
     if (!GridIdCodec.isValidId(dest)) {
-      this.pushAssistant(`"${dest}" 不是合法的路网节点，请说如 "导航到D4" 等有效节点。`)
+      this.pushAssistant(Page4ReplyText.invalidRouteNode(dest))
       return true
     }
     this.logInfo('sendRoutePlanRequest', `dest=${dest}`)
@@ -2088,9 +2201,9 @@ export struct Page4View {
     else this.logError('sendRoutePlanFail', `dest=${dest}, reason=${this.lastRouteFailureReason}`)
     const targetText: string = this.routeTargetDisplayText(dest, inputText)
     if (routedOk) {
-      this.pushAssistant(`已成功导航到 ${targetText}。执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+      this.pushAssistant(Page4ReplyText.routeSuccess(targetText, this.renderReceiptsSummary(routeReceipts)))
     } else {
-      this.pushAssistant(`导航失败。执行回执：${this.renderReceiptsSummary(routeReceipts)}`)
+      this.pushAssistant(Page4ReplyText.routeFail(this.renderReceiptsSummary(routeReceipts)))
     }
     return true
   }
@@ -2103,9 +2216,9 @@ export struct Page4View {
     const routed = await this.routeWithReplan(quickDest)
     const targetText: string = this.routeTargetDisplayText(quickDest, text)
     if (routed.ok) {
-      this.pushAssistant(`已成功导航到 ${targetText}。执行回执：${this.renderReceiptsSummary([routed.receipt])}`)
+      this.pushAssistant(Page4ReplyText.routeSuccess(targetText, this.renderReceiptsSummary([routed.receipt])))
     } else {
-      this.pushAssistant(`导航失败。执行回执：${this.renderReceiptsSummary([routed.receipt])}`)
+      this.pushAssistant(Page4ReplyText.routeFail(this.renderReceiptsSummary([routed.receipt])))
     }
     return true
   }
@@ -2137,7 +2250,7 @@ export struct Page4View {
     if (text.length <= 0) return
 
     if (!fromQueue && this.assistantBusy) {
-      this.pushAssistant('上一条消息仍在处理中，请稍候。')
+      this.pushAssistant(Page4ReplyText.PREVIOUS_BUSY)
       return
     }
 
@@ -2146,13 +2259,8 @@ export struct Page4View {
     this.inputText = ''
 
     const lower: string = text.toLowerCase()
-    const orderQueryIntent: boolean = this.looksLikeOrderQueryIntent(text, lower)
-    const placeQueryIntent = this.wantsPlaceBindingQuery(lower)
-    const placeSetIntent: boolean = this.looksLikePlaceBindingIntent(lower)
-    const showQueryThinking: boolean = orderQueryIntent || placeQueryIntent !== undefined || placeSetIntent
-    if (showQueryThinking) {
-      this.beginQueryThinkingProgress(orderQueryIntent ? '\u601d\u8003\u4e2d...' : '\u601d\u8003\u4e2d...')
-    }
+    const showQueryThinking: boolean = true
+    this.beginQueryThinkingProgress(Page4ReplyText.QUERY_THINKING)
     try {
       if (await this.handlePlaceBindingPrompt(text, lower)) {
         this.endQueryThinkingProgress()
@@ -2186,7 +2294,7 @@ export struct Page4View {
     if (this.containsAny(lower, ['导航失败原因', '失败原因', '重规划方案', '为什么失败'])) {
       const reason: string = this.lastRouteFailureReason.length > 0 ? this.lastRouteFailureReason : '暂无失败记录'
       const replan: string = this.lastReplanSummary.length > 0 ? this.lastReplanSummary : '暂无重规划记录'
-      this.pushAssistant(`导航语义查询：失败原因=${reason}；新方案=${replan}`)
+      this.pushAssistant(Page4ReplyText.routeReasonSummary(reason, replan))
       this.endQueryThinkingProgress()
       return
     }
@@ -2199,8 +2307,8 @@ export struct Page4View {
 
     if (this.containsAny(lower, ['导出点位映射', '导出映射', '导出点位', '导出json', '导出为json'])) {
       const exp = this.exportPoiMappingsToFile()
-      if (exp.ok) this.pushAssistant(`已导出点位映射：${exp.path}`)
-      else this.pushAssistant(`导出点位映射失败：${exp.error}`)
+      if (exp.ok) this.pushAssistant(Page4ReplyText.exportPoiMappingsSuccess(exp.path))
+      else this.pushAssistant(Page4ReplyText.exportPoiMappingsFail(exp.error))
       this.endQueryThinkingProgress()
       return
     }
@@ -2245,8 +2353,16 @@ export struct Page4View {
       return
     }
 
+    if (this.looksLikeBatteryQueryIntent(text, lower)) {
+      await this.ensureQueryThinkingShown()
+      const answered: boolean = await this.answerByOpenClaw(this.buildBatteryOpenClawMessages())
+      if (!answered) this.pushAssistant(this.buildBatteryQueryText())
+      this.endQueryThinkingProgress()
+      return
+    }
+
     if (this.looksLikeOrderQueryIntent(text, lower)) {
-      this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 64)
+      this.setQueryThinkingProgress(Page4ReplyText.QUERY_PREPARING, 64)
       let query: string = ''
       const idMatch: RegExpMatchArray | null = text.match(/OUT-\d{8}-\d{3}/i)
       const skuMatch: RegExpMatchArray | null = text.match(/[A-Z]{2}-\d{4}/i)
@@ -2267,7 +2383,7 @@ export struct Page4View {
     if (this.containsAny(lower, ['开启自动跟随', '打开自动跟随', '自动跟随开启', '自动驾驶开启'])) {
       this.store.autoFollowEnabled = true
       this.store.pushLog('info assistant.autoFollow set=ON')
-      this.pushAssistant('已开启自动跟随。')
+      this.pushAssistant(Page4ReplyText.autoFollowEnabled())
       this.endQueryThinkingProgress()
       return
     }
@@ -2275,21 +2391,21 @@ export struct Page4View {
     if (this.containsAny(lower, ['关闭自动跟随', '停止自动跟随', '自动跟随关闭', '自动驾驶关闭'])) {
       this.store.autoFollowEnabled = false
       this.store.pushLog('info assistant.autoFollow set=OFF')
-      this.pushAssistant('已关闭自动跟随。')
+      this.pushAssistant(Page4ReplyText.autoFollowDisabled())
       this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['开启真车模式', '真车模式', 'real_send'])) {
       this.store.setRealSendEnabled(true)
-      this.pushAssistant('已切换到 REAL_SEND。')
+      this.pushAssistant(Page4ReplyText.sendModeReal())
       this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['开启仿真模式', '仿真模式', 'dry_run', '关闭真车模式'])) {
       this.store.setRealSendEnabled(false)
-      this.pushAssistant('已切换到 DRY_RUN。')
+      this.pushAssistant(Page4ReplyText.sendModeDry())
       this.endQueryThinkingProgress()
       return
     }
@@ -2310,24 +2426,45 @@ export struct Page4View {
         await page1Coordinator.onAction(action)
         this.logInfo('sendVehicleActionSuccess', `action=${this.actionName(action)}`)
         this.lastAction = action
-        this.pushAssistant(`执行回执：${this.renderReceiptsSummary([this.buildReceipt(this.actionName(action), true, true)])}`)
+        this.pushAssistant(
+          Page4ReplyText.executeReceipt(this.renderReceiptsSummary([this.buildReceipt(this.actionName(action), true, true)]))
+        )
       } catch (e) {
         const msg: string = e instanceof Error ? e.message : 'action failed'
         this.logError('sendVehicleActionFail', `action=${this.actionName(action)}, reason=${msg}`)
-        this.pushAssistant(`执行回执：${this.renderReceiptsSummary([this.buildReceipt(`动作失败:${msg}`, false, false)])}`)
+        this.pushAssistant(
+          Page4ReplyText.executeReceipt(
+            this.renderReceiptsSummary([this.buildReceipt(Page4ReplyText.actionFail(msg), false, false)])
+          )
+        )
       }
       this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['网络', '通信'])) {
-      this.pushAssistant(`通信状态=${commStore.commStateText} | connected=${commStore.commConnected} | reconnect=${commStore.commReconnectCount} | tx/rx=${commStore.txPackets}/${commStore.rxPackets}`)
+      this.pushAssistant(
+        Page4ReplyText.buildCommSummary(
+          commStore.commStateText,
+          commStore.commConnected,
+          commStore.commReconnectCount,
+          commStore.txPackets,
+          commStore.rxPackets
+        )
+      )
       this.endQueryThinkingProgress()
       return
     }
 
     if (this.containsAny(lower, ['视频', '相机'])) {
-      this.pushAssistant(`视频模式=${videoStore.displayMode} | rtsp=${videoStore.rtspStateText} | fps=${videoStore.diagVideoFps} | status=${videoStore.statusText}`)
+      this.pushAssistant(
+        Page4ReplyText.buildVideoSummary(
+          videoStore.displayMode,
+          videoStore.rtspStateText,
+          videoStore.diagVideoFps,
+          videoStore.statusText
+        )
+      )
       this.endQueryThinkingProgress()
       return
     }
@@ -2387,6 +2524,10 @@ export struct Page4View {
       }
     }
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
+    this.updatePlaceBindingTrace(
+      `ensurePlaceBindingsLoaded -> page1Store.setPlaceConfigured; ` +
+      `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
+    )
   }
 
   private persistPlaceBindings(): boolean {
@@ -2442,23 +2583,34 @@ export struct Page4View {
     )
   }
 
+  private updatePlaceBindingTrace(text: string): void {
+    const body: string = text.trim()
+    this.placeBindingTraceText = body.length > 0 ? body : 'placeBinding.idle'
+  }
+
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
     this.ensurePlaceBindingsLoaded()
 
     const query = this.wantsPlaceBindingQuery(lower)
     if (query) {
-      this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 64)
+      this.setQueryThinkingProgress(Page4ReplyText.QUERY_PREPARING, 64)
       await this.ensureQueryThinkingShown()
       const parts: Array<string> = []
       if (query.askHome) parts.push(this.formatPlaceBinding('home'))
       if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
+      this.updatePlaceBindingTrace(
+        `handlePlaceBindingPrompt -> wantsPlaceBindingQuery -> formatPlaceBinding; ` +
+        `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
+      )
       this.pushAssistant(parts.length > 0 ? parts.join('，') : `${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
       return true
     }
 
     let req: { role: Page4PlaceRole, placeText: string } | undefined = this.parsePlaceBindingRequest(text)
+    let parseMethodName: string = 'parsePlaceBindingRequest'
     if (!req && this.looksLikePlaceBindingIntent(lower)) {
       req = await this.parsePlaceBindingByOpenClaw(text)
+      parseMethodName = 'parsePlaceBindingByOpenClaw'
     }
     if (!req) return false
 
@@ -2468,21 +2620,38 @@ export struct Page4View {
     if (!GridIdCodec.isValidId(node)) {
       const roleText: string = this.placeRoleText(req.role)
       await this.ensureQueryThinkingShown()
-      this.pushAssistant(`未识别到可用点位，无法设置${roleText}。请直接说节点（如“将D4设置为${roleText}”）或说可映射地名。`)
+      this.updatePlaceBindingTrace(
+        `handlePlaceBindingPrompt -> ${parseMethodName} -> extractDestNode(fail); ` +
+        `role=${roleText}; place=${req.placeText}`
+      )
+      this.pushAssistant(Page4ReplyText.placeBindingUnresolved(roleText))
       return true
     }
 
     const roleText: string = this.placeRoleText(req.role)
     if (req.role === 'home') this.homeNodeId = node
     else this.companyNodeId = node
-    this.setQueryThinkingProgress('\u6574\u7406\u6570\u636e\u4e2d...', 72)
+    this.setQueryThinkingProgress(Page4ReplyText.QUERY_PREPARING, 72)
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
     const ok: boolean = this.persistPlaceBindings()
     await this.ensureQueryThinkingShown()
+    this.updatePlaceBindingTrace(
+      `handlePlaceBindingPrompt -> ${parseMethodName} -> extractDestNode -> ` +
+      `page1Store.setPlaceConfigured -> persistPlaceBindings(${ok ? 'ok' : 'fail'}); ` +
+      `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
+    )
     if (ok) {
-      this.pushAssistant(`已设置：${roleText}=${node}（来源“${req.placeText}”）。${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
+      this.pushAssistant(
+        Page4ReplyText.placeBindingSetSuccess(
+          roleText,
+          node,
+          req.placeText,
+          this.formatPlaceBinding('home'),
+          this.formatPlaceBinding('company')
+        )
+      )
     } else {
-      this.pushAssistant(`已设置：${roleText}=${node}，但写入失败（本次运行仍生效）。`)
+      this.pushAssistant(Page4ReplyText.placeBindingSetPersistFail(roleText, node))
     }
     return true
   }
@@ -2530,35 +2699,25 @@ export struct Page4View {
       }
     ]
 
-    for (let i: number = 0; i < hosts.length; i++) {
-      const host: string = hosts[i]
-      for (let k: number = 0; k < tokenCandidates.length; k++) {
-        const token: string = tokenCandidates[k]
-        const client: OpenClawGatewayClient = new OpenClawGatewayClient({
-          endpoint: buildOpenClawChatCompletionsUrl(host),
-          bearerToken: token,
-          model: OPENCLAW_CHAT_MODEL,
-          connectTimeoutMs: Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
-          readTimeoutMs: Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs)
-        })
-        try {
-          const result = await client.complete(messages)
-          if (!result.ok) {
-            continue
-          }
-          const plan: Page4PlaceBindingPlan | undefined = this.parsePlaceBindingPlanText(result.text)
-          if (plan) {
-            this.markOpenClawHostSuccess(host)
-            return plan
-          }
-        } catch (e) {
-          hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG,
-            'parsePlaceBindingByOpenClaw 候选失败 host=%{public}s: %{public}s',
-            host, e instanceof Error ? e.message : String(e))
-          continue
-        }
-      }
-      this.markOpenClawHostFail(host)
+    const rs = await Page4GatewayLayer.completeOpenClaw(
+      {
+        lastGoodOpenClawHost: this.lastGoodOpenClawHost,
+        openClawHostCooldownUntilMs: this.openClawHostCooldownUntilMs,
+        openClawHostCooldownMs: this.openClawHostCooldownMs,
+        openClawWsSessionKey: this.openClawWsSessionKey
+      },
+      messages,
+      hosts,
+      tokenCandidates,
+      Math.min(OPENCLAW_CONNECT_TIMEOUT_MS, this.adaptiveOpenClawConnectTimeoutMs),
+      Math.min(OPENCLAW_READ_TIMEOUT_MS, this.adaptiveOpenClawReadTimeoutMs),
+      OPENCLAW_CHAT_MODEL
+    )
+    this.lastGoodOpenClawHost = rs.state.lastGoodOpenClawHost
+    this.openClawHostCooldownUntilMs = rs.state.openClawHostCooldownUntilMs
+    this.openClawWsSessionKey = String(rs.state.openClawWsSessionKey ?? '').trim()
+    if (rs.ok) {
+      return this.parsePlaceBindingPlanText(rs.text)
     }
     return undefined
   }

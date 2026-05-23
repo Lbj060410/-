@@ -1,3 +1,5 @@
+import { Page4ReplyText } from '../config/Page4ReplyText'
+
 export class Page4VoiceUiModule {
   static resolveVoiceInputAdapter(root: Record<string, Object | undefined>): {
     startListening: () => void | Promise<void>,
@@ -10,10 +12,14 @@ export class Page4VoiceUiModule {
     if (!adapter) return undefined
     if (typeof adapter.startListening !== 'function') return undefined
     if (typeof adapter.stopListening !== 'function') return undefined
-    return { startListening: adapter.startListening, stopListening: adapter.stopListening }
+    return {
+      // 保留原实例作为调用方，避免类方法脱离实例后丢失 this。
+      startListening: (): void | Promise<void> => adapter.startListening!(),
+      stopListening: (): string | Promise<string> => adapter.stopListening!()
+    }
   }
 
   static voiceHintText(): string {
-    return '语音输入方式：按住说话，松开后自动发送识别文本。'
+    return Page4ReplyText.VOICE_HINT
   }
 }

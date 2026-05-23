@@ -18,6 +18,7 @@ import { ControlPanel } from './components/ControlPanel'
 import { ReplayReviewPanel } from './components/ReplayReviewPanel'
 
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
+import { CarProtocolService } from '../../services/control/CarProtocolService'
 
 @Component
 export struct Page1View {
@@ -297,6 +298,17 @@ export struct Page1View {
                 .border({ width: 1, color: MORE_PANEL.BORDER })
                 .onClick((): void => {
                   void page1Coordinator.presetFourByUi()
+                })
+
+              Button('检查连接')
+                .width('100%')
+                .height(MORE_PANEL.BTN_HEIGHT)
+                .borderRadius(MORE_PANEL.BTN_RADIUS)
+                .backgroundColor(MORE_PANEL.BG)
+                .fontColor(MORE_PANEL.FG)
+                .border({ width: 1, color: MORE_PANEL.BORDER })
+                .onClick((): void => {
+                  void page1Coordinator.jianchaconncet()
                 })
             }
             .width('30%')

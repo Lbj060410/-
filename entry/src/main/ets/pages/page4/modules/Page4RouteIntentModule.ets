@@ -1,4 +1,5 @@
 import { Page4ExecutionReceipt } from './Page4RouteExecutionModule'
+import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export class Page4RouteIntentModule {
   static async routeByDest(
@@ -26,8 +27,8 @@ export class Page4RouteIntentModule {
     if (routedOk) deps.logInfo('sendRoutePlanSuccess', `dest=${dest}`)
     else deps.logError('sendRoutePlanFail', `dest=${dest}, reason=${deps.getLastRouteFailureReason()}`)
     const targetText: string = deps.routeTargetDisplayText(dest, inputText)
-    if (routedOk) deps.pushAssistant(`已成功导航到 ${targetText}。执行回执：${deps.renderReceiptsSummary(routeReceipts)}`)
-    else deps.pushAssistant(`导航失败。执行回执：${deps.renderReceiptsSummary(routeReceipts)}`)
+    if (routedOk) deps.pushAssistant(Page4ReplyText.routeSuccess(targetText, deps.renderReceiptsSummary(routeReceipts)))
+    else deps.pushAssistant(Page4ReplyText.routeFail(deps.renderReceiptsSummary(routeReceipts)))
     return true
   }
 
@@ -48,8 +49,8 @@ export class Page4RouteIntentModule {
     deps.logInfo('quickRouteShortcut', `dest=${quickDest}`)
     const routed = await deps.routeWithReplan(quickDest)
     const targetText: string = deps.routeTargetDisplayText(quickDest, text)
-    if (routed.ok) deps.pushAssistant(`已成功导航到 ${targetText}。执行回执：${deps.renderReceiptsSummary([routed.receipt])}`)
-    else deps.pushAssistant(`导航失败。执行回执：${deps.renderReceiptsSummary([routed.receipt])}`)
+    if (routed.ok) deps.pushAssistant(Page4ReplyText.routeSuccess(targetText, deps.renderReceiptsSummary([routed.receipt])))
+    else deps.pushAssistant(Page4ReplyText.routeFail(deps.renderReceiptsSummary([routed.receipt])))
     return true
   }
 }

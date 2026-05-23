@@ -1,4 +1,4 @@
-{
+﻿{
   "meta": {
     "lastTouchedVersion": "2026.3.13",
     "lastTouchedAt": "2026-04-21T12:20:08.789Z"
@@ -18,8 +18,8 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "deepseek-chat",
-            "name": "DeepSeek Chat",
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
             "reasoning": false,
             "input": [
               "text"
@@ -40,7 +40,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "deepseek/deepseek-chat"
+        "primary": "deepseek/deepseek-v4-flash"
       },
       "workspace": "F:\\openclaw-main\\openclaw-main\\workspace",
       "contextPruning": {
@@ -72,7 +72,7 @@
     "port": 18789,
     "mode": "local",
     "bind": "lan",
-    "customBindHost": "192.168.156.102",
+    "customBindHost": "192.168.156.101",
     "controlUi": {
       "enabled": false,
       "allowedOrigins": [
@@ -107,3 +107,4 @@
     }
   }
 }
+

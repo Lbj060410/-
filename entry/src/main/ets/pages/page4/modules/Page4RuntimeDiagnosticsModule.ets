@@ -1,4 +1,5 @@
 import { RecognitionResult } from '../../../services/recognition/RecognitionResult'
+import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export interface OutboundOrder {
   orderId: string
@@ -39,9 +40,16 @@ export class Page4RuntimeDiagnosticsModule {
     rxFrames: number,
     recogText: string
   ): string {
-    const mode: string = realSendEnabled ? 'REAL_SEND' : 'DRY_RUN'
-    const recText: string = recogText.length > 0 ? recogText : '-'
-    return `链路=${connStateText} | 模式=${mode} | 自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'} | 风险=${riskText}(${riskScore}) | TX/RX=${txFrames}/${rxFrames} | Recog=${recText}`
+    return Page4ReplyText.queryStatusSummary(
+      connStateText,
+      realSendEnabled,
+      autoFollowEnabled,
+      riskText,
+      riskScore,
+      txFrames,
+      rxFrames,
+      recogText
+    )
   }
 
   static buildOrderQueryText(
@@ -62,10 +70,7 @@ export class Page4RuntimeDiagnosticsModule {
       const productUp: string = one.productName.toUpperCase()
       if (idUp.indexOf(q) >= 0 || skuUp.indexOf(q) >= 0 || productUp.indexOf(q) >= 0) matched.push(one)
     }
-    if (matched.length <= 0) {
-      if (statusNeed.length > 0) return `订单查询：未找到匹配记录（状态=${statusNeed}，关键词=${queryText}）`
-      return `订单查询：未找到匹配记录（关键词=${queryText}）`
-    }
+    if (matched.length <= 0) return Page4ReplyText.orderQueryNoMatch(queryText, statusNeed)
     const parseRecordTimeMs = (x: OutboundOrder): number => {
       const recordIso: string = x.createTime.replace(' ', 'T')
       const recordMs: number = Date.parse(recordIso)
@@ -91,15 +96,29 @@ export class Page4RuntimeDiagnosticsModule {
       if (s === '已出库' || s === '已发货') shipped += 1
     }
 
-    let title: string = '订单查询结果'
-    if (mode === 'earliest') title = '订单查询结果（最早）'
-    if (mode === 'latest') title = '订单查询结果（最新）'
-    if (statusNeed.length > 0) title = `${title}（状态=${statusNeed}）`
-    let body: string = `${title}(${out.length}条，匹配总数=${matched.length})：待拣货=${pendingPick}，拣货中=${picking}，待复核=${pendingCheck}，已出库/已发货=${shipped}\n`
+    const title: string = Page4ReplyText.orderQueryTitle(mode, statusNeed)
+    let body: string = Page4ReplyText.orderQueryHeader(
+      title,
+      out.length,
+      matched.length,
+      pendingPick,
+      picking,
+      pendingCheck,
+      shipped
+    )
     for (let i: number = 0; i < out.length; i++) {
       const one: OutboundOrder = out[i]
       const idx: number = i + 1
-      body += `${idx}. ${one.orderId} | SKU=${one.skuCode} | ${one.productName} | 数量=${one.quantity} | 区域=${one.zone} | 状态=${one.status} | 创建=${one.createTime}`
+      body += Page4ReplyText.orderQueryLine(
+        idx,
+        one.orderId,
+        one.skuCode,
+        one.productName,
+        one.quantity,
+        one.zone,
+        one.status,
+        one.createTime
+      )
       if (i < out.length - 1) body += '\n'
     }
     return body
@@ -118,8 +137,8 @@ export class Page4RuntimeDiagnosticsModule {
   }
 
   static buildVisionSummaryText(lastRecog: RecognitionResult | undefined): string {
-    if (!lastRecog) return '暂无识别结果。'
-    if (!lastRecog.ok) return `识别失败: ${lastRecog.errorText}`
+    if (!lastRecog) return Page4ReplyText.noVisionResult()
+    if (!lastRecog.ok) return Page4ReplyText.visionFailed(lastRecog.errorText)
     let labels: string = ''
     const maxN: number = lastRecog.boxes.length > 3 ? 3 : lastRecog.boxes.length
     for (let i: number = 0; i < maxN; i++) {
@@ -127,7 +146,7 @@ export class Page4RuntimeDiagnosticsModule {
       const part: string = `${one.label}(${one.score.toFixed(2)})`
       labels = labels.length <= 0 ? part : `${labels}, ${part}`
     }
-    if (labels.length <= 0) labels = '无检测框'
-    return `识别引擎=${lastRecog.engine} | boxes=${lastRecog.boxes.length} | ${labels}`
+    if (labels.length <= 0) labels = Page4ReplyText.visionNoBoxes()
+    return Page4ReplyText.visionSummary(lastRecog.engine, lastRecog.boxes.length, labels)
   }
 }

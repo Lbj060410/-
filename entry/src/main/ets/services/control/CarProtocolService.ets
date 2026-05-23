@@ -343,6 +343,11 @@ export class CarProtocolService {
   async PresetFour(): Promise<number> {
     return await this.Send0C(0x15, undefined, false)
   }
+//检查连接
+  async connect(): Promise<number> {
+    return await this.Send0C(0x16, undefined, false)
+  }
+
 
   // 一键清图
   async  resetNetworkMap(): Promise<number> {

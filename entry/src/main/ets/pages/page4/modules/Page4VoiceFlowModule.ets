@@ -1,3 +1,5 @@
+import { Page4ReplyText } from '../config/Page4ReplyText'
+
 export interface Page4VoiceFlowDeps {
   longPressTimerId: number
   longPressThresholdMs: number
@@ -32,7 +34,7 @@ export class Page4VoiceFlowModule {
     if (!deps.voiceRecording) return { voicePressing: false }
     const asrText: string = await deps.stopVoiceListening()
     if (asrText.trim().length <= 0) {
-      deps.pushAssistant('未识别到语音内容，请重试。')
+      deps.pushAssistant(Page4ReplyText.voiceNotRecognized())
       return { voicePressing: false, voiceRecording: false }
     }
     const clauses: Array<string> = deps.splitPromptToClauses(asrText)
@@ -40,7 +42,7 @@ export class Page4VoiceFlowModule {
       await deps.enqueuePrompt(asrText, 'voice')
       return { voicePressing: false, voiceRecording: false }
     }
-    deps.pushAssistant(`已识别多句指令，共${clauses.length}条，开始顺序执行。`)
+    deps.pushAssistant(Page4ReplyText.voiceMultiClauseRecognized(clauses.length))
     for (let i: number = 0; i < clauses.length; i++) await deps.enqueuePrompt(clauses[i], 'voice')
     return { voicePressing: false, voiceRecording: false }
   }

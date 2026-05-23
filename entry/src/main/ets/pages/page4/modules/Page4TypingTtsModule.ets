@@ -1,4 +1,5 @@
 import { AssistantMessage, Page4SessionModule } from './Page4SessionModule'
+import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export interface Page4TypingState {
   typingMessageId: string
@@ -87,7 +88,7 @@ export class Page4TypingTtsModule {
     } catch (e) {
       const msg: string = hooks.errorToText(e as Object)
       hooks.logError('autoSpeakFail', msg)
-      hooks.showToast(`自动播报失败：${msg}`)
+      hooks.showToast(Page4ReplyText.toastAutoSpeakFail(msg))
     }
   }
 
@@ -96,7 +97,7 @@ export class Page4TypingTtsModule {
     hooks: Page4AutoSpeakHooks
   ): Promise<void> {
     try {
-      await hooks.speak('语音播报已开启')
+      await hooks.speak(Page4ReplyText.AUTO_SPEAK_READY)
       const latestAssistant: string = latestAssistantMessageText.trim()
       if (latestAssistant.length > 0) {
         await hooks.speak(latestAssistant)
@@ -104,7 +105,7 @@ export class Page4TypingTtsModule {
     } catch (e) {
       const msg: string = hooks.errorToText(e as Object)
       hooks.logError('previewVoiceReplyAfterEnableFail', msg)
-      hooks.showToast(`本机播报不可用：${msg}`)
+      hooks.showToast(Page4ReplyText.toastVoiceReplyUnavailable(msg))
     }
   }
 }

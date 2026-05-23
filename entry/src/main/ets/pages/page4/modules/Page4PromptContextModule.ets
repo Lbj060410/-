@@ -5,12 +5,25 @@ export class Page4PromptContextModule {
     return text.trim().toUpperCase().replace(/[，。！？、；：,.!?\-_/\\()\[\]\s]/g, '')
   }
 
-  static buildOpenClawRuntimeContextPrompt(mode: string, autoFollowEnabled: boolean, mappingText: string): string {
-    return `系统上下文：默认地址=江西省南昌市；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n语义约定：home=物流中心，company=快递点。`
+  static buildOpenClawRuntimeContextPrompt(
+    mode: string,
+    autoFollowEnabled: boolean,
+    mappingText: string,
+    placeBindingTraceText: string
+  ): string {
+    return `系统上下文：默认地址=江西省南昌市；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n方法轨迹：${placeBindingTraceText}\n语义约定：home=物流中心，company=快递点。`
   }
 
-  static buildOpenClawRuntimeContextPromptLite(mode: string, autoFollowEnabled: boolean, connStateText: string): string {
-    return `系统上下文：默认地址=江西省南昌市；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；链路=${connStateText}。`
+  static buildOpenClawRuntimeContextPromptLite(
+    mode: string,
+    autoFollowEnabled: boolean,
+    connStateText: string,
+    batteryPct: number,
+    homeBindingText: string,
+    companyBindingText: string,
+    placeBindingTraceText: string
+  ): string {
+    return `系统上下文：默认地址=江西省南昌市；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；链路=${connStateText}；当前小车电量=${batteryPct}%；物流中心=${homeBindingText}；快递点=${companyBindingText}；方法轨迹=${placeBindingTraceText}。`
   }
 
   static buildOpenClawMessages(

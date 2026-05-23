@@ -229,6 +229,7 @@ export class Page4TencentLocalTtsService {
   private readonly playerCacheDir: string = '/data/storage/el2/base/haps/entry/cache/page4_tts'
   private queue: Promise<void> = Promise.resolve()
   private speakSeq: number = 0
+  private stopToken: number = 0
   private activePlayer?: media.AVPlayer
   private readonly maxSpeakCharsPerChunk: number = 120
   private readonly ttsConnectTimeoutMs: number = 12000
@@ -240,53 +241,54 @@ export class Page4TencentLocalTtsService {
     const content: string = this.normalizeText(text)
     if (content.length <= 0) return Promise.resolve()
     const seq: number = ++this.speakSeq
+    const stopTokenAtEnqueue: number = this.stopToken
     this.logInfo('speakStart', `seq=${seq}, chars=${content.length}`)
-    this.interruptActivePlayback()
     this.queue = this.queue.catch((): void => {}).then(async (): Promise<void> => {
-      if (seq !== this.speakSeq) return
+      if (stopTokenAtEnqueue !== this.stopToken) return
+      // 队列是串行的，新播报不应主动打断上一条；只在显式 stop() 时取消。
       const chunks: Array<string> = this.splitToSpeakChunks(content)
       this.logInfo('speakChunks', `seq=${seq}, chunks=${chunks.length}`)
-      await this.speakPipeline(chunks, seq)
+      await this.speakPipeline(chunks, seq, stopTokenAtEnqueue)
     })
     return this.queue
   }
 
   stop(): void {
-    this.speakSeq += 1
+    this.stopToken += 1
     this.interruptActivePlayback()
   }
 
-  private async speakPipeline(chunks: Array<string>, seq: number): Promise<void> {
+  private async speakPipeline(chunks: Array<string>, seq: number, stopTokenAtEnqueue: number): Promise<void> {
     if (chunks.length <= 0) return
     const cfg: TtsRequestConfig = this.getConfigOrThrow()
 
-    let nextPromise: Promise<string> | undefined = this.synthChunkToFile(cfg, chunks[0], seq)
+    let nextPromise: Promise<string> | undefined = this.synthChunkToFile(cfg, chunks[0], seq, stopTokenAtEnqueue)
     for (let i: number = 0; i < chunks.length; i++) {
-      if (seq !== this.speakSeq) return
+      if (stopTokenAtEnqueue !== this.stopToken) return
       const currentPromise: Promise<string> = nextPromise as Promise<string>
       if (i + 1 < chunks.length) {
-        nextPromise = this.synthChunkToFile(cfg, chunks[i + 1], seq)
+        nextPromise = this.synthChunkToFile(cfg, chunks[i + 1], seq, stopTokenAtEnqueue)
       } else {
         nextPromise = undefined
       }
       const filePath: string = await currentPromise
-      if (seq !== this.speakSeq || filePath.length <= 0) return
+      if (stopTokenAtEnqueue !== this.stopToken || filePath.length <= 0) return
       try {
-        await this.playFileWithRetry(filePath, seq)
+        await this.playFileWithRetry(filePath, seq, stopTokenAtEnqueue)
       } finally {
         this.cleanupAudioFile(filePath)
       }
     }
   }
 
-  private async playFileWithRetry(path: string, seq: number): Promise<void> {
+  private async playFileWithRetry(path: string, seq: number, stopTokenAtEnqueue: number): Promise<void> {
     let lastErrorText: string = 'unknown error'
     const maxAttempts: number = 1 + this.ttsPlayRetryTimes
     let avoidFdFallback: boolean = false
     for (let attempt: number = 1; attempt <= maxAttempts; attempt++) {
-      if (seq !== this.speakSeq) return
+      if (stopTokenAtEnqueue !== this.stopToken) return
       try {
-        await this.playFile(path, seq, avoidFdFallback)
+        await this.playFile(path, seq, stopTokenAtEnqueue, avoidFdFallback)
         return
       } catch (e) {
         lastErrorText = this.errorToText(e)
@@ -307,10 +309,15 @@ export class Page4TencentLocalTtsService {
     throw new Error(lastErrorText)
   }
 
-  private async synthChunkToFile(cfg: TtsRequestConfig, text: string, seq: number): Promise<string> {
-    if (seq !== this.speakSeq) return ''
+  private async synthChunkToFile(
+    cfg: TtsRequestConfig,
+    text: string,
+    seq: number,
+    stopTokenAtEnqueue: number
+  ): Promise<string> {
+    if (stopTokenAtEnqueue !== this.stopToken) return ''
     const audioBytes: Uint8Array = await this.requestByV3(cfg, text)
-    if (seq !== this.speakSeq) return ''
+    if (stopTokenAtEnqueue !== this.stopToken) return ''
     return this.writeAudioFile(audioBytes)
   }
 
@@ -519,8 +526,13 @@ export class Page4TencentLocalTtsService {
     }
   }
 
-  private async playFile(path: string, seq: number, avoidFdFallback: boolean = false): Promise<void> {
-    if (seq !== this.speakSeq) return
+  private async playFile(
+    path: string,
+    seq: number,
+    stopTokenAtEnqueue: number,
+    avoidFdFallback: boolean = false
+  ): Promise<void> {
+    if (stopTokenAtEnqueue !== this.stopToken) return
     const player: media.AVPlayer = await media.createAVPlayer()
     this.activePlayer = player
     let usePath: string = path
@@ -545,7 +557,7 @@ export class Page4TencentLocalTtsService {
       let ended: boolean = false
       const onStateChange = (state: string): void => {
         this.logInfo('playState', `seq=${seq}, state=${state}`)
-        if (seq !== this.speakSeq) {
+        if (stopTokenAtEnqueue !== this.stopToken) {
           finish(true)
           return
         }
