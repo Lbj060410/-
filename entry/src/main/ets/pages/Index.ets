@@ -30,6 +30,7 @@ struct Index {
   @State private showFloatingNav: boolean = false
   @State private showSplash: boolean = true
   private splashHardTimeoutId: number = -1
+  private splashFinishDelayId: number = -1
 
   aboutToAppear(): void {
     try {
@@ -59,6 +60,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.clearSplashHardTimeout()
+    this.clearSplashFinishDelay()
   }
 
   private restorePlaceConfiguredOnAppEnter(): void {
@@ -127,7 +129,11 @@ struct Index {
             .autoPlay(true)
             .onFinish((): void => {
               this.clearSplashHardTimeout()
-              this.showSplash = false
+              this.clearSplashFinishDelay()
+              this.splashFinishDelayId = setTimeout((): void => {
+                this.splashFinishDelayId = -1
+                this.showSplash = false
+              }, 1000) as number
             })
             .onError((): void => {
               this.skipSplashNow()
@@ -154,6 +160,7 @@ struct Index {
   private skipSplashNow(): void {
     if (!this.showSplash) return
     this.clearSplashHardTimeout()
+    this.clearSplashFinishDelay()
     this.showSplash = false
   }
 
@@ -161,6 +168,13 @@ struct Index {
     if (this.splashHardTimeoutId >= 0) {
       clearTimeout(this.splashHardTimeoutId)
       this.splashHardTimeoutId = -1
+    }
+  }
+
+  private clearSplashFinishDelay(): void {
+    if (this.splashFinishDelayId >= 0) {
+      clearTimeout(this.splashFinishDelayId)
+      this.splashFinishDelayId = -1
     }
   }
 
