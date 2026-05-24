@@ -83,7 +83,7 @@ export interface LocationFusionDecision {
 /**
  * 地名配置管理器
  */
-export class PoiMappingConfig {
+export class PoiMap {
   private static readonly POI_MAPPINGS: Array<PoiMapping> = [
     {
       node: 'B2',
@@ -118,20 +118,20 @@ export class PoiMappingConfig {
   ]
 
   static getPoiMappings(): Array<PoiMapping> {
-    return PoiMappingConfig.POI_MAPPINGS.map((item) => ({
+    return PoiMap.POI_MAPPINGS.map((item) => ({
       node: item.node,
       aliases: [...item.aliases],
       geoFence: { ...item.geoFence }
     }))
   }
 
-  static getNodeByName(name: string): string | undefined {
+  static getNode(name: string): string | undefined {
     const input = (name || '').trim()
     if (input.length <= 0) {
       return undefined
     }
 
-    const mappings = PoiMappingConfig.getPoiMappings()
+    const mappings = PoiMap.getPoiMappings()
     for (let mapping of mappings) {
       if (input.toUpperCase() === mapping.node) {
         return mapping.node
@@ -147,7 +147,7 @@ export class PoiMappingConfig {
 
   static getMappingByNode(nodeId: string): PoiMapping | undefined {
     const node = (nodeId || '').toUpperCase()
-    return PoiMappingConfig.POI_MAPPINGS.find((item) => item.node === node)
+    return PoiMap.POI_MAPPINGS.find((item) => item.node === node)
   }
 }
 
@@ -158,7 +158,7 @@ export class LocationMappingModule {
   private mappingHistory: Array<LocationMappingResult> = []
   private baiduTraceHistory: Array<BaiduApiTrace> = []
   private fusionHistory: Array<LocationFusionDecision> = []
-  private lastRealtimeSnapshot: BaiduRealtimeLocationSnapshot | undefined = undefined
+  private Realtime: BaiduRealtimeLocationSnapshot | undefined = undefined
 
   /**
    * 主入口：接收大模型给出的地点文本，落地到本地图节点
@@ -167,7 +167,7 @@ export class LocationMappingModule {
     const traceId = this.buildId('LBS')
     const raw = userInput || ''
     const text = raw.trim()
-    const a=raw.trim()
+
 
 
     console.log(`[位置映射/${traceId}] 收到输入: "${raw}"`)
@@ -177,7 +177,6 @@ export class LocationMappingModule {
     }
 
     // 1.首先调用文本解析方法，提取用户输入中的节点编码或地名信息。若输入为节点编码，则直接匹配并返回结果
-    const d=this.extractNodeId(text)
     const directNode = this.extractNodeId(text)
     if (directNode && this.isValidNode(directNode)) {
       const result = this.successResult(directNode, `节点直达:${directNode}`)
@@ -186,18 +185,19 @@ export class LocationMappingModule {
     }
 
     // 2.若非节点编码，系统则通过本地别名配置,进行低延迟匹配，命中后直接返回对应节点
-    const localAliasNode = PoiMappingConfig.getNodeByName(text)
-    /* 3.若本地匹配未命中，系统自动调用百度地图定位接口，依次获取实时定位、逆地理编码及周边POI搜索结果，
-     并将这些数据交由 OpenClaw 智能体 进行多源信息融合决策，
-     通过四类信号进行加权评分，OpenClaw 智能体综合选出得分最高的候选节点*/
+    const localnode = PoiMap.getNode(text)
+
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)
-    this.lastRealtimeSnapshot = realtime
+    /* 3.若本地匹配未命中，系统自动调用百度地图定位接口，依次获取实时定位、逆地理编码及周边POI搜索结果，
+    并将这些数据交由 OpenClaw 智能体 进行多源信息融合决策，
+    通过四类信号进行加权评分，OpenClaw 智能体综合选出得分最高的候选节点*/
+    this.Realtime = realtime
 
     const reverse = this.callBaiduReverseGeocode(traceId, realtime)
     const pois = this.callBaiduNearbySearch(traceId, text, realtime)
 
     // 4.若融合置信度低于阈值，OpenClaw 智能体返回失败状态并清空无效结果
-    const decision = this.fuseLocationSignals(traceId, text, localAliasNode, reverse, pois, realtime)
+    const decision = this.fuseLocationSignals(traceId, text, localnode, reverse, pois, realtime)
 
     if (!decision.chosenNode || decision.confidence < 0.35) {
       this.recordFusion(
@@ -212,7 +212,7 @@ export class LocationMappingModule {
       return this.failResult('未找到可落地的网格点位')
     }
   //5.若融合成功，则将映射结果传递至扩散策略路径规划模块
-    const result = this.successResult(decision.chosenNode, decision.chosenAlias)
+     const result = this.success(decision.chosenNode)
     this.recordFusion(
       traceId,
       text,
@@ -223,7 +223,6 @@ export class LocationMappingModule {
       decision.candidates
     )
 
-    return result
   }
 
   /**
@@ -231,7 +230,7 @@ export class LocationMappingModule {
    */
   bindLocationToRealWorld(nodeId: string, realWorldInfo: any): void {
     const node = (nodeId || '').toUpperCase()
-    const mapping = PoiMappingConfig.getMappingByNode(node)
+    const mapping = PoiMap.getMappingByNode(node)
     console.log(`[位置绑定] 节点=${node}`)
     console.log(`[位置绑定] 业务信息=${JSON.stringify(realWorldInfo)}`)
 
@@ -247,10 +246,10 @@ export class LocationMappingModule {
    * 暴露给演示层：获取最近一次实时定位快照
    */
   getLastRealtimeSnapshot(): BaiduRealtimeLocationSnapshot | undefined {
-    if (!this.lastRealtimeSnapshot) {
+    if (!this.Realtime) {
       return undefined
     }
-    return { ...this.lastRealtimeSnapshot }
+    return { ...this.Realtime }
   }
 
   /**
@@ -306,7 +305,7 @@ export class LocationMappingModule {
     this.mappingHistory = []
     this.baiduTraceHistory = []
     this.fusionHistory = []
-    this.lastRealtimeSnapshot = undefined
+    this.Realtime = undefined
     console.log('[位置映射] 历史已清空')
   }
 
@@ -423,7 +422,7 @@ export class LocationMappingModule {
     realtime: BaiduRealtimeLocationSnapshot
   ): Array<BaiduPoiSearchItem> {
     const t0 = Date.now()
-    const mappings = PoiMappingConfig.getPoiMappings()
+    const mappings = PoiMap.getPoiMappings()
 
     const items: Array<BaiduPoiSearchItem> = mappings.map((item) => {
       const distance = this.haversineDistanceMeters(realtime.lat, realtime.lng, item.geoFence.lat, item.geoFence.lng)
@@ -499,14 +498,14 @@ export class LocationMappingModule {
     }
 
     // 逆地理编码信号
-    const reverseNode = PoiMappingConfig.getNodeByName(reverse.poiName)
+    const reverseNode = PoiMap.getNode(reverse.poiName)
     if (reverseNode) {
       upsertCandidate(reverseNode, 0.30 + reverse.confidence * 0.35, 'REVERSE_GEOCODE', '逆地理编码返回 POI')
     }
 
     // POI 检索信号
     for (let poi of pois) {
-      const poiNode = PoiMappingConfig.getNodeByName(poi.name)
+      const poiNode = PoiMap.getNode(poi.name)
       if (!poiNode) {
         continue
       }
@@ -528,7 +527,7 @@ export class LocationMappingModule {
 
     const best = candidates.length > 0 ? candidates[0] : undefined
     const chosenNode = best ? best.node : ''
-    const chosenMapping = chosenNode ? PoiMappingConfig.getMappingByNode(chosenNode) : undefined
+    const chosenMapping = chosenNode ? PoiMap.getMappingByNode(chosenNode) : undefined
 
     return {
       traceId: traceId,
@@ -568,7 +567,7 @@ export class LocationMappingModule {
   }
 
   private findNearestPoiByCoordinate(lat: number, lng: number): { mapping: PoiMapping, distanceM: number } {
-    const mappings = PoiMappingConfig.getPoiMappings()
+    const mappings = PoiMap.getPoiMappings()
     let best = mappings[0]
     let bestDistance = Number.MAX_SAFE_INTEGER
 
@@ -605,6 +604,10 @@ export class LocationMappingModule {
   private buildId(prefix: string): string {
     const suffix = Math.random().toString(36).slice(2, 10)
     return `${prefix}_${Date.now()}_${suffix}`
+  }
+
+  private success(decision:string){
+
   }
 }
 

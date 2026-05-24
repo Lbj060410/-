@@ -1,4 +1,5 @@
 import fs from '@ohos.file.fs'
+import { Page4Keywords } from '../config/Page4Keywords'
 import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export type Page4PlaceRole = 'home' | 'company'
@@ -66,7 +67,7 @@ export class Page4PoiBindingModule {
     for (let i: number = 0; i < aliasDict.length; i++) {
       const one: Page4AliasItem = aliasDict[i]
       if (!isValidNode(one.destNodeId)) continue
-      if (one.name === '物流中心' || one.name === '快递点') continue
+      if (one.name === Page4Keywords.PLACE_NAME_HOME || one.name === Page4Keywords.PLACE_NAME_COMPANY) continue
       dynamicAliases.push(`${one.name}->${one.destNodeId}`)
     }
     return Page4ReplyText.poiMappingSummary(lines, formatPlaceBinding('home'), formatPlaceBinding('company'), dynamicAliases)
@@ -105,8 +106,12 @@ export class Page4PoiBindingModule {
 
   static parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
     const x: string = raw.trim().toLowerCase()
-    if (x.indexOf('home') >= 0 || x.indexOf('物流中心') >= 0) return 'home'
-    if (x.indexOf('company') >= 0 || x.indexOf('快递点') >= 0 || x.indexOf('公司仓库') >= 0) return 'company'
+    if (x.indexOf('home') >= 0 || x.indexOf(Page4Keywords.PLACE_NAME_HOME) >= 0) return 'home'
+    if (
+      x.indexOf('company') >= 0 ||
+      x.indexOf(Page4Keywords.PLACE_NAME_COMPANY) >= 0 ||
+      x.indexOf(Page4Keywords.PLACE_NAME_COMPANY_ALT) >= 0
+    ) return 'company'
     return ''
   }
 
@@ -116,8 +121,7 @@ export class Page4PoiBindingModule {
 
   static parsePlaceBindingRequest(text: string): { role: Page4PlaceRole, placeText: string } | undefined {
     const src: string = text.trim()
-    const roleFirst: RegExpMatchArray | null =
-      src.match(/(?:把|将)?\s*(物流中心|快递点|公司仓库|home|company)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(.+)$/i)
+    const roleFirst: RegExpMatchArray | null = src.match(Page4Keywords.buildPlaceBindingRoleFirstRegex())
     if (roleFirst && roleFirst.length >= 3) {
       const roleRaw: string = String(roleFirst[1] ?? '')
       const placeText: string = String(roleFirst[2] ?? '').trim()
@@ -126,8 +130,7 @@ export class Page4PoiBindingModule {
       return { role, placeText }
     }
 
-    const placeFirst: RegExpMatchArray | null =
-      src.match(/(?:把|将)?\s*(.+?)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(物流中心|快递点|公司仓库|home|company)\s*$/i)
+    const placeFirst: RegExpMatchArray | null = src.match(Page4Keywords.buildPlaceBindingPlaceFirstRegex())
     if (!placeFirst || placeFirst.length < 3) return undefined
     const placeText: string = String(placeFirst[1] ?? '').trim()
     const roleRaw: string = String(placeFirst[2] ?? '')
@@ -137,14 +140,16 @@ export class Page4PoiBindingModule {
   }
 
   static wantsPlaceBindingQuery(rawLower: string, containsAny: (text: string, keys: Array<string>) => boolean): { askHome: boolean, askCompany: boolean } | undefined {
-    if (containsAny(rawLower, ['设置为', '设为', '改为', '改成', '定义为', '记为', '当成', '作为'])) {
+    if (containsAny(rawLower, Page4Keywords.PLACE_BINDING_SETTERS)) {
       return undefined
     }
-    const ask: boolean = containsAny(rawLower, ['物流中心', '快递点', '公司仓库']) &&
-      containsAny(rawLower, ['在哪', '是什么', '查询', '查看', '配置', '设置了吗', '有没有设置', '是否设置'])
+    const ask: boolean = containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_ROLES) &&
+      containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_VERBS)
     if (!ask) return undefined
-    const askHome: boolean = containsAny(rawLower, ['物流中心', 'home']) || !containsAny(rawLower, ['快递点', 'company', '公司仓库'])
-    const askCompany: boolean = containsAny(rawLower, ['快递点', 'company', '公司仓库']) || !containsAny(rawLower, ['物流中心', 'home'])
+    const askHome: boolean = containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_HOME) ||
+      !containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_COMPANY)
+    const askCompany: boolean = containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_COMPANY) ||
+      !containsAny(rawLower, Page4Keywords.PLACE_BINDING_QUERY_HOME)
     return { askHome, askCompany }
   }
 

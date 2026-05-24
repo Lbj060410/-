@@ -1,4 +1,5 @@
 import { RecognitionResult } from '../../../services/recognition/RecognitionResult'
+import { Page4Keywords } from '../config/Page4Keywords'
 import { Page4ReplyText } from '../config/Page4ReplyText'
 
 export interface OutboundOrder {
@@ -125,14 +126,16 @@ export class Page4RuntimeDiagnosticsModule {
   }
 
   static looksLikeOrderQueryIntent(text: string, lower: string, containsAny: (text: string, keys: Array<string>) => boolean): boolean {
-    const hasDomain: boolean = containsAny(lower, ['订单', '出库单', '订单记录', '拣货', '复核', '发货', '出库'])
+    const hasDomain: boolean = containsAny(lower, Page4Keywords.ORDER_QUERY_DOMAIN)
     if (!hasDomain) return false
-    const hasVerb: boolean = containsAny(lower, ['查', '查询', '查找', '查看', '看看', '给我', '列出', '统计', '记录'])
+    const hasVerb: boolean = containsAny(lower, Page4Keywords.ORDER_QUERY_VERBS)
     if (hasVerb) return true
-    if (containsAny(lower, ['已发货'])) return true
-    if (containsAny(lower, ['最早', '最晚', '最新', '全部', '所有'])) return true
-    if (text.match(/OUT-\d{8}-\d{3}/i)) return true
-    if (text.match(/[A-Z]{2}-\d{4}/i)) return true
+    if (containsAny(lower, Page4Keywords.ORDER_QUERY_STATUS_SHIPPED)) return true
+    if (containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_EARLIEST)) return true
+    if (containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_LATEST)) return true
+    if (containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_ALL)) return true
+    if (text.match(Page4Keywords.buildOrderIdRegex())) return true
+    if (text.match(Page4Keywords.buildOrderSkuRegex())) return true
     return false
   }
 

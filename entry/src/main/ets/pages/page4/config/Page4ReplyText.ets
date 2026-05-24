@@ -19,6 +19,10 @@ export class Page4ReplyText {
   static readonly EXAMPLE_TEXT: string =
     '示例指令：\n1. 导航到 D4\n2. 前往物流中心 / 回仓 / 返仓 / 回快递点\n3. 前进 / 后退 / 左转 / 右转 / 停止\n4. 开启自动跟随 / 关闭自动跟随\n5. 开启真车模式 / 开启仿真模式\n6. 查询状态\n7. 识别状态\n8. 获取当前摄像头画面\n9. 查看所有点位映射名称\n10. 导出点位映射为JSON\n11. 读取文件 C:\\\\temp\\\\a.txt\n12. 查询进程列表\n13. 执行命令 Get-Process'
 
+  static buildExampleText(): string {
+    return `${this.EXAMPLE_TEXT}\n14. 查询小车当前电量`
+  }
+
   static toastAutoSpeakFail(msg: string): string {
     return `自动播报失败：${msg}`
   }
@@ -78,7 +82,7 @@ export class Page4ReplyText {
   }
 
   static placeBindingSetSuccess(roleText: string, node: string, sourceText: string, homeText: string, companyText: string): string {
-    return `已设置：${roleText}=${node}。${homeText}，${companyText}`
+    return `已设置：${roleText}=${node}`
   }
 
   static placeBindingSetPersistFail(roleText: string, node: string): string {

@@ -1,4 +1,5 @@
 import { GridIdCodec } from '../../page1/app/PathPlannerAStar'
+import { Page4Keywords } from '../config/Page4Keywords'
 import { Page4AliasItem } from './Page4PoiBindingModule'
 
 export class Page4LocalIntentModule {
@@ -13,10 +14,7 @@ export class Page4LocalIntentModule {
   static learnAliasFromText(text: string, aliasDict: Array<Page4AliasItem>): { message: string, aliasDict: Array<Page4AliasItem> } {
     const src: string = text.trim()
     if (src.length <= 0) return { message: '', aliasDict }
-    const patterns: Array<RegExp> = [
-      /(?:把|将)\s*([^，。；;,\s]{1,16})\s*(?:记为|设为|设置为|定义为)\s*([A-Ga-g]\d{1,2})/,
-      /^([^，。；;,\s]{1,16})\s*(?:是|等于)\s*([A-Ga-g]\d{1,2})$/
-    ]
+    const patterns: Array<RegExp> = Page4Keywords.ALIAS_LEARN_PATTERNS
     for (let i: number = 0; i < patterns.length; i++) {
       const m: RegExpMatchArray | null = src.match(patterns[i])
       if (!m || m.length < 3) continue
@@ -55,7 +53,7 @@ export class Page4LocalIntentModule {
     const x: string = input.trim()
     if (x.length <= 0) return ''
     if (!GridIdCodec.isValidId(lastDestNodeId)) return ''
-    if (this.containsAny(x, ['那里', '那儿', '刚才那个点', '上一目的地', '上一个目的地', '原目的地'])) return lastDestNodeId
+    if (this.containsAny(x, Page4Keywords.CONTEXT_DEST_REFERENCES)) return lastDestNodeId
     return ''
   }
 }

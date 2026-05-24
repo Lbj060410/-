@@ -63,6 +63,7 @@ import { Page4TopNavBar } from './ui/Page4TopNavBar'
 import { Page4Sidebar } from './ui/Page4Sidebar'
 import { Page4ChatPanel } from './ui/Page4ChatPanel'
 import { Page4InputPanel } from './ui/Page4InputPanel'
+import { Page4Keywords } from './config/Page4Keywords'
 import { Page4ReplyText } from './config/Page4ReplyText'
 import { Page4GatewayLayer } from './gateway/Page4GatewayLayer'
 import { Page4GatewayState } from './gateway/Page4GatewayLayer'
@@ -1343,8 +1344,8 @@ export struct Page4View {
 
   private splitPromptToClauses(text: string): Array<string> {
     const src: string = text
-      .replace(/然后|接着|随后|并且|并且再|同时|接下来|再去|再到/g, '|')
-      .replace(/[，,；;。.!！?？\n]/g, '|')
+      .replace(Page4Keywords.buildMultiTaskConnectorRegex(), '|')
+      .replace(Page4Keywords.buildMultiTaskSeparatorRegex(), '|')
     const raw: Array<string> = src.split('|')
     const out: Array<string> = []
     for (let i: number = 0; i < raw.length; i++) {
@@ -1366,31 +1367,31 @@ export struct Page4View {
       return { kind: 'action', action: action }
     }
 
-    if (this.containsAny(lower, ['开启自动跟随', '打开自动跟随', '自动跟随开启', '自动驾驶开启'])) {
+    if (this.containsAny(lower, Page4Keywords.AUTO_FOLLOW_ON)) {
       return { kind: 'auto_follow', enabled: true }
     }
-    if (this.containsAny(lower, ['关闭自动跟随', '停止自动跟随', '自动跟随关闭', '自动驾驶关闭'])) {
+    if (this.containsAny(lower, Page4Keywords.AUTO_FOLLOW_OFF)) {
       return { kind: 'auto_follow', enabled: false }
     }
-    if (this.containsAny(lower, ['开启真车模式', '真车模式', 'real_send'])) {
+    if (this.containsAny(lower, Page4Keywords.SEND_MODE_REAL)) {
       return { kind: 'send_mode', mode: 'REAL_SEND' }
     }
-    if (this.containsAny(lower, ['开启仿真模式', '仿真模式', 'dry_run', '关闭真车模式'])) {
+    if (this.containsAny(lower, Page4Keywords.SEND_MODE_DRY)) {
       return { kind: 'send_mode', mode: 'DRY_RUN' }
     }
     if (this.looksLikeCaptureFrameIntent(lower)) {
       return { kind: 'capture_frame' }
     }
-    if (this.containsAny(lower, ['查询状态', '状态', 'status'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_STATUS)) {
       return { kind: 'query_status' }
     }
-    if (this.containsAny(lower, ['识别状态', '视觉状态', '识别结果', 'vision'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_VISION)) {
       return { kind: 'query_vision' }
     }
-    if (this.containsAny(lower, ['网络', '通信'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_COMM)) {
       return { kind: 'query_comm' }
     }
-    if (this.containsAny(lower, ['视频', '相机'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_VIDEO)) {
       return { kind: 'query_video' }
     }
 
@@ -1412,24 +1413,14 @@ export struct Page4View {
     const x: string = text.trim()
     if (x.length <= 0) return false
     if (this.splitPromptToClauses(x).length >= 2) return true
-    return this.containsAny(x, ['然后', '接着', '并且', '同时', '再', '随后', ';', '；', ',', '，'])
+    return this.containsAny(x, Page4Keywords.MULTI_TASK_MARKERS)
   }
 
   private looksLikeControlIntent(text: string, lower: string): boolean {
     if (text.trim().length <= 0) return false
     if (this.looksLikeMultiTask(text)) return true
     if (this.extractDestNode(text).length > 0) return true
-    const keywords: Array<string> = [
-      '导航', '前往', '去', '到',
-      '返仓', '回仓', '返航', '回基地', '回中心', '回物流中心', '回快递点', '回仓库', '返仓库',
-      '前进', '后退', '左转', '右转', '掉头', '停止', '急停', '刹车',
-      '自动跟随', '自动驾驶', '真车模式', '仿真模式', 'real_send', 'dry_run',
-      '撤销', '回到安全点',
-      '抓拍', '截图', '拍照', '相机', '视频',
-      '查询状态', '状态', '识别', '视觉', '通信', '网络',
-      '读取文件', '读文件', '文件内容', '进程列表', '查询进程', '执行命令', '命令行', 'process', 'read_file', 'exec_cmd'
-    ]
-    return this.containsAny(lower, keywords)
+    return this.containsAny(lower, Page4Keywords.CONTROL_INTENT)
   }
 
   private mapActionToken(actionText: string): Page1Action | undefined {
@@ -1788,11 +1779,11 @@ export struct Page4View {
     if (fromShortcut.length > 0) return fromShortcut
 
     const upper: string = input.trim().toUpperCase()
-    const m1: RegExpMatchArray | null = upper.match(/(?:导航到|前往|去|到达|前进到)\s*([A-Z]\d{1,2})/)
+    const m1: RegExpMatchArray | null = upper.match(Page4Keywords.buildRouteTargetRegex())
     if (m1 && m1.length > 1) return m1[1]
-    const antiNav: RegExpMatchArray | null = upper.match(/(?:离开|从|出发|起点|LEAVE|FROM|DEPART)\s*([A-Z]\d{1,2})/)
+    const antiNav: RegExpMatchArray | null = upper.match(Page4Keywords.buildRouteAntiSourceRegex())
     if (antiNav) return ''
-    const m2: RegExpMatchArray | null = upper.match(/\b([A-Z]\d{1,2})\b/)
+    const m2: RegExpMatchArray | null = upper.match(Page4Keywords.buildGridNodeRegex())
     if (m2 && m2.length > 1) return m2[1]
     const mapped: string = this.mapPoiNameToNode(input)
     if (mapped.length > 0) return mapped
@@ -1806,25 +1797,17 @@ export struct Page4View {
     const homeNode: string = GridIdCodec.isValidId(this.homeNodeId) ? this.homeNodeId : ''
     const companyNode: string = GridIdCodec.isValidId(this.companyNodeId) ? this.companyNodeId : ''
 
-    if (this.containsAny(raw, [
-      '前往物流中心', '去物流中心', '到物流中心', '返回物流中心', '回物流中心',
-      '返仓', '回仓', '返航', '回基地', '返回基地', '回中心'
-    ]) || this.containsAny(lower, ['go home', 'to home'])) {
+    if (this.containsAny(raw, Page4Keywords.ROUTE_HOME_SHORTCUT_RAW) ||
+      this.containsAny(lower, Page4Keywords.ROUTE_HOME_SHORTCUT_LOWER)) {
       return homeNode
     }
 
-    if (this.containsAny(raw, [
-      '前往快递点', '去快递点', '到快递点', '返回快递点', '回快递点',
-      '前往公司仓库', '去公司仓库', '到公司仓库', '返回公司仓库', '回公司仓库'
-    ]) || this.containsAny(lower, ['go company', 'to company'])) {
+    if (this.containsAny(raw, Page4Keywords.ROUTE_COMPANY_SHORTCUT_RAW) ||
+      this.containsAny(lower, Page4Keywords.ROUTE_COMPANY_SHORTCUT_LOWER)) {
       return companyNode
     }
 
-    if (this.containsAny(raw, ['返回快递点'])) {
-      return companyNode
-    }
-
-    if (this.containsAny(raw, ['前往仓库', '去仓库', '到仓库', '回仓库', '返回仓库'])) {
+    if (this.containsAny(raw, Page4Keywords.ROUTE_WAREHOUSE_SHORTCUT_RAW)) {
       if (companyNode.length > 0) return companyNode
       return homeNode
     }
@@ -1845,16 +1828,16 @@ export struct Page4View {
   }
 
   private resolveActionByText(textLower: string): Page1Action | undefined {
-    if (this.containsAny(textLower, ['再来一次', '重复上一动作', '继续刚才动作', 'repeat'])) {
+    if (this.containsAny(textLower, Page4Keywords.CONTROL_ACTION_REPEAT)) {
       return this.lastAction
     }
-    if (this.containsAny(textLower, ['紧急停止', '急停', 'scram'])) return Page1Action.SCRAM
-    if (this.containsAny(textLower, ['停止', '停车', 'stop'])) return Page1Action.STOP
-    if (this.containsAny(textLower, ['前进', '向前', 'go'])) return Page1Action.GO
-    if (this.containsAny(textLower, ['后退', '倒车', 'back'])) return Page1Action.BACK
-    if (this.containsAny(textLower, ['左转'])) return Page1Action.LEFT
-    if (this.containsAny(textLower, ['右转'])) return Page1Action.RIGHT
-    if (this.containsAny(textLower, ['掉头'])) return Page1Action.UTURN
+    if (this.containsAny(textLower, Page4Keywords.ACTION_SCRAM)) return Page1Action.SCRAM
+    if (this.containsAny(textLower, Page4Keywords.ACTION_STOP)) return Page1Action.STOP
+    if (this.containsAny(textLower, Page4Keywords.ACTION_GO)) return Page1Action.GO
+    if (this.containsAny(textLower, Page4Keywords.ACTION_BACK)) return Page1Action.BACK
+    if (this.containsAny(textLower, Page4Keywords.ACTION_LEFT)) return Page1Action.LEFT
+    if (this.containsAny(textLower, Page4Keywords.ACTION_RIGHT)) return Page1Action.RIGHT
+    if (this.containsAny(textLower, Page4Keywords.ACTION_UTURN)) return Page1Action.UTURN
     return undefined
   }
 
@@ -1879,8 +1862,8 @@ export struct Page4View {
   }
 
   private looksLikeBatteryQueryIntent(text: string, lower: string): boolean {
-    if (this.containsAny(lower, ['电量', '电池', 'battery', '多少电', '剩余电量', '当前电量'])) return true
-    return this.containsAny(text, ['还有多少电', '还剩多少电', '目前多少电'])
+    if (this.containsAny(lower, Page4Keywords.BATTERY_QUERY_LOWER)) return true
+    return this.containsAny(text, Page4Keywords.BATTERY_QUERY_TEXT)
   }
 
   private buildBatteryQueryText(): string {
@@ -2003,19 +1986,11 @@ export struct Page4View {
   }
 
   private looksLikeOrderQueryIntent(text: string, lower: string): boolean {
-    const hasDomain: boolean = this.containsAny(lower, [
-      '订单', '出库单', '订单记录', '拣货', '复核', '发货', '出库'
-    ])
-    if (!hasDomain) return false
-    const hasVerb: boolean = this.containsAny(lower, [
-      '查', '查询', '查找', '查看', '看看', '给我', '列出', '统计', '记录'
-    ])
-    if (hasVerb) return true
-    if (this.containsAny(lower, ['已发货'])) return true
-    if (this.containsAny(lower, ['最早', '最晚', '最新', '全部', '所有'])) return true
-    if (text.match(/OUT-\d{8}-\d{3}/i)) return true
-    if (text.match(/[A-Z]{2}-\d{4}/i)) return true
-    return false
+    return Page4RuntimeDiagnosticsModule.looksLikeOrderQueryIntent(
+      text,
+      lower,
+      (src: string, keys: Array<string>): boolean => this.containsAny(src, keys)
+    )
   }
 
   private buildVisionSummaryText(): string {
@@ -2035,18 +2010,7 @@ export struct Page4View {
   }
 
   private looksLikeCaptureFrameIntent(textLower: string): boolean {
-    return this.containsAny(textLower, [
-      '获取当前摄像头画面',
-      '获取当前画面',
-      '抓取当前画面',
-      '读取当前画面',
-      '保存当前画面',
-      '给我当前画面',
-      '看一下当前画面',
-      'camera frame',
-      'current frame',
-      'capture frame'
-    ])
+    return this.containsAny(textLower, Page4Keywords.CAPTURE_FRAME)
   }
 
   private displayModeText(v: number): string {
@@ -2067,7 +2031,7 @@ export struct Page4View {
   }
 
   private buildExampleText(): string {
-    return `${Page4ReplyText.EXAMPLE_TEXT}\n14. 查询小车当前电量`
+    return Page4ReplyText.buildExampleText()
   }
 
   private buildOpenClawMessages(maxHistory: number = 8): Array<OpenClawChatMessage> {
@@ -2226,11 +2190,13 @@ export struct Page4View {
   private routeTargetDisplayText(destNodeId: string, inputText: string): string {
     const raw: string = inputText.trim()
     const lower: string = raw.toLowerCase()
-    if (this.containsAny(raw, ['物流中心', '回仓', '返仓', '返航', '回基地', '回中心']) || this.containsAny(lower, ['go home', 'to home'])) {
-      return '物流中心'
+    if (this.containsAny(raw, Page4Keywords.ROUTE_TARGET_DISPLAY_HOME_RAW) ||
+      this.containsAny(lower, Page4Keywords.ROUTE_TARGET_DISPLAY_HOME_LOWER)) {
+      return Page4Keywords.PLACE_NAME_HOME
     }
-    if (this.containsAny(raw, ['快递点', '公司仓库', '回快递点', '返回快递点']) || this.containsAny(lower, ['go company', 'to company'])) {
-      return '快递点'
+    if (this.containsAny(raw, Page4Keywords.ROUTE_TARGET_DISPLAY_COMPANY_RAW) ||
+      this.containsAny(lower, Page4Keywords.ROUTE_TARGET_DISPLAY_COMPANY_LOWER)) {
+      return Page4Keywords.PLACE_NAME_COMPANY
     }
     const x: string = destNodeId.trim().toUpperCase()
     const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
@@ -2279,19 +2245,19 @@ export struct Page4View {
         return
       }
 
-    if (this.containsAny(lower, ['撤销', 'undo', '回到上一个安全点', '回到安全点'])) {
+    if (this.containsAny(lower, Page4Keywords.UNDO_QUERY)) {
       await this.undoLastActionToSafePoint()
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['夜间策略', '弱网策略', '稳态策略', '稳定策略'])) {
+    if (this.containsAny(lower, Page4Keywords.ADAPTIVE_STRATEGY_QUERY)) {
       this.applyAdaptiveStrategy(true)
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['导航失败原因', '失败原因', '重规划方案', '为什么失败'])) {
+    if (this.containsAny(lower, Page4Keywords.ROUTE_REASON_QUERY)) {
       const reason: string = this.lastRouteFailureReason.length > 0 ? this.lastRouteFailureReason : '暂无失败记录'
       const replan: string = this.lastReplanSummary.length > 0 ? this.lastReplanSummary : '暂无重规划记录'
       this.pushAssistant(Page4ReplyText.routeReasonSummary(reason, replan))
@@ -2299,13 +2265,13 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位','查看所有映射点位'])) {
+    if (this.containsAny(lower, Page4Keywords.POI_MAPPING_QUERY)) {
       this.pushAssistant(this.buildPoiMappingSummaryText())
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['导出点位映射', '导出映射', '导出点位', '导出json', '导出为json'])) {
+    if (this.containsAny(lower, Page4Keywords.EXPORT_POI_QUERY)) {
       const exp = this.exportPoiMappingsToFile()
       if (exp.ok) this.pushAssistant(Page4ReplyText.exportPoiMappingsSuccess(exp.path))
       else this.pushAssistant(Page4ReplyText.exportPoiMappingsFail(exp.error))
@@ -2329,7 +2295,7 @@ export struct Page4View {
       }
     }
 
-    if (this.containsAny(lower, ['示例', '例子', 'help', '帮助', '怎么用'])) {
+    if (this.containsAny(lower, Page4Keywords.HELP_QUERY)) {
       this.pushAssistant(this.buildExampleText())
       this.endQueryThinkingProgress()
       return
@@ -2341,13 +2307,13 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['查询状态', '状态', 'status'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_STATUS)) {
       this.pushAssistant(this.buildStatusSummaryText())
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['识别状态', '视觉状态', '识别结果', 'vision'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_VISION)) {
       this.pushAssistant(this.buildVisionSummaryText())
       this.endQueryThinkingProgress()
       return
@@ -2364,23 +2330,25 @@ export struct Page4View {
     if (this.looksLikeOrderQueryIntent(text, lower)) {
       this.setQueryThinkingProgress(Page4ReplyText.QUERY_PREPARING, 64)
       let query: string = ''
-      const idMatch: RegExpMatchArray | null = text.match(/OUT-\d{8}-\d{3}/i)
-      const skuMatch: RegExpMatchArray | null = text.match(/[A-Z]{2}-\d{4}/i)
+      const idMatch: RegExpMatchArray | null = text.match(Page4Keywords.buildOrderIdRegex())
+      const skuMatch: RegExpMatchArray | null = text.match(Page4Keywords.buildOrderSkuRegex())
       if (idMatch && idMatch.length > 0) query = idMatch[0]
       else if (skuMatch && skuMatch.length > 0) query = skuMatch[0]
       let mode: 'all' | 'earliest' | 'latest' = 'all'
-      if (this.containsAny(lower, ['最早'])) mode = 'earliest'
-      if (this.containsAny(lower, ['最晚', '最新'])) mode = 'latest'
-      if (this.containsAny(lower, ['全部', '所有'])) mode = 'all'
+      if (this.containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_EARLIEST)) mode = 'earliest'
+      if (this.containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_LATEST)) mode = 'latest'
+      if (this.containsAny(lower, Page4Keywords.ORDER_QUERY_SCOPE_ALL)) mode = 'all'
       let statusFilter: string = ''
-      if (this.containsAny(lower, ['已发货'])) statusFilter = '已发货'
+      if (this.containsAny(lower, Page4Keywords.ORDER_QUERY_STATUS_SHIPPED)) {
+        statusFilter = Page4Keywords.ORDER_STATUS_SHIPPED_TEXT
+      }
       await this.ensureQueryThinkingShown()
       this.pushAssistant(this.buildOrderQueryText(query, mode, statusFilter))
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['开启自动跟随', '打开自动跟随', '自动跟随开启', '自动驾驶开启'])) {
+    if (this.containsAny(lower, Page4Keywords.AUTO_FOLLOW_ON)) {
       this.store.autoFollowEnabled = true
       this.store.pushLog('info assistant.autoFollow set=ON')
       this.pushAssistant(Page4ReplyText.autoFollowEnabled())
@@ -2388,7 +2356,7 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['关闭自动跟随', '停止自动跟随', '自动跟随关闭', '自动驾驶关闭'])) {
+    if (this.containsAny(lower, Page4Keywords.AUTO_FOLLOW_OFF)) {
       this.store.autoFollowEnabled = false
       this.store.pushLog('info assistant.autoFollow set=OFF')
       this.pushAssistant(Page4ReplyText.autoFollowDisabled())
@@ -2396,14 +2364,14 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['开启真车模式', '真车模式', 'real_send'])) {
+    if (this.containsAny(lower, Page4Keywords.SEND_MODE_REAL)) {
       this.store.setRealSendEnabled(true)
       this.pushAssistant(Page4ReplyText.sendModeReal())
       this.endQueryThinkingProgress()
       return
     }
 
-    if (this.containsAny(lower, ['开启仿真模式', '仿真模式', 'dry_run', '关闭真车模式'])) {
+    if (this.containsAny(lower, Page4Keywords.SEND_MODE_DRY)) {
       this.store.setRealSendEnabled(false)
       this.pushAssistant(Page4ReplyText.sendModeDry())
       this.endQueryThinkingProgress()
@@ -2442,7 +2410,7 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['网络', '通信'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_COMM)) {
       this.pushAssistant(
         Page4ReplyText.buildCommSummary(
           commStore.commStateText,
@@ -2456,7 +2424,7 @@ export struct Page4View {
       return
     }
 
-    if (this.containsAny(lower, ['视频', '相机'])) {
+    if (this.containsAny(lower, Page4Keywords.QUERY_VIDEO)) {
       this.pushAssistant(
         Page4ReplyText.buildVideoSummary(
           videoStore.displayMode,
@@ -2524,10 +2492,7 @@ export struct Page4View {
       }
     }
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
-    this.updatePlaceBindingTrace(
-      `ensurePlaceBindingsLoaded -> page1Store.setPlaceConfigured; ` +
-      `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
-    )
+    this.updatePlaceBindingTrace(`bind.load -> ${this.placeBindingTraceStateText()}`)
   }
 
   private persistPlaceBindings(): boolean {
@@ -2585,7 +2550,13 @@ export struct Page4View {
 
   private updatePlaceBindingTrace(text: string): void {
     const body: string = text.trim()
-    this.placeBindingTraceText = body.length > 0 ? body : 'placeBinding.idle'
+    this.placeBindingTraceText = Page4PromptContextModule.compactMethodTraceText(body)
+  }
+
+  private placeBindingTraceStateText(): string {
+    const home: string = GridIdCodec.isValidId(this.homeNodeId) ? this.homeNodeId : '-'
+    const company: string = GridIdCodec.isValidId(this.companyNodeId) ? this.companyNodeId : '-'
+    return `home=${home} company=${company}`
   }
 
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
@@ -2598,10 +2569,7 @@ export struct Page4View {
       const parts: Array<string> = []
       if (query.askHome) parts.push(this.formatPlaceBinding('home'))
       if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
-      this.updatePlaceBindingTrace(
-        `handlePlaceBindingPrompt -> wantsPlaceBindingQuery -> formatPlaceBinding; ` +
-        `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
-      )
+      this.updatePlaceBindingTrace(`bind.query -> ${this.placeBindingTraceStateText()}`)
       this.pushAssistant(parts.length > 0 ? parts.join('，') : `${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
       return true
     }
@@ -2620,10 +2588,7 @@ export struct Page4View {
     if (!GridIdCodec.isValidId(node)) {
       const roleText: string = this.placeRoleText(req.role)
       await this.ensureQueryThinkingShown()
-      this.updatePlaceBindingTrace(
-        `handlePlaceBindingPrompt -> ${parseMethodName} -> extractDestNode(fail); ` +
-        `role=${roleText}; place=${req.placeText}`
-      )
+      this.updatePlaceBindingTrace(`bind.fail -> ${parseMethodName} role=${roleText}`)
       this.pushAssistant(Page4ReplyText.placeBindingUnresolved(roleText))
       return true
     }
@@ -2636,9 +2601,7 @@ export struct Page4View {
     const ok: boolean = this.persistPlaceBindings()
     await this.ensureQueryThinkingShown()
     this.updatePlaceBindingTrace(
-      `handlePlaceBindingPrompt -> ${parseMethodName} -> extractDestNode -> ` +
-      `page1Store.setPlaceConfigured -> persistPlaceBindings(${ok ? 'ok' : 'fail'}); ` +
-      `state=${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`
+      `bind.ok -> ${parseMethodName} save=${ok ? 'ok' : 'fail'} ${this.placeBindingTraceStateText()}`
     )
     if (ok) {
       this.pushAssistant(
@@ -2657,12 +2620,10 @@ export struct Page4View {
   }
 
   private looksLikePlaceBindingIntent(lower: string): boolean {
-    const hasRole: boolean =
-      lower.indexOf('物流中心') >= 0 ||
-      lower.indexOf('快递点') >= 0 || lower.indexOf('公司仓库') >= 0
+    const hasRole: boolean = this.containsAny(lower, Page4Keywords.PLACE_BINDING_ROLE_TOKENS)
     if (!hasRole) return false
-    if (this.containsAny(lower, ['映射', '点位', '查询', '查看', '有没有', '是否'])) return false
-    return this.containsAny(lower, ['设置', '设为', '记为', '定义为', '改为', '改成', '当成', '作为'])
+    if (this.containsAny(lower, Page4Keywords.PLACE_BINDING_INTENT_BLOCKERS)) return false
+    return this.containsAny(lower, Page4Keywords.PLACE_BINDING_SETTERS)
   }
 
   private parsePlaceBindingPlanText(text: string): Page4PlaceBindingPlan | undefined {

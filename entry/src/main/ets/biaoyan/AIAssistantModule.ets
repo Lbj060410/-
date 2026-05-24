@@ -144,8 +144,8 @@ const POI_ALIAS_TO_NODE: Record<string, string> = {
 }
 
 export class AIAssistantModule {
-  private textParseHistory: Array<TextParseResult> = []
-  private intentHistory: Array<IntentRecognitionResult> = []
+  private daohang: Array<TextParseResult> = []
+  private cheliang: Array<IntentRecognitionResult> = []
   private navigationLog: Array<NavigationInstruction> = []
   private vehicleControlLog: Array<VehicleControlInstruction> = []
   private openClawLog: Array<any> = [] // 兼容旧字段名：现存放大模型推理记录
@@ -189,19 +189,18 @@ export class AIAssistantModule {
       // 1.首先调用文本解析方法提取目的地并保存至历史记录，同时通过关键词匹配识别指令意图
       const parseResult = this.parseText(normalizedInput)
       // 2.若判定为导航意图，系统将目的地传入导航校验方法，验证通过后启动导航流程
-      this.textParseHistory.push(parseResult)
-      //3.若判定为车辆控制意图，系统将解析指令中的动作关键词如前进、后退、左转、右转等，命中后直接调用动作协调器的执行方法下发控制指令，无需额外的路由环节
+      this.daohang.push(parseResult)
       const intentResult = this.recognizeIntent(normalizedInput)
-      this.intentHistory.push(intentResult)
+      //3.若判定为车辆控制意图，系统将解析指令中的动作关键词如前进、后退、左转、右转等，命中后直接调用动作协调器的执行方法下发控制指令，无需额外的路由环节
+      this.cheliang.push(intentResult)
       this.lastIntent = intentResult.intentType
 
       this.appendContext('user', normalizedInput, {
         parseResult: parseResult,
         intentResult: intentResult
       })
-      //4.若以上两种意图均未匹配，系统自动降级至对话兜底模式，由openclaw，理解用户意图，并生成澄清回复，引导用户补充关键信息
-
       const llmReply = this.invokeDeepSeekModelSimulated(traceId, normalizedInput, parseResult, intentResult)
+      //4.若以上两种意图均未匹配，系统自动降级至对话兜底模式，由openclaw，理解用户意图，并生成澄清回复，引导用户补充关键信息
       this.openClawLog.push(llmReply)
 
       // Step4: 执行工具调用并生成业务结果
@@ -834,8 +833,8 @@ export class AIAssistantModule {
    */
   getProcessingHistory(): any {
     return {
-      textParseHistory: [...this.textParseHistory],
-      intentHistory: [...this.intentHistory],
+      textParseHistory: [...this.daohang],
+      intentHistory: [...this.cheliang],
       navigationLog: [...this.navigationLog],
       vehicleControlLog: [...this.vehicleControlLog],
       openClawLog: [...this.openClawLog],
@@ -848,7 +847,7 @@ export class AIAssistantModule {
    * 获取统计信息
    */
   getStatistics(): any {
-    const totalInputs = this.textParseHistory.length
+    const totalInputs = this.daohang.length
     const navOk = this.navigationLog.filter((item) => item.isValid).length
     const vehOk = this.vehicleControlLog.filter((item) => item.isValid).length
     const llmOk = this.openClawLog.filter((item) => item.success).length
@@ -893,7 +892,7 @@ export class AIAssistantModule {
    * 计算成功率
    */
   private calculateSuccessRate(): string {
-    const total = this.textParseHistory.length
+    const total = this.daohang.length
     if (total <= 0) {
       return 'N/A'
     }
@@ -910,8 +909,8 @@ export class AIAssistantModule {
    * 清空历史并重置会话
    */
   clearHistory(): void {
-    this.textParseHistory = []
-    this.intentHistory = []
+    this.daohang = []
+    this.cheliang = []
     this.navigationLog = []
     this.vehicleControlLog = []
     this.openClawLog = []

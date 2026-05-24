@@ -251,13 +251,13 @@ export class PathReplanningModule {
 
       //2.规划失败时清空当前路径列表并返回失败状态，避免执行旧路径
       if (plannerOutput.selectedPath.length <= 0) {
-        return this.handleReplanFailure(guard)
+        return this.guihuaReplanFailure(guard)
       }
 
       guard.newPath = plannerOutput.selectedPath
       guard.strategyId = plannerOutput.selectedStrategy
       //3.规划成功时替换为新路径列表。同时调用日志方法，将新旧路径写入回放，支持后续诊断分析
-      return this.handleReplanSuccess(guard)
+      return this.guihuaReplanSuccess(guard)
     } finally {
       this.isReplanning = false
     }
@@ -575,7 +575,7 @@ export class PathReplanningModule {
   /**
    * 规划失败处理
    */
-  private handleReplanFailure(guard: ReplanExecutionGuard): PathPlanResult {
+  private guihuaReplanFailure(guard: ReplanExecutionGuard): PathPlanResult {
     console.log(`[重规划失败] 无法规划到 ${guard.newTarget}`)
 
     this.currentPath = []
@@ -603,7 +603,7 @@ export class PathReplanningModule {
   /**
    * 规划成功处理
    */
-  private handleReplanSuccess(guard: ReplanExecutionGuard): PathPlanResult {
+  private guihuaReplanSuccess(guard: ReplanExecutionGuard): PathPlanResult {
     const newPath = guard.newPath!
     const strategyId = guard.strategyId!
 

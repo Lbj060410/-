@@ -167,7 +167,9 @@ export class VehicleControlProtocol {
   private handleObstacleDetection(frame: CommandFrame): void {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
     //1.接收到回传帧后，系统首先调用障碍方法，判断距离值是否低于阈值
+
     this.barrier(frame)
+
     this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
     //2.若检测到障碍，则触发摄像头抓拍并调用AI模型识别画面内容
     const cameraFrame = this.captureCamera()

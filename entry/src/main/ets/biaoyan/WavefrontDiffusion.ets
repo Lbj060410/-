@@ -135,7 +135,6 @@ export class AStarPathPlanner {
 
     // 第一步：由目标点向外扩散，构建势场（distanceMap）
     //1.扩散数据结构的初始化：确定波源、准备容器，并配置初始状态
-    const a:Map<string,number>=new Map()
     const distanceMap: Map<string, number> = new Map()
     const queue: Array<string> = [goal]
     let head = 0
@@ -161,12 +160,13 @@ export class AStarPathPlanner {
         }
         //2.在过滤掉阻塞邻居后，调用距离方法，最终得到一个"距离地图"，用于路径回溯
         this.distance(distanceMap,neighbor,currentDistance)
-
+        this.distance(distanceMap,neighbor,currentDistance)
         queue.push(neighbor)
       }
     }
     //3循环结束后，开始路径回溯，首先检查起点是否被BFS覆盖
-      this.cover(distanceMap,start,expandedCount)
+    this.cover(distanceMap,start,expandedCount)
+
 
     // 3.1若通过，则按照BFS距离场回溯路径
     const path: Array<string> = [start]

@@ -17,7 +17,7 @@ import util from '@ohos.util'
 import { bengkuiMasterError, bengkuiMasterErrText } from '../utils/BengkuiMasterLogger'
 
 const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
-const SPLASH_SLOGAN: string = '为让物流运输更高效，更安全，更智能，让每一次物流运输都智行无忧'
+const SPLASH_VIDEO_TIMEOUT_MS: number = 20000
 interface Page4PlaceBindingPayload {
   homeNodeId?: string
   companyNodeId?: string
@@ -29,11 +29,6 @@ struct Index {
   @State private currentIndex: number = 0
   @State private showFloatingNav: boolean = false
   @State private showSplash: boolean = true
-  @State private splashScale: number = 0.86
-  @State private splashTextLen: number = 0
-  private splashTimerId: number = -1
-  private splashAnimTimerId: number = -1
-  private splashTextTimerId: number = -1
   private splashHardTimeoutId: number = -1
 
   aboutToAppear(): void {
@@ -52,44 +47,17 @@ struct Index {
       .catch((e: Object): void => {
         bengkuiMasterError('Index.aboutToAppear.page2Coordinator.start', e)
       })
-    this.clearSplashTimer()
-    this.clearSplashAnimTimer()
-    this.clearSplashTextTimer()
     this.clearSplashHardTimeout()
     this.showSplash = true
-    this.splashScale = 0.86
-    this.splashTextLen = 0
-    this.splashAnimTimerId = setTimeout((): void => {
-      this.splashAnimTimerId = -1
-      this.splashScale = 1
-    }, 30) as number
-    this.splashTextTimerId = setInterval((): void => {
-      if (this.splashTextLen >= SPLASH_SLOGAN.length) {
-        this.clearSplashTextTimer()
-        this.armSplashExit(1000)
-        return
-      }
-      this.splashTextLen += 1
-      if (this.splashTextLen >= SPLASH_SLOGAN.length) {
-        this.clearSplashTextTimer()
-        this.armSplashExit(1000)
-      }
-    }, 40) as number
-    // 兜底：避免极低概率定时器未触发导致开屏长时间停留。
+    // 兜底：避免视频组件异常或媒体回调缺失时，开屏长期停留。
     this.splashHardTimeoutId = setTimeout((): void => {
       this.splashHardTimeoutId = -1
       if (!this.showSplash) return
-      this.clearSplashTimer()
-      this.clearSplashTextTimer()
-      this.clearSplashAnimTimer()
       this.showSplash = false
-    }, 6500) as number
+    }, SPLASH_VIDEO_TIMEOUT_MS) as number
   }
 
   aboutToDisappear(): void {
-    this.clearSplashTimer()
-    this.clearSplashAnimTimer()
-    this.clearSplashTextTimer()
     this.clearSplashHardTimeout()
   }
 
@@ -148,30 +116,26 @@ struct Index {
 
       if (this.showSplash) {
         Stack() {
-          Column({ space: 18 }) {
-            Image($rawfile('开屏画面.png'))
-              .width('68%')
-              .height('58%')
-              .objectFit(ImageFit.Contain)
-              .scale({ x: this.splashScale, y: this.splashScale })
-              .animation({ duration: 2000, curve: Curve.EaseOut })
-
-            Text(this.splashSloganPreview())
-              .width('90%')
-              .fontSize(18)
-              .fontWeight(FontWeight.Medium)
-              .fontColor('#1F2937')
-              .textAlign(TextAlign.Center)
-              .maxLines(2)
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .translate({ x: 0, y: -56 })
+          Video({
+            src: $rawfile('开屏动画.mp4'),
+            previewUri: $rawfile('开屏画面.png')
+          })
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .controls(false)
+            .autoPlay(true)
+            .onFinish((): void => {
+              this.clearSplashHardTimeout()
+              this.showSplash = false
+            })
+            .onError((): void => {
+              this.skipSplashNow()
+            })
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#FFFFFF')
+        .backgroundColor('#000000')
         .zIndex(999)
         .onClick((): void => {
           this.skipSplashNow()
@@ -187,43 +151,10 @@ struct Index {
     })
   }
 
-  private armSplashExit(delayMs: number): void {
-    if (!this.showSplash) return
-    this.clearSplashTimer()
-    this.splashTimerId = setTimeout((): void => {
-      this.splashTimerId = -1
-      this.showSplash = false
-    }, Math.max(0, Math.trunc(delayMs))) as number
-  }
-
   private skipSplashNow(): void {
     if (!this.showSplash) return
-    this.clearSplashTimer()
-    this.clearSplashTextTimer()
-    this.clearSplashAnimTimer()
     this.clearSplashHardTimeout()
     this.showSplash = false
-  }
-
-  private clearSplashTimer(): void {
-    if (this.splashTimerId >= 0) {
-      clearTimeout(this.splashTimerId)
-      this.splashTimerId = -1
-    }
-  }
-
-  private clearSplashAnimTimer(): void {
-    if (this.splashAnimTimerId >= 0) {
-      clearTimeout(this.splashAnimTimerId)
-      this.splashAnimTimerId = -1
-    }
-  }
-
-  private clearSplashTextTimer(): void {
-    if (this.splashTextTimerId >= 0) {
-      clearInterval(this.splashTextTimerId)
-      this.splashTextTimerId = -1
-    }
   }
 
   private clearSplashHardTimeout(): void {
@@ -231,13 +162,6 @@ struct Index {
       clearTimeout(this.splashHardTimeoutId)
       this.splashHardTimeoutId = -1
     }
-  }
-
-  private splashSloganPreview(): string {
-    const len: number = this.splashTextLen
-    if (len <= 0) return ''
-    if (len >= SPLASH_SLOGAN.length) return SPLASH_SLOGAN
-    return SPLASH_SLOGAN.substring(0, len)
   }
 
   private errText(e: Object): string {
