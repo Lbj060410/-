@@ -177,6 +177,7 @@ export class AIAssistantModule {
    */
   processUserInput(userInput: string): AIAssistantResponse {
     const startTime = Date.now()
+    // 1.文本解析方法
     const traceId = this.buildId('TRACE')
     console.log(`[AI] 输入(${traceId}): "${userInput}"`)
 
@@ -186,23 +187,24 @@ export class AIAssistantModule {
         return this.buildErrorResponse(startTime, 'EMPTY_INPUT', '输入为空，请重新描述需求')
       }
 
-      // 1.首先调用文本解析方法提取目的地并保存至历史记录，同时通过关键词匹配识别指令意图
+
+      //若判定为[导航]意图
       const parseResult = this.parseText(normalizedInput)
-      // 2.若判定为导航意图，系统将目的地传入导航校验方法，验证通过后启动导航流程
       this.daohang.push(parseResult)
+
+      //若判定为[车辆]控制意图
       const intentResult = this.recognizeIntent(normalizedInput)
-      //3.若判定为车辆控制意图，系统将解析指令中的动作关键词如前进、后退、左转、右转等，命中后直接调用动作协调器的执行方法下发控制指令，无需额外的路由环节
       this.cheliang.push(intentResult)
+
       this.lastIntent = intentResult.intentType
 
       this.appendContext('user', normalizedInput, {
         parseResult: parseResult,
         intentResult: intentResult
       })
+      //降级至[openclaw]
       const llmReply = this.invokeDeepSeekModelSimulated(traceId, normalizedInput, parseResult, intentResult)
-      //4.若以上两种意图均未匹配，系统自动降级至对话兜底模式，由openclaw，理解用户意图，并生成澄清回复，引导用户补充关键信息
       this.openClawLog.push(llmReply)
-
       // Step4: 执行工具调用并生成业务结果
       const response = this.routeByToolCall(llmReply, parseResult, intentResult, startTime)
 

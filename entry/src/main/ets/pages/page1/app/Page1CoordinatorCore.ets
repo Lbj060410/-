@@ -162,6 +162,8 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
   aheadVisionReadyAtMs: number = 0
   aheadVisionEdgeId: string = ''
   lastVisionLogAtMs: number = 0
+  replanTransitionBusy: boolean = false
+  replanTransitionToken: number = 0
 
 
   private manualGoToken: number = 0
@@ -754,6 +756,7 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
   private async runDryAutoFollowStep(nowMs: number): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
+    if (this.replanTransitionBusy) return
     if (!s.canAutoFollow(nowMs)) return
     if (this.motionRunning()) return
     if (!this.actionScheduler.canSendNextCommand(nowMs, this.motionRunning())) return
@@ -823,6 +826,8 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     this.clearEmergencyAutoRecoverTimer()
     this.timerManager.clearAll()
     this.clearMotionCommandBlock()
+    this.replanTransitionBusy = false
+    this.replanTransitionToken += 1
     this.stopActiveMotion()
     this.actionScheduler.reset()
     this.emergencyMotionCommandLocked = false
@@ -2203,4 +2208,3 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
 }
 
 export const page1Coordinator: Page1Coordinator = new Page1Coordinator()
-

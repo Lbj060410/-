@@ -186,19 +186,15 @@ export class LocationMappingModule {
 
     // 2.若非节点编码，系统则通过本地别名配置,进行低延迟匹配，命中后直接返回对应节点
     const localnode = PoiMap.getNode(text)
-
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)
-    /* 3.若本地匹配未命中，系统自动调用百度地图定位接口，依次获取实时定位、逆地理编码及周边POI搜索结果，
-    并将这些数据交由 OpenClaw 智能体 进行多源信息融合决策，
-    通过四类信号进行加权评分，OpenClaw 智能体综合选出得分最高的候选节点*/
-    this.Realtime = realtime
-
+    /* 3.若本地匹配未命中*/
+    this.Realtime=realtime
     const reverse = this.callBaiduReverseGeocode(traceId, realtime)
     const pois = this.callBaiduNearbySearch(traceId, text, realtime)
 
-    // 4.若融合置信度低于阈值，OpenClaw 智能体返回失败状态并清空无效结果
-    const decision = this.fuseLocationSignals(traceId, text, localnode, reverse, pois, realtime)
 
+    const decision = this.fuseLocationSignals(traceId, text, localnode, reverse, pois, realtime)
+    // OpenClaw 智能体返回失败状态并清空无效结果
     if (!decision.chosenNode || decision.confidence < 0.35) {
       this.recordFusion(
         traceId,
@@ -211,7 +207,9 @@ export class LocationMappingModule {
       )
       return this.failResult('未找到可落地的网格点位')
     }
-  //5.若融合成功，则将映射结果传递至扩散策略路径规划模块
+  //将映射结果传递至扩散策略路径规划模块
+    const a=this.success(decision.chosenNode)
+
      const result = this.success(decision.chosenNode)
     this.recordFusion(
       traceId,

@@ -166,19 +166,19 @@ export class VehicleControlProtocol {
    */
   private handleObstacleDetection(frame: CommandFrame): void {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
-    //1.接收到回传帧后，系统首先调用障碍方法，判断距离值是否低于阈值
-
+    //障碍方法
     this.barrier(frame)
-
+    this.barrier(frame)
     this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
-    //2.若检测到障碍，则触发摄像头抓拍并调用AI模型识别画面内容
+    //2.若检测到障碍
     const cameraFrame = this.captureCamera()
     const recognitionResult = this.invokeRecognitionModel(cameraFrame)
-    //3.当识别结果为花生地、施工路段等特殊路况时，系统将当前画面写入系统相册，用于本地复盘，生成包含避让建议及路径影响标记的复盘结果
+    //3.识别结果为花生地、施工路段等特殊路况
     this.logSystemEvent(
       `[0x02] Step3 识别结果 type=${recognitionResult.detectedType}, confidence=${recognitionResult.confidence}`
     )
-    //4.与此同时，系统记录日志、将特殊路段信息上传云端，并执行避障决策
+    //4.系统[记录]日志、将信息[上传]云端
+
     if (this.jilu(recognitionResult)) {
       this.shangchuan(recognitionResult, cameraFrame)
     }
@@ -191,9 +191,8 @@ export class VehicleControlProtocol {
       reviewResults: this.reviewResults,
       timestamp: Date.now()
     })
-    //5.最后，系统自动向命令队列投递路径重规划指令，确保车辆遇障后能够自动避让
+    //5.投递路径重规划指令
     this.replan(recognitionResult)
-
     this.triggerPathReplan(recognitionResult)
     this.logSystemEvent('=== 0x02 障碍检测流程结束 ===')
   }

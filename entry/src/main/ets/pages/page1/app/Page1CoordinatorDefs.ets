@@ -109,6 +109,8 @@ export interface IPage1CoordinatorOps {
   aheadVisionReadyAtMs: number
   aheadVisionEdgeId: string
   lastVisionLogAtMs: number
+  replanTransitionBusy: boolean
+  replanTransitionToken: number
 
   manualGoLastSentAtMs: number
   routeStartVoicePlayed: boolean
@@ -179,4 +181,3 @@ export interface IPage1CoordinatorOps {
   acquireMotionDispatch(owner: string): Promise<void>
   leaveMotionDispatch(owner: string): void
 }
-
