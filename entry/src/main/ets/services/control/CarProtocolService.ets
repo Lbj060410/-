@@ -2,6 +2,7 @@
 import { CarTcpService } from './CarTcpService'
 import { commStore } from '../../state/CommStore'
 import hilog from '@ohos.hilog'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 const PROTOCOL_LOG_DOMAIN = 0xFF01
 const PROTOCOL_LOG_TAG = 'CarProtocol'
@@ -513,7 +514,9 @@ export class CarProtocolService {
         modeText: this.mode === CarSendMode.REAL_SEND ? 'REAL_SEND' : 'DRY_RUN',
         hex: this.bytesToHex(frame)
       })
-    } catch (_) {}
+    } catch (e) {
+      bengkuiMasterError('CarProtocolService.appendDiagTxKeyFrame', e)
+    }
   }
 
   private txMeaning(group: number, sub: number, data: Uint8Array): string {

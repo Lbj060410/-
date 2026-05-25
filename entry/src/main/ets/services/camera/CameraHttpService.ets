@@ -12,7 +12,7 @@ export interface HttpFrameResult {
 }
 
 export class CameraHttpService {
-  private readonly timeoutMs: number = 2500
+  private readonly timeoutMs: number = 4000
   // 保证用户名和密码经过 URL 编码，避免特殊字符导致请求失败。
 
   buildSnapshotUrl(host: string, user: string, pass: string): string {

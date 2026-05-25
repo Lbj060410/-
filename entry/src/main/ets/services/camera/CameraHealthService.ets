@@ -21,8 +21,8 @@ export class CameraHealthService {
   private lastOkAtMs: number = 0
   private lastFailAtMs: number = 0
 
-  private readonly degradedThreshold: number = 5
-  private readonly offlineThreshold: number = 15
+  private readonly degradedThreshold: number = 10
+  private readonly offlineThreshold: number = 25
 
   onOk(): HealthInfo {
     this.consecutiveFail = 0
@@ -47,11 +47,11 @@ export class CameraHealthService {
 
     if (this.consecutiveFail >= this.offlineThreshold) {
       state = 'OFFLINE'
-      interval = 1200
+      interval = 2000
       tip = '摄像头离线：降低请求频率，等待恢复'
     } else if (this.consecutiveFail >= this.degradedThreshold) {
       state = 'DEGRADED'
-      interval = 500
+      interval = 800
       tip = '网络不稳：降频运行（稳定优先）'
     }
 

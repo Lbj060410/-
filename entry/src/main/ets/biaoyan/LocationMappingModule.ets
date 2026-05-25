@@ -208,8 +208,6 @@ export class LocationMappingModule {
       return this.failResult('未找到可落地的网格点位')
     }
   //将映射结果传递至扩散策略路径规划模块
-    const a=this.success(decision.chosenNode)
-
      const result = this.success(decision.chosenNode)
     this.recordFusion(
       traceId,

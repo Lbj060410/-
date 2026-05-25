@@ -13,6 +13,7 @@ import { GridNode } from '../types/SandboxGridTypes'
 import { Page1Theme } from '../Page1Theme'
 import { RouteEdgeCodec, PathPlannerAStar } from '../app/PathPlannerAStar'
 import hilog from '@ohos.hilog'
+import { bengkuiMasterError } from '../../../utils/BengkuiMasterLogger'
 
 const SHANTUI_LOG_DOMAIN: number = 0xFF0C
 const SHANTUI_LOG_TAG: string = 'shantui'
@@ -123,8 +124,12 @@ export struct SandboxMap {
     // 流光重绘独立 60fps 循环，避免被 120ms 的跟随节拍拖慢
     if (this.flowAnimTimerId !== -1) clearInterval(this.flowAnimTimerId)
     this.flowAnimTimerId = setInterval((): void => {
-      this.routeAnimTick = (this.routeAnimTick + 1) % 1000000
-      this.drawCompleteStreamingRoute()
+      try {
+        this.routeAnimTick = (this.routeAnimTick + 1) % 1000000
+        this.drawCompleteStreamingRoute()
+      } catch (e) {
+        bengkuiMasterError('SandboxMap.flowAnimTimer', e)
+      }
     }, 16) as number
   }
 
@@ -1365,22 +1370,26 @@ export struct SandboxMap {
   }
 
   private drawCompleteStreamingRoute(): void {
-    const ctx = this.canvasContext
-    ctx.clearRect(0, 0, this.store.mapW, this.store.mapH)
-    const nodes = this.activeHighlightNodes()
-    if (nodes.length >= 2) {
-      const pts: Array<RoutePolyPoint> = this.buildRoutePolyline(nodes)
-      if (pts.length >= 2) {
-        const thickness = this.routeHighlightThickness(this.routeHighlightStyle)
+    try {
+      const ctx = this.canvasContext
+      ctx.clearRect(0, 0, this.store.mapW, this.store.mapH)
+      const nodes = this.activeHighlightNodes()
+      if (nodes.length >= 2) {
+        const pts: Array<RoutePolyPoint> = this.buildRoutePolyline(nodes)
+        if (pts.length >= 2) {
+          const thickness = this.routeHighlightThickness(this.routeHighlightStyle)
 
-        // 1. 整条路径的底色轨道（科技蓝、低透明度）
-        this.strokePolyline(ctx, pts, this.routeHighlightStyle.visual.coreBorderColor, thickness, 0.3)
+          // 1. 整条路径的底色轨道（科技蓝、低透明度）
+          this.strokePolyline(ctx, pts, this.routeHighlightStyle.visual.coreBorderColor, thickness, 0.3)
 
-        // 2. 流光跑马灯效果（虚线 + dashOffset 动画）
-        this.drawDashedFlowLine(ctx, pts, thickness)
+          // 2. 流光跑马灯效果（虚线 + dashOffset 动画）
+          this.drawDashedFlowLine(ctx, pts, thickness)
+        }
       }
+      this.drawPlacedMarkerFlowBorders(ctx)
+    } catch (e) {
+      bengkuiMasterError('SandboxMap.drawCompleteStreamingRoute', e)
     }
-    this.drawPlacedMarkerFlowBorders(ctx)
   }
 
   private drawDashedFlowLine(ctx: CanvasRenderingContext2D, pts: Array<RoutePolyPoint>, thickness: number): void {

@@ -48,6 +48,7 @@ export class CameraDiscoveryService {
   private async tryOnce(waitMs: number): Promise<string | undefined> {
     const udp: socket.UDPSocket = socket.constructUDPSocketInstance()
     let resolved: boolean = false
+    let messageHandler: ((msg: { message: ArrayBuffer }) => void) | undefined
 
     try {
       await udp.bind({ address: '0.0.0.0', port: this.localPort })
@@ -56,18 +57,21 @@ export class CameraDiscoveryService {
         const timerId: number = setTimeout(() => {
           if (resolved) return
           resolved = true
+          if (messageHandler) udp.off('message', messageHandler)
           resolve(undefined)
         }, waitMs)
 
-        udp.on('message', (msg: { message: ArrayBuffer }) => {
+        messageHandler = (msg: { message: ArrayBuffer }) => {
           if (resolved) return
           const ip: string | undefined = this.parseCameraIpFromDhPacket(msg.message)
           if (ip) {
             resolved = true
             clearTimeout(timerId)
+            if (messageHandler) udp.off('message', messageHandler)
             resolve(ip)
           }
-        })
+        }
+        udp.on('message', messageHandler)
       })
 
       await udp.send({
@@ -78,9 +82,12 @@ export class CameraDiscoveryService {
       const ip: string | undefined = await ipPromise
       return ip
     } catch (e) {
-      console.error('CameraDiscovery tryOnce failed')
+      console.error('CameraDiscovery tryOnce failed:', e instanceof Error ? e.message : String(e))
       return undefined
     } finally {
+      if (messageHandler) {
+        try { udp.off('message', messageHandler) } catch (e) {}
+      }
       try { await udp.close() } catch (e) {}
     }
   }

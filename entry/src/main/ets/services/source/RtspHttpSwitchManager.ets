@@ -24,6 +24,8 @@ export class RtspHttpSwitchManager {
   private rtspFailCount: number = 0
 
   private rtspStartAtMs: number = 0
+  private lastSwitchAtMs: number = 0
+  private switchDebounceMs: number = 1000
 
   constructor(store: VideoStore, rtsp: RtspPlayerService, frames: FrameSourceManager) {
     this.store = store
@@ -69,31 +71,30 @@ export class RtspHttpSwitchManager {
     if (!this.store.autoSwitchEnabled) return
 
     const now: number = Date.now()
-    const sinceLastSwitch: number = now - this.store.lastSwitchAtMs
-    if (sinceLastSwitch < this.store.switchCooldownMs) return
+    const sinceLastSwitch: number = now - this.lastSwitchAtMs
+    if (sinceLastSwitch < this.switchDebounceMs) return
 
-    // If UI is on RTSP but RTSP is not ready for too long, fallback to HTTP.
     if (this.store.displayMode === DisplayMode.RTSP) {
       const rtspNotReady: boolean = this.store.rtspState !== RtspState.READY
-      if (rtspNotReady && (now - this.rtspStartAtMs) > 5000) {
-        this.store.setDisplayMode(DisplayMode.HTTP, 'rtsp not ready >5s')
+      if (rtspNotReady && (now - this.rtspStartAtMs) > 3000) {
+        this.lastSwitchAtMs = now
+        this.store.setDisplayMode(DisplayMode.HTTP, 'rtsp not ready >3s')
         this.store.setStatus('RTSP not ready, fallback to HTTP')
         return
       }
     }
 
-    // If HTTP is stale and RTSP is ready, switch back to RTSP.
     if (this.store.displayMode === DisplayMode.HTTP) {
-      const httpStale: boolean = (now - this.store.lastFrameTimeMs) > 3000
+      const httpStale: boolean = (now - this.store.lastFrameTimeMs) > 2000
       const rtspReady: boolean = !this.rtspDisabled && this.store.rtspState === RtspState.READY
       if (httpStale && rtspReady) {
+        this.lastSwitchAtMs = now
         this.store.setDisplayMode(DisplayMode.RTSP, 'http stale & rtsp ready')
         this.store.setStatus('HTTP stale, switch to RTSP')
         return
       }
     }
 
-    // Retry RTSP only when allowed.
     if (this.store.rtspState === RtspState.ERROR &&
       !this.rtspRetryInFlight &&
       !this.rtspDisabled) {

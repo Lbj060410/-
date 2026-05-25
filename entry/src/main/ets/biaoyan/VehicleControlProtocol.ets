@@ -168,7 +168,6 @@ export class VehicleControlProtocol {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
     //障碍方法
     this.barrier(frame)
-    this.barrier(frame)
     this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
     //2.若检测到障碍
     const cameraFrame = this.captureCamera()
@@ -178,10 +177,10 @@ export class VehicleControlProtocol {
       `[0x02] Step3 识别结果 type=${recognitionResult.detectedType}, confidence=${recognitionResult.confidence}`
     )
     //4.系统[记录]日志、将信息[上传]云端
-
-    if (this.jilu(recognitionResult)) {
-      this.shangchuan(recognitionResult, cameraFrame)
+    if (this.jilu(recognitionResult)){
+      this.shangchuan(recognitionResult,cameraFrame)
     }
+
 
     this.logSystemEvent('[0x02] Step5 上传障碍事件到云端队列')
     this.uploadToCloud({

@@ -15,16 +15,16 @@ interface HttpBusinessErrorLike {
 
 export class HttpSnapshotService {
   private client?: http.HttpRequest
+  private lastUsedAtMs: number = 0
+  private readonly clientReuseTimeoutMs: number = 30000
 
   async fetchJpeg(url: string, timeoutMs: number): Promise<ArrayBuffer> {
-    // 低延迟模式：不再强制 3500ms 下限，避免慢请求把实时预览拖成“旧帧”。
     const effectiveTimeoutMs: number = Math.max(250, Math.min(5000, timeoutMs))
 
     try {
       return await this.requestJpeg(url, effectiveTimeoutMs)
     } catch (e) {
       const msg: string = e instanceof Error ? e.message : ''
-      // 某些摄像头忽略 query 鉴权参数，返回 401；自动补一次 Basic 认证重试。
       if (msg.indexOf('http code=401') >= 0) {
         const auth: string = this.tryBuildBasicAuthFromUrl(url)
         if (auth.length > 0) {
@@ -40,7 +40,6 @@ export class HttpSnapshotService {
     try {
       const reqHeaders: Record<string, string> = {
         'Accept': 'image/jpeg,*/*',
-        // 尽可能禁止中间层/终端缓存，确保拿到最新帧。
         'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
         'Expires': '0',
@@ -58,6 +57,8 @@ export class HttpSnapshotService {
         usingProtocol: http.HttpProtocol.HTTP1_1,
         expectDataType: http.HttpDataType.ARRAY_BUFFER
       })
+
+      this.lastUsedAtMs = Date.now()
 
       if (resp.responseCode !== 200) {
         throw new Error(`http code=${resp.responseCode}`)
@@ -90,9 +91,13 @@ export class HttpSnapshotService {
   }
 
   private ensureClient(): http.HttpRequest {
-    if (!this.client) {
-      this.client = http.createHttp()
+    const now: number = Date.now()
+    if (this.client && (now - this.lastUsedAtMs) < this.clientReuseTimeoutMs) {
+      return this.client
     }
+    this.resetClient()
+    this.client = http.createHttp()
+    this.lastUsedAtMs = now
     return this.client
   }
 

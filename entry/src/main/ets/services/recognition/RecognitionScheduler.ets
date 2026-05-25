@@ -653,6 +653,7 @@ export class RecognitionScheduler {
         pm = await this.jpegToPixelMap(jpeg)
         videoStore.setSnapshot(pm)
       } catch (e) {
+        bengkuiMasterError('RecognitionScheduler.computeResult.httpSnapshot', e, `url=${url}`)
         const fallback: PixelMap | undefined = task.input.pixelMap
         if (!fallback) {
           const msg: string = (e instanceof Error) ? e.message : 'http snapshot failed'
@@ -1039,10 +1040,12 @@ export class RecognitionScheduler {
     try { pushUnique(decodeURIComponent(raw)) } catch (e) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, '解析URI解码候选失败: %{public}s',
         e instanceof Error ? e.message : String(e))
+      bengkuiMasterError('RecognitionScheduler.createImageSourceFromGalleryUri.decodeRaw', e)
     }
     try { pushUnique(decodeURIComponent(noQuery)) } catch (e) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, '解析无query URI解码候选失败: %{public}s',
         e instanceof Error ? e.message : String(e))
+      bengkuiMasterError('RecognitionScheduler.createImageSourceFromGalleryUri.decodeNoQuery', e)
     }
 
     const lower: string = noQuery.toLowerCase()
@@ -1052,6 +1055,7 @@ export class RecognitionScheduler {
       try { pushUnique(decodeURIComponent(pathRaw)) } catch (e) {
         hilog.warn(LOG_DOMAIN, LOG_TAG, '解析file URI解码候选失败: %{public}s',
           e instanceof Error ? e.message : String(e))
+        bengkuiMasterError('RecognitionScheduler.createImageSourceFromGalleryUri.decodeFilePath', e)
       }
     }
 
@@ -1061,6 +1065,7 @@ export class RecognitionScheduler {
         if (src) return src
       } catch (e) {
         if (firstErr.length <= 0) firstErr = this.errorToText(e)
+        bengkuiMasterError('RecognitionScheduler.createImageSourceFromGalleryUri.createSource', e, `candidate=${candidates[i]}`)
       }
     }
 
@@ -1082,6 +1087,7 @@ export class RecognitionScheduler {
         if (src) return src
       } catch (e) {
         if (firstErr.length <= 0) firstErr = this.errorToText(e)
+        bengkuiMasterError('RecognitionScheduler.createImageSourceFromGalleryUri.readFile', e, `candidate=${candidates[i]}`)
       } finally {
         if (f) {
           try { fs.closeSync(f.fd) } catch (_) { /* 资源释放失败可安全忽略 */ }
@@ -1107,6 +1113,7 @@ export class RecognitionScheduler {
     } catch (e) {
       hilog.warn(LOG_DOMAIN, LOG_TAG, '按文件描述符解码gallery图片失败，尝试后备路径: %{public}s',
         e instanceof Error ? e.message : String(e))
+      bengkuiMasterError('RecognitionScheduler.createPixelMapFromGalleryUri.fdDecode', e, `uri=${raw}`)
       // fallback below
     } finally {
       if (srcByFd) {

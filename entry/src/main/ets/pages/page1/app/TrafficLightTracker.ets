@@ -1,4 +1,5 @@
-﻿/**
+﻿import { bengkuiMasterError } from '../../../utils/BengkuiMasterLogger'
+/**
  * 代码指南：
  * 文件：pages/page1/app/TrafficLightTracker.ets
  * 用途：Page1 协调/调度辅助逻辑。
@@ -160,6 +161,8 @@ export class TrafficLightTracker {
         this.stableColor = nextStableColor
         this.stableSinceMs = nowMs
       }
+    } catch (e) {
+      bengkuiMasterError('TrafficLightTracker.pollOnce', e)
     } finally {
       this.polling = false
     }

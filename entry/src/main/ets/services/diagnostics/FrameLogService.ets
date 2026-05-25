@@ -9,6 +9,7 @@
 
 import fs from '@ohos.file.fs'
 import { commStore } from '../../state/CommStore'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 export enum LogDirStrategy {
   // ✅ 默认：模块 files 目录（模拟器可用）
@@ -90,8 +91,8 @@ export class FrameLogService {
 
       FrameLogService.lines += 1
       FrameLogService.refreshStat(false)
-    } catch (_) {
-      console.info('[DIAG][LOG] write failed')
+    } catch (e) {
+      bengkuiMasterError('FrameLogService.appendLine', e, `path=${FrameLogService.logPath}`)
     }
   }
 

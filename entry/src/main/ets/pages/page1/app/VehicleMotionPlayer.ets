@@ -16,6 +16,7 @@
  */
 import { Page1Action } from '../types/Page1Types'
 import { ActionTimingRegistry, MotionTimingProfile } from './ActionTimingRegistry'
+import { bengkuiMasterError } from '../../../utils/BengkuiMasterLogger'
 
 export enum MotionPhase {
   IDLE = 0,
@@ -304,107 +305,115 @@ export class VehicleMotionPlayer {
   }
 
   private async maybeHandleMotionArrive(hooks: VehicleMotionHooks): Promise<void> {
-    if (!this.motionAdvancePathOnFinish) return
-    if (this.motionArriveHandled) return
-    if (!this.running()) return
-    this.motionArriveHandled = true
-    await hooks.maybeHandleMotionArrive(this.motionToId)
-    if (this.callbacks && this.callbacks.onArriveHandled) {
-      this.callbacks.onArriveHandled(this.snapshot(Date.now()))
+    try {
+      if (!this.motionAdvancePathOnFinish) return
+      if (this.motionArriveHandled) return
+      if (!this.running()) return
+      this.motionArriveHandled = true
+      await hooks.maybeHandleMotionArrive(this.motionToId)
+      if (this.callbacks && this.callbacks.onArriveHandled) {
+        this.callbacks.onArriveHandled(this.snapshot(Date.now()))
+      }
+    } catch (e) {
+      bengkuiMasterError('VehicleMotionPlayer.maybeHandleMotionArrive', e)
     }
   }
 
   async update(nowMs: number, hooks: VehicleMotionHooks): Promise<void> {
-    if (!this.running() || this.motionAction === undefined) return
+    try {
+      if (!this.running() || this.motionAction === undefined) return
 
-    const fromNode: MotionPoint | undefined = hooks.findNode(this.motionFromId)
-    const toNode: MotionPoint | undefined = hooks.findNode(this.motionToId)
-    const elapsedMs: number = nowMs - this.motionStartAtMs
-    const preEndMs: number = this.motionPreMs
-    const activeEndMs: number = this.motionPreMs + this.motionActiveMs
-    const postEndMs: number = this.motionPreMs + this.motionActiveMs + this.motionPostMs
+      const fromNode: MotionPoint | undefined = hooks.findNode(this.motionFromId)
+      const toNode: MotionPoint | undefined = hooks.findNode(this.motionToId)
+      const elapsedMs: number = nowMs - this.motionStartAtMs
+      const preEndMs: number = this.motionPreMs
+      const activeEndMs: number = this.motionPreMs + this.motionActiveMs
+      const postEndMs: number = this.motionPreMs + this.motionActiveMs + this.motionPostMs
 
-    if (elapsedMs < preEndMs) {
-      this.setPhase(MotionPhase.PRE, nowMs)
-      if (this.isMoveAction(this.motionAction)) {
-        if (fromNode) {
-          const speed: number = this.motionUseReverseSpeed ? -20 : 0
-          hooks.updatePoseAndTelemetryForDisplay(
-            fromNode.xNorm,
-            fromNode.yNorm,
-            this.motionHeadingToDeg,
-            speed === 0 ? 0 : speed
+      if (elapsedMs < preEndMs) {
+        this.setPhase(MotionPhase.PRE, nowMs)
+        if (this.isMoveAction(this.motionAction)) {
+          if (fromNode) {
+            const speed: number = this.motionUseReverseSpeed ? -20 : 0
+            hooks.updatePoseAndTelemetryForDisplay(
+              fromNode.xNorm,
+              fromNode.yNorm,
+              this.motionHeadingToDeg,
+              speed === 0 ? 0 : speed
+            )
+          }
+        } else if (this.isTurnAction(this.motionAction)) {
+          hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingFromDeg)
+        }
+        if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
+        return
+      }
+
+      if (elapsedMs < activeEndMs) {
+        if (!this.running()) return
+        this.setPhase(MotionPhase.ACTIVE, nowMs)
+
+        let activeT: number = 1
+        if (this.motionActiveMs > 0) {
+          activeT = (elapsedMs - preEndMs) / this.motionActiveMs
+        }
+        if (activeT < 0) activeT = 0
+        if (activeT > 1) activeT = 1
+        const easedT: number = this.easeInOutSine(activeT)
+
+        if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
+          if (fromNode && toNode) {
+            const xNorm: number = fromNode.xNorm + (toNode.xNorm - fromNode.xNorm) * easedT
+            const yNorm: number = fromNode.yNorm + (toNode.yNorm - fromNode.yNorm) * easedT
+            const speed: number = this.motionAction === Page1Action.BACK || this.motionUseReverseSpeed ? -20 : 20
+            hooks.updatePoseAndTelemetryForDisplay(xNorm, yNorm, this.motionHeadingToDeg, speed)
+          }
+        } else if (this.isTurnAction(this.motionAction)) {
+          const headingDeg: number = hooks.norm360(
+            this.motionHeadingFromDeg + hooks.headingErrorDeg(this.motionHeadingFromDeg, this.motionHeadingToDeg) * easedT
           )
+          hooks.updateHeadingOnlyAtCurrentPose(headingDeg)
         }
-      } else if (this.isTurnAction(this.motionAction)) {
-        hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingFromDeg)
+        if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
+        return
       }
-      if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
-      return
-    }
 
-    if (elapsedMs < activeEndMs) {
-      if (!this.running()) return
-      this.setPhase(MotionPhase.ACTIVE, nowMs)
+      if (elapsedMs < postEndMs) {
+        if (!this.running()) return
+        this.setPhase(MotionPhase.POST, nowMs)
 
-      let activeT: number = 1
-      if (this.motionActiveMs > 0) {
-        activeT = (elapsedMs - preEndMs) / this.motionActiveMs
-      }
-      if (activeT < 0) activeT = 0
-      if (activeT > 1) activeT = 1
-      const easedT: number = this.easeInOutSine(activeT)
-
-      if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
-        if (fromNode && toNode) {
-          const xNorm: number = fromNode.xNorm + (toNode.xNorm - fromNode.xNorm) * easedT
-          const yNorm: number = fromNode.yNorm + (toNode.yNorm - fromNode.yNorm) * easedT
-          const speed: number = this.motionAction === Page1Action.BACK || this.motionUseReverseSpeed ? -20 : 20
-          hooks.updatePoseAndTelemetryForDisplay(xNorm, yNorm, this.motionHeadingToDeg, speed)
+        if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
+          if (toNode) {
+            hooks.updatePoseAndTelemetryForDisplay(toNode.xNorm, toNode.yNorm, this.motionHeadingToDeg, 0)
+          }
+          await this.maybeHandleMotionArrive(hooks)
+        } else if (this.isTurnAction(this.motionAction)) {
+          hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingToDeg)
+          hooks.setLogicalHeadingDeg(this.motionHeadingToDeg)
         }
-      } else if (this.isTurnAction(this.motionAction)) {
-        const headingDeg: number = hooks.norm360(
-          this.motionHeadingFromDeg + hooks.headingErrorDeg(this.motionHeadingFromDeg, this.motionHeadingToDeg) * easedT
-        )
-        hooks.updateHeadingOnlyAtCurrentPose(headingDeg)
+        if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
+        return
       }
-      if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
-      return
-    }
 
-    if (elapsedMs < postEndMs) {
       if (!this.running()) return
-      this.setPhase(MotionPhase.POST, nowMs)
-
       if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
         if (toNode) {
           hooks.updatePoseAndTelemetryForDisplay(toNode.xNorm, toNode.yNorm, this.motionHeadingToDeg, 0)
         }
+        hooks.setLogicalHeadingDeg(this.motionHeadingToDeg)
         await this.maybeHandleMotionArrive(hooks)
       } else if (this.isTurnAction(this.motionAction)) {
-        hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingToDeg)
         hooks.setLogicalHeadingDeg(this.motionHeadingToDeg)
+        hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingToDeg)
       }
-      if (this.callbacks && this.callbacks.onTick) this.callbacks.onTick(this.snapshot(nowMs))
-      return
-    }
 
-    if (!this.running()) return
-    if (this.motionAction === Page1Action.GO || this.motionAction === Page1Action.BACK) {
-      if (toNode) {
-        hooks.updatePoseAndTelemetryForDisplay(toNode.xNorm, toNode.yNorm, this.motionHeadingToDeg, 0)
+      if (this.callbacks && this.callbacks.onComplete) {
+        this.callbacks.onComplete(this.snapshot(nowMs))
       }
-      hooks.setLogicalHeadingDeg(this.motionHeadingToDeg)
-      await this.maybeHandleMotionArrive(hooks)
-    } else if (this.isTurnAction(this.motionAction)) {
-      hooks.setLogicalHeadingDeg(this.motionHeadingToDeg)
-      hooks.updateHeadingOnlyAtCurrentPose(this.motionHeadingToDeg)
+      this.doReset(nowMs, true)
+    } catch (e) {
+      bengkuiMasterError('VehicleMotionPlayer.update', e)
     }
-
-    if (this.callbacks && this.callbacks.onComplete) {
-      this.callbacks.onComplete(this.snapshot(nowMs))
-    }
-    this.doReset(nowMs, true)
   }
 }
 
