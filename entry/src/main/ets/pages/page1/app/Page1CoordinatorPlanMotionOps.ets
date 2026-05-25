@@ -167,10 +167,9 @@ async function tryAnimateDryReplanToSegmentEndpoint(
     s.pushLog('REPLAN_TRANSITION_SKIP: no nearest segment')
     return
   }
-  const minT: number = ctx.segMidMinTValue(s)
-  const maxT: number = ctx.segMidMaxTValue(s)
-  if (seg.t <= minT || seg.t >= maxT) {
-    s.pushLog(`REPLAN_TRANSITION_SKIP: t=${seg.t.toFixed(2)} out of mid-range`)
+  const eps: number = 0.001
+  if (seg.t <= eps || seg.t >= 1 - eps) {
+    s.pushLog(`REPLAN_TRANSITION_SKIP: t=${seg.t.toFixed(2)} already at edge endpoint`)
     return
   }
 
@@ -198,17 +197,36 @@ async function tryAnimateDryReplanToSegmentEndpoint(
   const retreatHeadingDeg: number = ctx.headingDegFromTo(seg.px, seg.py, target.xNorm, target.yNorm)
   const durationMs: number = transitionDurationMsBySegment(seg, decision.targetId)
   const mapToken: number = ctx.beginMapPoseAnimation()
+  const turnErrDeg: number = Math.abs(ctx.headingErrorDeg(currentHeadingDeg, retreatHeadingDeg))
+  const turnMs: number = turnErrDeg > 8
+    ? Math.max(P1C.MAP_PREVIEW_TICK_MS * 2, Math.round(P1C.MANUAL_MAP_TURN_MS * Math.max(1, turnErrDeg / 90)))
+    : 0
 
-  s.pushLog(`REPLAN_TRANSITION: ${decision.fromId}->${decision.targetId} t=${seg.t.toFixed(2)} retreat=${durationMs}ms`)
+  s.pushLog(`REPLAN_TRANSITION: ${decision.fromId}->${decision.targetId} t=${seg.t.toFixed(2)} turn=${turnMs}ms move=${durationMs}ms`)
+  if (turnMs > 0) {
+    await animateMapPoseTransition(
+      ctx,
+      seg.px,
+      seg.py,
+      seg.px,
+      seg.py,
+      currentHeadingDeg,
+      retreatHeadingDeg,
+      0,
+      turnMs,
+      mapToken
+    )
+    if (state.replanTransitionToken !== token) return
+  }
   await animateMapPoseTransition(
     ctx,
     seg.px,
     seg.py,
     target.xNorm,
     target.yNorm,
-    currentHeadingDeg,
     retreatHeadingDeg,
-    -20,
+    retreatHeadingDeg,
+    20,
     durationMs,
     mapToken
   )
