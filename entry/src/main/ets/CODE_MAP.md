@@ -3,6 +3,12 @@
 本文件用于回答两个问题：
 1. 这个项目每块代码做什么。
 2. 新增/修改某个功能时，要改哪些文件。
+增加模型位置在
+C:\Users\来不及捂手\.openclaw\openclaw.json
+- agents.defaults.model.primary = deepseek/deepseek-v4-pro
+- deepseek 模型列表已加入 deepseek-v4-pro
+- C:\Users\来不及捂手\.openclaw\agents\main\agent\models.json
+  - deepseek 模型列表已加入 deepseek-v4-pro
 
 ## 1) 分层结构
 

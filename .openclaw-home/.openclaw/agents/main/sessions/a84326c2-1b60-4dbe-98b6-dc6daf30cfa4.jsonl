@@ -1,6 +1,0 @@
-{"type":"session","version":3,"id":"a84326c2-1b60-4dbe-98b6-dc6daf30cfa4","timestamp":"2026-05-22T07:43:43.313Z","cwd":"F:\\openclaw-main\\openclaw-main\\workspace"}
-{"type":"model_change","id":"981a1ad2","parentId":null,"timestamp":"2026-05-22T07:43:43.314Z","provider":"deepseek","modelId":"deepseek-chat"}
-{"type":"thinking_level_change","id":"99cd9917","parentId":"981a1ad2","timestamp":"2026-05-22T07:43:43.314Z","thinkingLevel":"off"}
-{"type":"custom","customType":"model-snapshot","data":{"timestamp":1779435823315,"provider":"deepseek","modelApi":"openai-completions","modelId":"deepseek-chat"},"id":"a233a8c8","parentId":"99cd9917","timestamp":"2026-05-22T07:43:43.315Z"}
-{"type":"message","id":"20528c6a","parentId":"a233a8c8","timestamp":"2026-05-22T07:43:43.319Z","message":{"role":"user","content":[{"type":"text","text":"前往B1号停车位。"}],"timestamp":1779435823318}}
-{"type":"message","id":"4436071d","parentId":"20528c6a","timestamp":"2026-05-22T07:43:45.322Z","message":{"role":"assistant","content":[{"type":"text","text":"{\"tasks\":[{\"type\":\"route\",\"dest\":\"B1\"}]}"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-chat","usage":{"input":13303,"output":16,"cacheRead":0,"cacheWrite":0,"totalTokens":13319,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1779435823319}}

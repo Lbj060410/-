@@ -18,7 +18,7 @@ import {
   buildTabletCompanionUrl,
   OPENCLAW_CHAT_MODEL,
   OPENCLAW_CONNECT_TIMEOUT_MS,
-  OPENCLAW_GATEWAY_TOKEN,
+  setRuntimeSecret,
   resolveOpenClawTokenCandidates,
   PC_TOOL_CONNECT_TIMEOUT_MS,
   PC_TOOL_GATEWAY_TOKEN,
@@ -44,6 +44,8 @@ import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
 import resourceManager from '@ohos.resourceManager'
+import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
+import type common from '@ohos.app.ability.common'
 import { AssistantMessage as SessionAssistantMessage, HistorySession as SessionHistorySession, Page4SessionModule } from './modules/Page4SessionModule'
 import { Page4InputQueueModule } from './modules/Page4InputQueueModule'
 import { Page4LocalIntentModule } from './modules/Page4LocalIntentModule'
@@ -73,6 +75,17 @@ const PAGE4_LOG_TAG = 'page4log'
 const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
 const PAGE4_POI_EXPORT_FILE: string = 'page4_poi_mappings_export.json'
 const PAGE4_ORDER_DATA_RAWFILE: string = 'dingdan.txt'
+const PAGE4_RUNTIME_TOKEN_FILE: string = 'openclaw.env.json'
+const PAGE4_PUBLIC_TOKEN_PATHS: Array<string> = [
+  '/sdcard/Download/openclaw.env.json',
+  '/storage/self/primary/Download/openclaw.env.json',
+  '/data/local/tmp/openclaw.env.json',
+  '/storage/media/100/local/files/openclaw.env.json',
+  '/storage/media/100/local/files/Docs/openclaw.env.json',
+  '/storage/media/100/local/files/Docs/Download/openclaw.env.json'
+]
+const PAGE4_TOKEN_SETUP_HINT: string =
+  '/sdcard/Download/openclaw.env.json'
 const ADAPTIVE_WEAK_RECOG_INTERVAL_MS: number = 450
 const ADAPTIVE_WEAK_SWITCH_COOLDOWN_MS: number = 4000
 const ADAPTIVE_WEAK_CONNECT_TIMEOUT_MS: number = 10000
@@ -178,6 +191,8 @@ export struct Page4View {
   private outboundOrders: Array<OutboundOrder> = []
 
   aboutToAppear(): void {
+    this.loadRuntimeTokenConfig()
+    void this.ensureMediaReadPermissionAndReloadTokenConfig()
     this.ensurePlaceBindingsLoaded()
     void this.ensureOrderDataLoaded()
     installPage4TencentVoiceInputAdapter()
@@ -1266,7 +1281,7 @@ export struct Page4View {
     const primaryToken: string = PC_TOOL_GATEWAY_TOKEN.trim()
     const tokens: Array<string> = resolvePcToolTokenCandidates()
     if (tokens.length <= 0 && primaryToken.length <= 0) {
-      return { ok: false, summary: 'PC_TOOL_GATEWAY_TOKEN 为空，请先配置。' }
+      return { ok: false, summary: `PC_TOOL_GATEWAY_TOKEN 为空，请在 ${PAGE4_TOKEN_SETUP_HINT} 配置 token 文件。` }
     }
     const gatewayIp: string = deviceNetworkResolver.resolveGatewayIp()
     const hosts: Array<string> = this.rankOpenClawHosts(resolvePcToolGatewayHostCandidates(gatewayIp))
@@ -1305,7 +1320,7 @@ export struct Page4View {
     const primaryToken: string = TABLET_COMPANION_TOKEN.trim()
     const tokens: Array<string> = resolveTabletCompanionTokenCandidates()
     if (tokens.length <= 0 && primaryToken.length <= 0) {
-      return { ok: false, summary: 'TABLET_COMPANION_TOKEN 为空，请先配置。' }
+      return { ok: false, summary: `TABLET_COMPANION_TOKEN 为空，请在 ${PAGE4_TOKEN_SETUP_HINT} 配置 token 文件。` }
     }
     const nodeId: string = TABLET_COMPANION_NODE_ID.trim()
     if (nodeId.length <= 0) {
@@ -1414,6 +1429,181 @@ export struct Page4View {
     if (x.length <= 0) return false
     if (this.splitPromptToClauses(x).length >= 2) return true
     return this.containsAny(x, Page4Keywords.MULTI_TASK_MARKERS)
+  }
+
+  private loadRuntimeTokenConfig(): void {
+    this.clearRuntimeTokenSecrets()
+    const paths: Array<string> = []
+    for (let i: number = 0; i < PAGE4_PUBLIC_TOKEN_PATHS.length; i++) {
+      paths.push(PAGE4_PUBLIC_TOKEN_PATHS[i])
+    }
+    paths.push(`${this.getFilesDir()}/${PAGE4_RUNTIME_TOKEN_FILE}`)
+    for (let i: number = 0; i < paths.length; i++) {
+      if (this.tryLoadRuntimeTokenConfigFromPath(paths[i])) return
+    }
+  }
+
+  private async ensureMediaReadPermissionAndReloadTokenConfig(): Promise<void> {
+    const granted: boolean = await this.ensureMediaReadPermission()
+    if (granted) {
+      this.loadRuntimeTokenConfig()
+      return
+    }
+    hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG,
+      'READ_MEDIA not granted, token file in shared storage may be inaccessible')
+  }
+
+  private async ensureMediaReadPermission(): Promise<boolean> {
+    const ctx: common.UIAbilityContext | undefined = this.getUiContext()
+    if (!ctx) return false
+    const atManager: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager()
+    const perms: Array<Permissions> = ['ohos.permission.READ_MEDIA' as Permissions]
+    try {
+      const result = await atManager.requestPermissionsFromUser(ctx, perms)
+      if (!result || !Array.isArray(result.authResults) || result.authResults.length <= 0) return false
+      return result.authResults[0] === 0
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, 'request READ_MEDIA failed: %{public}s',
+        e instanceof Error ? e.message : String(e))
+      return false
+    }
+  }
+
+  private getUiContext(): common.UIAbilityContext | undefined {
+    const root: Record<string, Object | undefined> = globalThis as Record<string, Object | undefined>
+    return root['abilityContext'] as common.UIAbilityContext | undefined
+  }
+
+  private parseInlineTokenSetupCommand(text: string): { matched: boolean, token: string } {
+    const raw: string = text.trim()
+    if (raw.length <= 0) return { matched: false, token: '' }
+    const lower: string = raw.toLowerCase()
+    const prefixes: Array<string> = ['设置token', '设置 token', 'settoken', 'set token']
+    for (let i: number = 0; i < prefixes.length; i++) {
+      const prefix: string = prefixes[i]
+      if (!lower.startsWith(prefix)) continue
+      let token: string = raw.substring(prefix.length).trim()
+      token = this.trimTokenCommandDelimiters(token)
+      if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith('\'') && token.endsWith('\''))) {
+        token = token.substring(1, token.length - 1).trim()
+      }
+      return { matched: true, token: token }
+    }
+    return { matched: false, token: '' }
+  }
+
+  private trimTokenCommandDelimiters(raw: string): string {
+    let out: string = raw.trim()
+    while (out.length > 0) {
+      const ch: string = out.charAt(0)
+      if (ch === ':' || ch === '：' || ch === '=' || ch === ',' || ch === '，') {
+        out = out.substring(1).trim()
+        continue
+      }
+      break
+    }
+    return out
+  }
+
+  private applyRuntimeTokenForAllEndpoints(token: string): void {
+    const one: string = token.trim()
+    if (one.length <= 0) return
+    const keys: Array<string> = [
+      'OPENCLAW_GATEWAY_TOKEN',
+      'OPENCLAW_GATEWAY_TOKEN_FALLBACK',
+      'PC_TOOL_GATEWAY_TOKEN',
+      'PC_TOOL_GATEWAY_TOKEN_FALLBACK',
+      'TABLET_COMPANION_TOKEN',
+      'TABLET_COMPANION_TOKEN_FALLBACK'
+    ]
+    for (let i: number = 0; i < keys.length; i++) {
+      setRuntimeSecret(keys[i], one)
+    }
+  }
+
+  private persistRuntimeTokenToFilesDir(token: string): boolean {
+    let f: fs.File | undefined = undefined
+    try {
+      const one: string = token.trim()
+      if (one.length <= 0) return false
+      const payload: Record<string, string> = {
+        OPENCLAW_GATEWAY_TOKEN: one,
+        OPENCLAW_GATEWAY_TOKEN_FALLBACK: one,
+        PC_TOOL_GATEWAY_TOKEN: one,
+        PC_TOOL_GATEWAY_TOKEN_FALLBACK: one,
+        TABLET_COMPANION_TOKEN: one,
+        TABLET_COMPANION_TOKEN_FALLBACK: one
+      }
+      const txt: string = JSON.stringify(payload)
+      const path: string = `${this.getFilesDir()}/${PAGE4_RUNTIME_TOKEN_FILE}`
+      try { fs.unlinkSync(path) } catch (_) { /* ignore unlink failure */ }
+      f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+      fs.writeSync(f.fd, txt)
+      return true
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, 'persist token file failed: %{public}s',
+        e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) { /* ignore close failure */ }
+      }
+    }
+  }
+
+  private clearRuntimeTokenSecrets(): void {
+    const keys: Array<string> = [
+      'OPENCLAW_GATEWAY_TOKEN',
+      'OPENCLAW_GATEWAY_TOKEN_FALLBACK',
+      'PC_TOOL_GATEWAY_TOKEN',
+      'PC_TOOL_GATEWAY_TOKEN_FALLBACK',
+      'TABLET_COMPANION_TOKEN',
+      'TABLET_COMPANION_TOKEN_FALLBACK'
+    ]
+    for (let i: number = 0; i < keys.length; i++) {
+      setRuntimeSecret(keys[i], '')
+    }
+  }
+
+  private tryLoadRuntimeTokenConfigFromPath(path: string): boolean {
+    let f: fs.File | undefined = undefined
+    try {
+      f = fs.openSync(path, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(path)
+      const size: number = Number(st.size)
+      if (!Number.isFinite(size) || size <= 0 || size > 8192) return false
+      const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
+      const readLen: number = fs.readSync(f.fd, buf)
+      if (readLen <= 0) return false
+      const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(
+        new Uint8Array(buf, 0, readLen),
+        { stream: false }
+      )
+      const obj: Record<string, Object | string | number | boolean | undefined> =
+        JSON.parse(txt) as Record<string, Object | string | number | boolean | undefined>
+      this.applyRuntimeTokenFromConfig(obj, 'OPENCLAW_GATEWAY_TOKEN')
+      this.applyRuntimeTokenFromConfig(obj, 'OPENCLAW_GATEWAY_TOKEN_FALLBACK')
+      this.applyRuntimeTokenFromConfig(obj, 'PC_TOOL_GATEWAY_TOKEN')
+      this.applyRuntimeTokenFromConfig(obj, 'PC_TOOL_GATEWAY_TOKEN_FALLBACK')
+      this.applyRuntimeTokenFromConfig(obj, 'TABLET_COMPANION_TOKEN')
+      this.applyRuntimeTokenFromConfig(obj, 'TABLET_COMPANION_TOKEN_FALLBACK')
+      return true
+    } catch (_) {
+      return false
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) { /* ignore close error */ }
+      }
+    }
+  }
+
+  private applyRuntimeTokenFromConfig(
+    obj: Record<string, Object | string | number | boolean | undefined>,
+    key: string
+  ): void {
+    const raw: Object | string | number | boolean | undefined = obj[key]
+    const val: string = typeof raw === 'string' ? raw.trim() : ''
+    setRuntimeSecret(key, val)
   }
 
   private looksLikeControlIntent(text: string, lower: string): boolean {
@@ -2214,6 +2404,24 @@ export struct Page4View {
   private async submitPrompt(raw: string, fromQueue: boolean = false, _source: string = 'text'): Promise<void> {
     const text: string = raw.trim()
     if (text.length <= 0) return
+
+    const tokenSetup = this.parseInlineTokenSetupCommand(text)
+    if (tokenSetup.matched) {
+      const token: string = tokenSetup.token.trim()
+      if (token.length <= 0) {
+        this.pushAssistant('未检测到 token。请发送：设置token sk-xxxx')
+        return
+      }
+      this.applyRuntimeTokenForAllEndpoints(token)
+      const persisted: boolean = this.persistRuntimeTokenToFilesDir(token)
+      if (persisted) {
+        this.loadRuntimeTokenConfig()
+        this.pushAssistant('token 已写入应用私有配置并立即生效。')
+      } else {
+        this.pushAssistant('token 已临时生效，但写入本地配置失败。')
+      }
+      return
+    }
 
     if (!fromQueue && this.assistantBusy) {
       this.pushAssistant(Page4ReplyText.PREVIOUS_BUSY)

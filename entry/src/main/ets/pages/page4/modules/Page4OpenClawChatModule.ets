@@ -24,10 +24,31 @@ export interface Page4OpenClawAnswerDeps {
 }
 
 export class Page4OpenClawChatModule {
+  private static readonly TOKEN_SETUP_HINT_PATH: string =
+    '/sdcard/Download/openclaw.env.json'
+
+  private static normalizeOpenClawErrorText(raw: string): string {
+    const text: string = raw.trim()
+    if (text.length <= 0) return '请求失败'
+    const low: string = text.toLowerCase()
+    if (low.indexOf('401') >= 0 || low.indexOf('unauthorized') >= 0 || low.indexOf('forbidden') >= 0) {
+      return `鉴权失败（token 无效或与网关不一致）：${text}`
+    }
+    if (low.indexOf('timeout') >= 0 || low.indexOf('timed out') >= 0) {
+      return `网关超时：${text}`
+    }
+    if (low.indexOf('couldn\'t connect to server') >= 0 || low.indexOf('connect') >= 0) {
+      return `网关连接失败：${text}`
+    }
+    return text
+  }
+
   static async answerByOpenClaw(deps: Page4OpenClawAnswerDeps): Promise<boolean> {
     const tokenCandidates: Array<string> = deps.resolveTokenCandidates()
     if (tokenCandidates.length <= 0) {
-      deps.pushAssistant('OpenClaw token 为空，请在 DeviceNetworkConfig.ets 配置 OPENCLAW_GATEWAY_TOKEN。')
+      deps.pushAssistant(
+        `OpenClaw token 为空，请在 ${this.TOKEN_SETUP_HINT_PATH} 配置 token 文件。`
+      )
       return false
     }
     const hosts: Array<string> = deps.resolveHosts()
@@ -84,7 +105,11 @@ export class Page4OpenClawChatModule {
         return true
       }
       if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
-      deps.logError('sendOpenClawAllFailed', rs.error.length > 0 ? rs.error : 'unknown')
+      const errText: string = rs.error.length > 0
+        ? this.normalizeOpenClawErrorText(rs.error)
+        : 'OpenClaw 请求失败（未知错误）'
+      deps.logError('sendOpenClawAllFailed', errText)
+      deps.pushAssistant(`OpenClaw 调用失败：${errText}`)
     } catch (e) {
       if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
       const msg: string = e instanceof Error ? e.message : 'unknown error'

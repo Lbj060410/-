@@ -1,6 +1,0 @@
-{"type":"session","version":3,"id":"79a67be5-92a3-482b-b984-8301bff111ca","timestamp":"2026-03-23T04:36:22.202Z","cwd":"F:\\openclaw-main\\openclaw-main\\workspace"}
-{"type":"model_change","id":"04a1a6d5","parentId":null,"timestamp":"2026-03-23T04:36:22.207Z","provider":"deepseek","modelId":"deepseek-chat"}
-{"type":"thinking_level_change","id":"d603706a","parentId":"04a1a6d5","timestamp":"2026-03-23T04:36:22.207Z","thinkingLevel":"off"}
-{"type":"custom","customType":"model-snapshot","data":{"timestamp":1774240582211,"provider":"deepseek","modelApi":"openai-completions","modelId":"deepseek-chat"},"id":"f1141998","parentId":"d603706a","timestamp":"2026-03-23T04:36:22.211Z"}
-{"type":"message","id":"28b3f02d","parentId":"f1141998","timestamp":"2026-03-23T04:36:22.221Z","message":{"role":"user","content":[{"type":"text","text":"ping"}],"timestamp":1774240582216}}
-{"type":"message","id":"79f18697","parentId":"28b3f02d","timestamp":"2026-03-23T04:36:45.836Z","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"deepseek","model":"deepseek-chat","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","timestamp":1774240582219,"errorMessage":"Request timed out."}}

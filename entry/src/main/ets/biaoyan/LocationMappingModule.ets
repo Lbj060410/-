@@ -185,10 +185,11 @@ export class LocationMappingModule {
     }
 
     // 2.若非节点编码，系统则通过本地别名配置,进行低延迟匹配，命中后直接返回对应节点
-    const localnode = PoiMap.getNode(text)
+    const localnode =undefined
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)
     /* 3.若本地匹配未命中*/
-    this.Realtime=realtime
+   this.Realtime=realtime
+
     const reverse = this.callBaiduReverseGeocode(traceId, realtime)
     const pois = this.callBaiduNearbySearch(traceId, text, realtime)
 
@@ -208,7 +209,8 @@ export class LocationMappingModule {
       return this.failResult('未找到可落地的网格点位')
     }
   //将映射结果传递至扩散策略路径规划模块
-     const result = this.success(decision.chosenNode)
+
+    const result = this.success(decision.chosenNode)
     this.recordFusion(
       traceId,
       text,

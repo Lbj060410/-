@@ -1,6 +1,0 @@
-{"type":"session","version":3,"id":"82a2c7aa-be63-4e35-9f5b-9831183e932e","timestamp":"2026-04-01T05:53:46.886Z","cwd":"F:\\openclaw-main\\openclaw-main\\workspace"}
-{"type":"model_change","id":"69662b9f","parentId":null,"timestamp":"2026-04-01T05:53:46.887Z","provider":"deepseek","modelId":"deepseek-chat"}
-{"type":"thinking_level_change","id":"2dbd1af6","parentId":"69662b9f","timestamp":"2026-04-01T05:53:46.887Z","thinkingLevel":"off"}
-{"type":"custom","customType":"model-snapshot","data":{"timestamp":1775022826888,"provider":"deepseek","modelApi":"openai-completions","modelId":"deepseek-chat"},"id":"e87000d1","parentId":"2dbd1af6","timestamp":"2026-04-01T05:53:46.888Z"}
-{"type":"message","id":"c2a7e968","parentId":"e87000d1","timestamp":"2026-04-01T05:53:46.894Z","message":{"role":"user","content":[{"type":"text","text":"以后所有回答尽量控制住50字以内，最多不可以超出65字"}],"timestamp":1775022826893}}
-{"type":"message","id":"1c5baee3","parentId":"c2a7e968","timestamp":"2026-04-01T05:53:49.382Z","message":{"role":"assistant","content":[{"type":"text","text":"明白，我会尽量保持简短，控制在50字以内，最多不超过65字。"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-chat","usage":{"input":48,"output":17,"cacheRead":12672,"cacheWrite":0,"totalTokens":12737,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1775022826894}}

@@ -17,13 +17,13 @@ export const CAR_CAMERA_PASS: string = '888888'
 // OpenClaw 网关默认配置，用于 page4 助手。
 // 对于真实设备：
 // 1) 将 OPENCLAW_GATEWAY_HOST 设置为你的 PC 局域网 IP，或保持空以自动尝试 Wi-Fi 网关 IP。
-// 2) 通过应用设置 UI 设置 OPENCLAW_GATEWAY_TOKEN — 不要在此处硬编码令牌。
+// 2) 将 token 写入公共目录 openclaw.env.json（由 page4 在运行时加载）— 不要在此处硬编码令牌。
 export const OPENCLAW_GATEWAY_HOST: string = '192.168.156.101'
 export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '10.184.142.215'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
-export const OPENCLAW_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
-export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
-export const OPENCLAW_CHAT_MODEL: string = 'deepseek-v4-flash'
+export const OPENCLAW_GATEWAY_TOKEN: string = ''
+export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = ''
+export const OPENCLAW_CHAT_MODEL: string = 'deepseek-v4-pro'
 export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 12000
 export const OPENCLAW_READ_TIMEOUT_MS: number = 60000
 
@@ -31,7 +31,7 @@ export const OPENCLAW_READ_TIMEOUT_MS: number = 60000
 // 用于执行受控工具：read_file / process_list / exec_cmd(白名单)。
 export const PC_TOOL_GATEWAY_HOST: string = '192.168.156.101'
 export const PC_TOOL_GATEWAY_PORT: number = 18789
-export const PC_TOOL_GATEWAY_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
+export const PC_TOOL_GATEWAY_TOKEN: string = ''
 export const PC_TOOL_GATEWAY_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
 export const PC_TOOL_CONNECT_TIMEOUT_MS: number = 5000
 export const PC_TOOL_READ_TIMEOUT_MS: number = 20000
@@ -40,13 +40,44 @@ export const PC_TOOL_READ_TIMEOUT_MS: number = 20000
 // 通过代理 App 执行受控跨应用能力（如设置闹钟、打开应用）。
 export const TABLET_COMPANION_HOST: string = '192.168.156.101'
 export const TABLET_COMPANION_PORT: number = 18789
-export const TABLET_COMPANION_TOKEN: string = 'jTuFtxNPj99Z8jqsKul3KzaZZJitxUOVq5sYeRL6OFw'
+export const TABLET_COMPANION_TOKEN: string = ''
 export const TABLET_COMPANION_TOKEN_FALLBACK: string = OPENCLAW_GATEWAY_TOKEN_FALLBACK
 export const TABLET_COMPANION_NODE_ID: string = 'tablet-main'
 export const TABLET_COMPANION_CONNECT_TIMEOUT_MS: number = 5000
 export const TABLET_COMPANION_READ_TIMEOUT_MS: number = 20000
 
 // 仅作为后备。运行时应优先使用当前 Wi-Fi 网关/发现结果。
+const runtimeSecretMap: Record<string, string> = {}
+
+export function setRuntimeSecret(name: string, value: string): void {
+  const key: string = name.trim()
+  if (key.length <= 0) return
+  const one: string = value.trim()
+  if (one.length <= 0) {
+    if (runtimeSecretMap[key] !== undefined) delete runtimeSecretMap[key]
+    return
+  }
+  runtimeSecretMap[key] = one
+}
+
+function readEnvString(name: string): string {
+  const key: string = name.trim()
+  if (key.length <= 0) return ''
+  const root: Record<string, Object | string | undefined> = globalThis as Record<string, Object | string | undefined>
+  const processObj: Record<string, Object | string | undefined> | undefined =
+    (root['process'] as Record<string, Object | string | undefined> | undefined)
+  const envObj: Record<string, Object | string | undefined> | undefined =
+    processObj ? (processObj['env'] as Record<string, Object | string | undefined> | undefined) : undefined
+  const envVal: Object | string | undefined = envObj ? envObj[key] : undefined
+  if (typeof envVal === 'string' && envVal.trim().length > 0) return envVal.trim()
+  const runtimeVal: string | undefined = runtimeSecretMap[key]
+  if (typeof runtimeVal === 'string' && runtimeVal.trim().length > 0) return runtimeVal.trim()
+
+  // Optional fallback for runtimes that inject env-like values directly on globalThis.
+  const globalVal: Object | string | undefined = root[key]
+  if (typeof globalVal === 'string' && globalVal.trim().length > 0) return globalVal.trim()
+  return ''
+}
 
 export function defaultCameraHost(): string {
   return `${CAR_CAMERA_IP}:${CAR_CAMERA_HTTP_PORT}`
@@ -188,6 +219,8 @@ function pushUniqueToken(out: Array<string>, token: string): void {
 
 export function resolveOpenClawTokenCandidates(): Array<string> {
   const out: Array<string> = []
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN'))
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN_FALLBACK'))
   pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
   pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN_FALLBACK)
   return out
@@ -195,6 +228,10 @@ export function resolveOpenClawTokenCandidates(): Array<string> {
 
 export function resolvePcToolTokenCandidates(): Array<string> {
   const out: Array<string> = []
+  pushUniqueToken(out, readEnvString('PC_TOOL_GATEWAY_TOKEN'))
+  pushUniqueToken(out, readEnvString('PC_TOOL_GATEWAY_TOKEN_FALLBACK'))
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN'))
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN_FALLBACK'))
   pushUniqueToken(out, PC_TOOL_GATEWAY_TOKEN)
   pushUniqueToken(out, PC_TOOL_GATEWAY_TOKEN_FALLBACK)
   pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
@@ -204,6 +241,10 @@ export function resolvePcToolTokenCandidates(): Array<string> {
 
 export function resolveTabletCompanionTokenCandidates(): Array<string> {
   const out: Array<string> = []
+  pushUniqueToken(out, readEnvString('TABLET_COMPANION_TOKEN'))
+  pushUniqueToken(out, readEnvString('TABLET_COMPANION_TOKEN_FALLBACK'))
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN'))
+  pushUniqueToken(out, readEnvString('OPENCLAW_GATEWAY_TOKEN_FALLBACK'))
   pushUniqueToken(out, TABLET_COMPANION_TOKEN)
   pushUniqueToken(out, TABLET_COMPANION_TOKEN_FALLBACK)
   pushUniqueToken(out, OPENCLAW_GATEWAY_TOKEN)
