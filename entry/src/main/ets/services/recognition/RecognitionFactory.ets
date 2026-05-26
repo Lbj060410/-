@@ -16,7 +16,7 @@ const DEFAULT_YOLOV26BARRIER_MODEL: string = 'yolov26barrier'
 // 注册模型标签表（仅保留当前项目内置可用模型）
 const MODEL_LABELS: Record<string, string[]> = {
   //添加红绿灯的模型标签
-
+  'honglvdeng':['red','yellow','green'],
   'yolov26barrier': ['shigong', 'TrafficLight', 'GetOffTheCar']
 }
 
