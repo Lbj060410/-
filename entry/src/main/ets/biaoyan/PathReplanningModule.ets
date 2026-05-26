@@ -1,7 +1,6 @@
 ﻿/**
  * 表演文件：高阶路径重规划模块
  * 用途：演示“多策略候选 + 风险评估 + 轨迹稳定化 + 可回放诊断”的重规划流程
- * 注意：这是表演代码，不用于正式生产环境
  */
 
 import { AStarPathPlanner } from './WavefrontDiffusion'

@@ -1,6 +1,6 @@
 ﻿/**
  * 表演文件：车辆控制协议处理 - 清晰版流程示例
- * 用途：演示 0x01/0x02/0x03/0x04/0x05 指令从接收到执行的完整链路（非正式业务逻辑）
+ * 用途： 0x01/0x02/0x03/0x04/0x05 指令从接收到执行的完整链路（非正式业务逻辑）
  */
 
 import { AStarPathPlanner } from './WavefrontDiffusion'
@@ -168,7 +168,6 @@ export class VehicleControlProtocol {
     this.logSystemEvent('=== 0x02 障碍检测流程开始 ===')
     //障碍方法
     this.barrier(frame)
-    this.barrier(frame)
     this.logSystemEvent('[0x02] Step2 检测到障碍，进入识别')
     //2.若检测到障碍
     const cameraFrame = this.captureCamera()
@@ -193,7 +192,7 @@ export class VehicleControlProtocol {
       timestamp: Date.now()
     })
     //5.投递路径重规划指令
-this.replan(recognitionResult)
+    this.replan(recognitionResult)
     this.triggerPathReplan(recognitionResult)
     this.logSystemEvent('=== 0x02 障碍检测流程结束 ===')
   }

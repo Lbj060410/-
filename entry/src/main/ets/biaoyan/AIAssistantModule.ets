@@ -1,7 +1,6 @@
 ﻿/**
  * 表演文件：AI 助手嵌入模块（DeepSeek 风格）
  * 用途：演示“本地规则 + 大模型路由 + 工具调用 + 会话记忆 + 容错降级”的完整流程
- * 注意：这是表演代码，不访问真实网络，仅模拟 DeepSeek API 行为
  */
 
 export enum IntentType {
@@ -189,13 +188,9 @@ export class AIAssistantModule {
       //若判定为[导航]意图
       const parseResult = this.parseText(normalizedInput)
       this.daohang.push(parseResult)
-      this.daohang.push(parseResult)
-
       //若判定为[车辆]控制意图
       const intentResult = this.recognizeIntent(normalizedInput)
       this.cheliang.push(intentResult)
-      this.cheliang.push(intentResult)
-
       this.lastIntent = intentResult.intentType
       this.appendContext('user', normalizedInput, {
         parseResult: parseResult,
@@ -204,8 +199,6 @@ export class AIAssistantModule {
       //降级至[openclaw]
       const llmReply = this.invokeDeepSeekModelSimulated(traceId, normalizedInput, parseResult, intentResult)
       this.openClawLog.push(llmReply)
-      this.openClawLog.push(llmReply)
-
       // Step4: 执行工具调用并生成业务结果
       const response = this.routeByToolCall(llmReply, parseResult, intentResult, startTime)
 
