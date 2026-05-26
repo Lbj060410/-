@@ -23,7 +23,7 @@ export const OPENCLAW_GATEWAY_FALLBACK_HOST: string = '10.184.142.215'
 export const OPENCLAW_GATEWAY_PORT: number = 18789
 export const OPENCLAW_GATEWAY_TOKEN: string = ''
 export const OPENCLAW_GATEWAY_TOKEN_FALLBACK: string = ''
-export const OPENCLAW_CHAT_MODEL: string = 'deepseek-v4-pro'
+export const OPENCLAW_CHAT_MODEL: string = 'deepseek-v4-flash'
 export const OPENCLAW_CONNECT_TIMEOUT_MS: number = 12000
 export const OPENCLAW_READ_TIMEOUT_MS: number = 60000
 

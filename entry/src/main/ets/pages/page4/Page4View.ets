@@ -75,6 +75,7 @@ const PAGE4_LOG_TAG = 'page4log'
 const PAGE4_PLACE_BINDING_FILE: string = 'page4_place_bindings.json'
 const PAGE4_POI_EXPORT_FILE: string = 'page4_poi_mappings_export.json'
 const PAGE4_ORDER_DATA_RAWFILE: string = 'dingdan.txt'
+const PAGE4_VOICE_REPLY_PREF_FILE: string = 'page4_voice_reply_pref.json'
 const PAGE4_RUNTIME_TOKEN_FILE: string = 'openclaw.env.json'
 const PAGE4_PUBLIC_TOKEN_PATHS: Array<string> = [
   '/sdcard/Download/openclaw.env.json',
@@ -191,6 +192,7 @@ export struct Page4View {
   private outboundOrders: Array<OutboundOrder> = []
 
   aboutToAppear(): void {
+    this.loadVoiceReplyPreference()
     this.loadRuntimeTokenConfig()
     void this.ensureMediaReadPermissionAndReloadTokenConfig()
     this.ensurePlaceBindingsLoaded()
@@ -250,6 +252,7 @@ export struct Page4View {
             },
             onToggleVoiceReply: (): void => {
               this.voiceReplyEnabled = !this.voiceReplyEnabled
+              this.persistVoiceReplyPreference()
               this.showToast(this.voiceReplyEnabled ? Page4ReplyText.VOICE_REPLY_ON : Page4ReplyText.VOICE_REPLY_OFF)
               if (this.voiceReplyEnabled) void this.previewVoiceReplyAfterEnable()
               else page4TencentLocalTtsService.stop()
@@ -1472,6 +1475,52 @@ export struct Page4View {
   private getUiContext(): common.UIAbilityContext | undefined {
     const root: Record<string, Object | undefined> = globalThis as Record<string, Object | undefined>
     return root['abilityContext'] as common.UIAbilityContext | undefined
+  }
+
+  private loadVoiceReplyPreference(): void {
+    let f: fs.File | undefined = undefined
+    try {
+      const path: string = `${this.getFilesDir()}/${PAGE4_VOICE_REPLY_PREF_FILE}`
+      f = fs.openSync(path, fs.OpenMode.READ_ONLY)
+      const st: fs.Stat = fs.statSync(path)
+      const size: number = Number(st.size)
+      if (!Number.isFinite(size) || size <= 0 || size > 256) return
+      const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
+      const readLen: number = fs.readSync(f.fd, buf)
+      if (readLen <= 0) return
+      const txt: string = new util.TextDecoder('utf-8', { ignoreBOM: true }).decodeWithStream(
+        new Uint8Array(buf, 0, readLen),
+        { stream: false }
+      )
+      const obj: Record<string, Object | string | number | boolean | undefined> =
+        JSON.parse(txt) as Record<string, Object | string | number | boolean | undefined>
+      const enabled: Object | string | number | boolean | undefined = obj['enabled']
+      this.voiceReplyEnabled = enabled === true
+    } catch (_) {
+      // ignore and keep default
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) { /* ignore close error */ }
+      }
+    }
+  }
+
+  private persistVoiceReplyPreference(): void {
+    let f: fs.File | undefined = undefined
+    try {
+      const path: string = `${this.getFilesDir()}/${PAGE4_VOICE_REPLY_PREF_FILE}`
+      const txt: string = JSON.stringify({ enabled: this.voiceReplyEnabled })
+      try { fs.unlinkSync(path) } catch (_) { /* ignore unlink failure */ }
+      f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+      fs.writeSync(f.fd, txt)
+    } catch (e) {
+      hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, 'persist voice reply preference failed: %{public}s',
+        e instanceof Error ? e.message : String(e))
+    } finally {
+      if (f) {
+        try { fs.closeSync(f.fd) } catch (_) { /* ignore close error */ }
+      }
+    }
   }
 
   private parseInlineTokenSetupCommand(text: string): { matched: boolean, token: string } {
