@@ -592,7 +592,12 @@ export class RecognitionScheduler {
     } catch (e) {
       if (token !== this.runToken) return
       if (!this.enabled) return
-      bengkuiMasterError('RecognitionScheduler.runTask', e, `kind=${task.kind},subtype=${task.subtype}`)
+
+      try {
+        bengkuiMasterError('RecognitionScheduler.runTask', e, `kind=${task.kind},subtype=${task.subtype}`)
+      } catch (_) {
+        // bengkuiMasterError 本身出异常，不影响主流程
+      }
 
       const endAt: number = Date.now()
       const costMsTotal: number = endAt - startAt
@@ -1004,8 +1009,9 @@ export class RecognitionScheduler {
 
     return await new Promise<T>((resolve, reject) => {
       const id: number = setTimeout(() => {
-        bengkuiMasterError('RecognitionScheduler.withTimeout.timeout', undefined, `timeoutMs=${timeoutMs}`)
-        reject(new TimeoutError())
+        const err: TimeoutError = new TimeoutError()
+        bengkuiMasterError('RecognitionScheduler.withTimeout.timeout', err, `timeoutMs=${timeoutMs}`)
+        reject(err)
       }, timeoutMs) as number
 
       p.then((v: T) => {

@@ -31,8 +31,11 @@ export class CarProtocolService {
   private tcp?: CarTcpService
   private mode: CarSendMode = CarSendMode.DRY_RUN
   private seq: number = 0
-  private readonly ackTimeoutMs: number = 1000
+  // 重发触发：发送后 2.5s 内未收到任何一次 ACK 才进入重发。
+  private readonly ackTimeoutMs: number = 2500
   private readonly ackMaxRetries: number = 3
+  private readonly ackDuplicateWindowMs: number = 3000
+  private readonly ackEarlyWindowMs: number = 3000
   private readonly pending: Map<number, {
     seq: number
     frame: Uint8Array
@@ -41,6 +44,8 @@ export class CarProtocolService {
     tag: string
   }> = new Map()
   private readonly ackMeaningBySeq: Map<number, string> = new Map()
+  private readonly recentAckAtMs: Map<number, number> = new Map()
+  private readonly earlyAckAtMs: Map<number, number> = new Map()
 
   bindTcp(tcp: CarTcpService): void {
     this.tcp = tcp
@@ -50,6 +55,8 @@ export class CarProtocolService {
     this.mode = mode
     if (mode !== CarSendMode.REAL_SEND) {
       this.clearAllPending()
+      this.recentAckAtMs.clear()
+      this.earlyAckAtMs.clear()
     }
   }
 
@@ -386,9 +393,25 @@ export class CarProtocolService {
   // }
 
 
-  onAckReceived(seq: number): boolean {
+  onAckReceived(seq: number): 'matched' | 'duplicate' | 'early' | 'untracked' {
     const key: number = seq & 0xFFFF
-    return this.clearPendingBySeq(key)
+    const nowMs: number = Date.now()
+    this.pruneRecentAck(nowMs)
+    this.pruneEarlyAck(nowMs)
+    if (this.clearPendingBySeq(key)) {
+      this.recentAckAtMs.set(key, nowMs)
+      this.earlyAckAtMs.delete(key)
+      return 'matched'
+    }
+    const seenAtMs: number | undefined = this.recentAckAtMs.get(key)
+    if (seenAtMs !== undefined && nowMs - seenAtMs <= this.ackDuplicateWindowMs) {
+      this.recentAckAtMs.set(key, nowMs)
+      return 'duplicate'
+    }
+    // ACK 可能早于 pending 建立到达，先缓存，trackPending 时会消费并跳过重发计时。
+    this.earlyAckAtMs.set(key, nowMs)
+    this.pruneEarlyAck(nowMs)
+    return 'early'
   }
 
   consumeAckMatchedMeaning(seq: number): string {
@@ -425,6 +448,15 @@ export class CarProtocolService {
 
   private trackPending(seq: number, frame: Uint8Array, tag: string): void {
     const key: number = seq & 0xFFFF
+    const nowMs: number = Date.now()
+    this.pruneEarlyAck(nowMs)
+    const earlyAckAtMs: number | undefined = this.earlyAckAtMs.get(key)
+    if (earlyAckAtMs !== undefined && nowMs - earlyAckAtMs <= this.ackEarlyWindowMs) {
+      // ACK 已先到，视为已确认，不再进入 pending/重发。
+      this.earlyAckAtMs.delete(key)
+      this.recentAckAtMs.set(key, nowMs)
+      return
+    }
     this.clearPendingBySeq(key)
     const timeoutId: number = setTimeout((): void => {
       void this.retryPending(key)
@@ -450,6 +482,9 @@ export class CarProtocolService {
     }
     p.retries += 1
     await this.writeFrame(p.frame, `${p.tag} retry=${p.retries}`)
+    // 竞态修复：若发送期间已收到 ACK 并清理 pending，则禁止重新挂回重发定时器。
+    const alive = this.pending.get(seq)
+    if (!alive || alive !== p) return
     p.timeoutId = setTimeout((): void => {
       void this.retryPending(seq)
     }, this.ackTimeoutMs) as number
@@ -468,6 +503,32 @@ export class CarProtocolService {
     const keys: Array<number> = Array.from(this.pending.keys())
     for (let i: number = 0; i < keys.length; i++) {
       this.clearPendingBySeq(keys[i])
+    }
+  }
+
+  private pruneRecentAck(nowMs: number): void {
+    if (this.recentAckAtMs.size <= 0) return
+    const keys: Array<number> = Array.from(this.recentAckAtMs.keys())
+    for (let i: number = 0; i < keys.length; i++) {
+      const key: number = keys[i]
+      const tsMs: number | undefined = this.recentAckAtMs.get(key)
+      if (tsMs === undefined) continue
+      if (nowMs - tsMs > this.ackDuplicateWindowMs) {
+        this.recentAckAtMs.delete(key)
+      }
+    }
+  }
+
+  private pruneEarlyAck(nowMs: number): void {
+    if (this.earlyAckAtMs.size <= 0) return
+    const keys: Array<number> = Array.from(this.earlyAckAtMs.keys())
+    for (let i: number = 0; i < keys.length; i++) {
+      const key: number = keys[i]
+      const tsMs: number | undefined = this.earlyAckAtMs.get(key)
+      if (tsMs === undefined) continue
+      if (nowMs - tsMs > this.ackEarlyWindowMs) {
+        this.earlyAckAtMs.delete(key)
+      }
     }
   }
 

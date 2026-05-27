@@ -97,8 +97,30 @@ export struct ControlPanel {
 
       // 车辆控制
       Column({ space: 16 }) {
-        Row() {
+        Row({ space: 6 }) {
           Blank()
+          Button('')
+            .width(22)
+            .height(CONTROL_PANEL.DIAG_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.DIAG_BTN_RADIUS)
+            .backgroundColor(Page1Theme.CARD)
+            .fontColor(Page1Theme.CARD)
+            .border({ width: 0, color: Page1Theme.CARD })
+            .stateEffect(false)
+            .onClick((): void => {
+              void page1Coordinator.sendTrafficRedByUi()
+            })
+          Button('')
+            .width(22)
+            .height(CONTROL_PANEL.DIAG_BTN_HEIGHT)
+            .borderRadius(CONTROL_PANEL.DIAG_BTN_RADIUS)
+            .backgroundColor(Page1Theme.HUD_TEXT_SECONDARY)
+            .fontColor(Page1Theme.CARD)
+            .border({ width: 0, color: Page1Theme.CARD })
+            .stateEffect(false)
+            .onClick((): void => {
+              void page1Coordinator.sendTrafficGreenByUi()
+            })
           Button('诊断')
             .height(CONTROL_PANEL.DIAG_BTN_HEIGHT)
             .padding({ left: 10, right: 10 })

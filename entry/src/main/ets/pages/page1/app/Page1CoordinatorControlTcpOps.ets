@@ -14,6 +14,44 @@ import hilog from '@ohos.hilog'
 
 const PAGE1_TCP_LOG_DOMAIN = 0xFF03
 const PAGE1_TCP_LOG_TAG = 'page1tcp'
+const ACK_DUP_FLUSH_DELAY_MS: number = 220
+
+let ackDupMergedSeq: number = -1
+let ackDupMergedCount: number = 0
+let ackDupFlushTimerId: number = -1
+
+function clearAckDupFlushTimer(): void {
+  if (ackDupFlushTimerId >= 0) {
+    clearTimeout(ackDupFlushTimerId)
+    ackDupFlushTimerId = -1
+  }
+}
+
+function flushMergedAckDuplicateLog(ctx: IPage1CoordinatorOps): void {
+  if (ackDupMergedSeq < 0 || ackDupMergedCount <= 0) return
+  const s: Page1UiStore | undefined = ctx.store
+  if (s) {
+    s.pushLog(`RX CCF5 ACK重复 seq=${ackDupMergedSeq} x${ackDupMergedCount}`)
+  }
+  ackDupMergedSeq = -1
+  ackDupMergedCount = 0
+}
+
+function queueMergedAckDuplicate(ctx: IPage1CoordinatorOps, seq: number): void {
+  const key: number = seq & 0xFFFF
+  if (ackDupMergedSeq !== key) {
+    flushMergedAckDuplicateLog(ctx)
+    ackDupMergedSeq = key
+    ackDupMergedCount = 1
+  } else {
+    ackDupMergedCount += 1
+  }
+  clearAckDupFlushTimer()
+  ackDupFlushTimerId = setTimeout((): void => {
+    ackDupFlushTimerId = -1
+    flushMergedAckDuplicateLog(ctx)
+  }, ACK_DUP_FLUSH_DELAY_MS) as number
+}
 
 export function bindTcpCallbacks(ctx: IPage1CoordinatorOps): void {
   const cb: CarTcpCallbacks = {
@@ -26,6 +64,8 @@ export function bindTcpCallbacks(ctx: IPage1CoordinatorOps): void {
 export function onTcpState(ctx: IPage1CoordinatorOps, state: CarConnectionState, text: string): void {
   const s: Page1UiStore | undefined = ctx.store
   if (!s) return
+  clearAckDupFlushTimer()
+  flushMergedAckDuplicateLog(ctx)
 
   ctx.proto.setMode((s.realSendEnabled && state === CarConnectionState.CONNECTED) ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
 
@@ -86,14 +126,23 @@ export function onTcpData(ctx: IPage1CoordinatorOps, data: Uint8Array): void {
     const d: Uint8Array = f.data
 
     if (t === 0xA0) {
-      const ok: boolean = typeof ctx.proto.onAckReceived === 'function' ? ctx.proto.onAckReceived(f.seq) : false
-      s.pushLog(`RX CCF5 ACK seq=${f.seq} ${ok ? 'matched' : 'untracked'}`)
+      const ackState: string = typeof ctx.proto.onAckReceived === 'function' ? String(ctx.proto.onAckReceived(f.seq)) : 'untracked'
+      if (ackState === 'duplicate') {
+        queueMergedAckDuplicate(ctx, f.seq)
+      } else {
+        flushMergedAckDuplicateLog(ctx)
+        s.pushLog(`RX CCF5 ACK seq=${f.seq} ${ackState}`)
+      }
       let ackSummary: string = `ACK 未匹配 seq=${f.seq}`
-      if (ok) {
+      if (ackState === 'matched') {
         const meaning: string = (typeof ctx.proto.consumeAckMatchedMeaning === 'function')
           ? String(ctx.proto.consumeAckMatchedMeaning(f.seq) || '')
           : ''
         ackSummary = meaning.length > 0 ? `ACK ${meaning}` : `ACK 已匹配 seq=${f.seq}`
+      } else if (ackState === 'duplicate') {
+        ackSummary = `ACK 重复 seq=${f.seq}`
+      } else if (ackState === 'early') {
+        ackSummary = `ACK 提前到达 seq=${f.seq}`
       }
       appendDiagRxFrame(f, ackSummary)
       continue

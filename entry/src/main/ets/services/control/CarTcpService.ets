@@ -64,7 +64,6 @@ export class CarTcpService {
 
   // 接收缓冲：处理分片帧重组
   private rxBuffer: Uint8Array = new Uint8Array(0)
-  private readonly rxBufferMaxSize: number = 65536
 
   private currentIp: string = ''
   private currentPort: number = CAR_TCP_PORT
@@ -124,6 +123,18 @@ export class CarTcpService {
 
   private isCcf5Frame(data: Uint8Array): boolean {
     return data.length >= 2 && (data[0] & 0xff) === 0xCC && (data[1] & 0xff) === 0xF5
+  }
+
+  private isHeartbeatPacket(data: Uint8Array): boolean {
+    // 小车心跳：55 AA
+    if (data.length === 2 && (data[0] & 0xff) === 0x55 && (data[1] & 0xff) === 0xAA) {
+      return true
+    }
+    // 我们的心跳：00
+    if (data.length === 1 && (data[0] & 0xff) === 0x00) {
+      return true
+    }
+    return false
   }
 
   // 接收帧日志（HEX）用于定位协议层解析问题
@@ -350,7 +361,12 @@ export class CarTcpService {
         const data: Uint8Array = this.extractRxBytes(msg)
         if (data.length <= 0) {
           const shape: string = this.describeMessageShape(msg)
-          this.logWarn(TAG_SENDAMSTER, `message 事件收到空数据或未知字段 | shape=${shape}`)
+          this.logWarn(TAG_CONNECTSS, `message 事件收到空数据或未知字段 | shape=${shape}`)
+          return
+        }
+
+        // 过滤心跳包：55 AA（小车心跳）或 00（我们的心跳）
+        if (this.isHeartbeatPacket(data)) {
           return
         }
 
@@ -687,13 +703,6 @@ export class CarTcpService {
     newBuffer.set(data, this.rxBuffer.length)
     this.rxBuffer = newBuffer
 
-    // 防止缓冲无限增长
-    if (this.rxBuffer.length > this.rxBufferMaxSize) {
-      this.logWarn(TAG_CONNECTSS, `接收缓冲超限(${this.rxBuffer.length}>${this.rxBufferMaxSize})，清空缓冲`)
-      this.rxBuffer = new Uint8Array(0)
-      return
-    }
-
     // 尝试从缓冲提取完整帧
     this.drainRxBuffer()
   }
@@ -705,10 +714,9 @@ export class CarTcpService {
       return
     }
 
-    // 简单策略：如果缓冲中有数据且包含完整帧标记（0xCC 0xF5），则上抛
-    // 否则等待更多数据到达
+    // 处理 CC F5 格式的帧
     while (this.rxBuffer.length > 0) {
-      // 查找帧头 0xCC 0xF5
+      // 查找帧头 CC F5
       let frameStart: number = -1
       for (let i: number = 0; i < this.rxBuffer.length - 1; i++) {
         if ((this.rxBuffer[i] & 0xff) === 0xCC && (this.rxBuffer[i + 1] & 0xff) === 0xF5) {
@@ -718,9 +726,8 @@ export class CarTcpService {
       }
 
       if (frameStart < 0) {
-        // 没找到帧头，清空缓冲（可能是垃圾数据）
-        if (this.rxBuffer.length > 100) {
-          this.logWarn(TAG_CONNECTSS, `缓冲中未找到帧头，清空${this.rxBuffer.length}字节`)
+        // 没找到帧头，清空缓冲
+        if (this.rxBuffer.length > 0) {
           this.rxBuffer = new Uint8Array(0)
         }
         return
@@ -731,20 +738,29 @@ export class CarTcpService {
         this.rxBuffer = this.rxBuffer.slice(frameStart)
       }
 
-      // 尝试提取完整帧（假设帧格式：0xCC 0xF5 [长度2字节] [数据] [校验1字节]）
+      // 帧格式：CC F5 [LEN] [TYPE] [FLAGS] [SEQ_H] [SEQ_L] [data...] [CRC] BB
+      // 最小帧长度：2(头) + 1(LEN) + 1(CRC) + 1(尾) = 5
       if (this.rxBuffer.length < 5) {
         // 数据不足，等待更多
         return
       }
 
-      const lenHi: number = this.rxBuffer[2] & 0xff
-      const lenLo: number = this.rxBuffer[3] & 0xff
-      const frameLen: number = (lenHi << 8) | lenLo
-      const totalLen: number = 4 + frameLen + 1 // 头(2) + 长度(2) + 数据 + 校验(1)
+      const len: number = this.rxBuffer[2] & 0xff
+      // 总帧长度 = 2(头) + 1(LEN) + len(TYPE到CRC之前) + 1(CRC) + 1(尾)
+      const totalLen: number = 2 + 1 + len + 1 + 1
 
       if (this.rxBuffer.length < totalLen) {
         // 帧不完整，等待更多数据
         return
+      }
+
+      // 检查帧尾是否是 0xBB
+      const frameEnd: number = this.rxBuffer[totalLen - 1] & 0xff
+      if (frameEnd !== 0xBB) {
+        // 帧尾错误，丢弃这个字节，继续查找下一个帧头
+        this.logWarn(TAG_CONNECTSS, `帧尾错误: ${this.toHex(new Uint8Array([frameEnd]))}，期望 BB`)
+        this.rxBuffer = this.rxBuffer.slice(1)
+        continue
       }
 
       // 提取完整帧并上抛

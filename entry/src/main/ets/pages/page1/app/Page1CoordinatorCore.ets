@@ -1227,6 +1227,32 @@ export class Page1Coordinator implements IPage1CoordinatorOps {
     }
   }
 
+  async sendTrafficRedByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.SendTrafficRedOrYellow(false)
+      s.pushLog(`红灯发送(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('红灯发送(DRY_RUN)')
+    }
+  }
+
+  async sendTrafficGreenByUi(): Promise<void> {
+    const s: Page1UiStore | undefined = this.store
+    if (!s) return
+    this.proto.setMode(this.canRealSend() ? CarSendMode.REAL_SEND : CarSendMode.DRY_RUN)
+    if (this.canRealSend()) {
+      s.bumpTx()
+      const seq: number = await this.proto.SendTrafficGreen(false)
+      s.pushLog(`绿灯发送(CCF5): seq=${seq}`)
+    } else {
+      s.pushLog('绿灯发送(DRY_RUN)')
+    }
+  }
+
   async sendBarrierByMapEdge(edgeId: string): Promise<void> {
     const s: Page1UiStore | undefined = this.store
     if (!s) return
