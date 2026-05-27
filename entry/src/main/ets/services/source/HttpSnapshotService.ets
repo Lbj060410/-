@@ -7,6 +7,7 @@
  */
 // entry/src/main/ets/services/source/HttpSnapshotService.ets
 import http from '@ohos.net.http'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 
 interface HttpBusinessErrorLike {
   code?: number | string
@@ -49,32 +50,37 @@ export class HttpSnapshotService {
         reqHeaders['Authorization'] = basicAuth
       }
 
-      const resp: http.HttpResponse = await client.request(url, {
-        method: http.RequestMethod.GET,
-        header: reqHeaders,
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
-        usingProtocol: http.HttpProtocol.HTTP1_1,
-        expectDataType: http.HttpDataType.ARRAY_BUFFER
-      })
+      try {
+        const resp: http.HttpResponse = await client.request(url, {
+          method: http.RequestMethod.GET,
+          header: reqHeaders,
+          connectTimeout: timeoutMs,
+          readTimeout: timeoutMs,
+          usingProtocol: http.HttpProtocol.HTTP1_1,
+          expectDataType: http.HttpDataType.ARRAY_BUFFER
+        })
 
-      this.lastUsedAtMs = Date.now()
+        this.lastUsedAtMs = Date.now()
 
-      if (resp.responseCode !== 200) {
-        throw new Error(`http code=${resp.responseCode}`)
-      }
+        if (resp.responseCode !== 200) {
+          throw new Error(`http code=${resp.responseCode}`)
+        }
 
-      const result: Object = resp.result as Object
-      if (result instanceof ArrayBuffer) {
-        if (result.byteLength <= 0) throw new Error('empty jpeg')
-        return result
+        const result: Object = resp.result as Object
+        if (result instanceof ArrayBuffer) {
+          if (result.byteLength <= 0) throw new Error('empty jpeg')
+          return result
+        }
+        if (result instanceof Uint8Array) {
+          const data: ArrayBuffer = result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength)
+          if (data.byteLength <= 0) throw new Error('empty jpeg')
+          return data
+        }
+        throw new Error(`unexpected result type=${typeof result}`)
+      } catch (e) {
+        bengkuiMasterError('HttpSnapshotService.requestJpeg.client.request', e, `url=${url},timeout=${timeoutMs}`)
+        throw e
       }
-      if (result instanceof Uint8Array) {
-        const data: ArrayBuffer = result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength)
-        if (data.byteLength <= 0) throw new Error('empty jpeg')
-        return data
-      }
-      throw new Error(`unexpected result type=${typeof result}`)
     } catch (e) {
       let msg: string = 'http request failed'
       if (e instanceof Error) {

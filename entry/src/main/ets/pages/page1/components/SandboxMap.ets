@@ -81,6 +81,10 @@ export struct SandboxMap {
   private followTimerId: number = -1
   private flowAnimTimerId: number = -1
 
+  // 路径点缓存，避免每帧重新计算
+  private cachedRoutePolyline: Array<RoutePolyPoint> | undefined = undefined
+  private cachedRouteNodeIds: Array<string> = []
+
   // 手动操作后的临时失权窗口
   @State private manualOverrideUntilMs: number = 0
   @State private routeAnimTick: number = 0
@@ -121,16 +125,27 @@ export struct SandboxMap {
       this.syncCameraFollow()
     }, this.FOLLOW_TICK_MS) as number
 
-    // 流光重绘独立 60fps 循环，避免被 120ms 的跟随节拍拖慢
+    // 流光重绘独立循环，使用 requestAnimationFrame 自适应帧率，避免被 120ms 的跟随节拍拖慢
     if (this.flowAnimTimerId !== -1) clearInterval(this.flowAnimTimerId)
-    this.flowAnimTimerId = setInterval((): void => {
-      try {
-        this.routeAnimTick = (this.routeAnimTick + 1) % 1000000
-        this.drawCompleteStreamingRoute()
-      } catch (e) {
-        bengkuiMasterError('SandboxMap.flowAnimTimer', e)
-      }
-    }, 16) as number
+    let lastDrawAtMs: number = Date.now()
+    const minDrawIntervalMs: number = 20
+    const scheduleNextDraw = (): void => {
+      this.flowAnimTimerId = setTimeout((): void => {
+        try {
+          const now: number = Date.now()
+          if (now - lastDrawAtMs >= minDrawIntervalMs) {
+            this.routeAnimTick = (this.routeAnimTick + 1) % 1000000
+            this.drawCompleteStreamingRoute()
+            lastDrawAtMs = now
+          }
+          scheduleNextDraw()
+        } catch (e) {
+          bengkuiMasterError('SandboxMap.flowAnimTimer', e)
+          scheduleNextDraw()
+        }
+      }, 8) as number
+    }
+    scheduleNextDraw()
   }
 
   aboutToDisappear(): void {
@@ -1374,17 +1389,25 @@ export struct SandboxMap {
       const ctx = this.canvasContext
       ctx.clearRect(0, 0, this.store.mapW, this.store.mapH)
       const nodes = this.activeHighlightNodes()
-      if (nodes.length >= 2) {
-        const pts: Array<RoutePolyPoint> = this.buildRoutePolyline(nodes)
-        if (pts.length >= 2) {
-          const thickness = this.routeHighlightThickness(this.routeHighlightStyle)
 
-          // 1. 整条路径的底色轨道（科技蓝、低透明度）
-          this.strokePolyline(ctx, pts, this.routeHighlightStyle.visual.coreBorderColor, thickness, 0.3)
+      // 检查路径是否变化，只在变化时重新计算
+      const nodesChanged = nodes.length !== this.cachedRouteNodeIds.length ||
+        nodes.some((n, i) => n !== this.cachedRouteNodeIds[i])
 
-          // 2. 流光跑马灯效果（虚线 + dashOffset 动画）
-          this.drawDashedFlowLine(ctx, pts, thickness)
-        }
+      if (nodesChanged) {
+        this.cachedRouteNodeIds = nodes.slice()
+        this.cachedRoutePolyline = nodes.length >= 2 ? this.buildRoutePolyline(nodes) : undefined
+      }
+
+      const pts = this.cachedRoutePolyline
+      if (pts && pts.length >= 2) {
+        const thickness = this.routeHighlightThickness(this.routeHighlightStyle)
+
+        // 1. 整条路径的底色轨道（科技蓝、低透明度）
+        this.strokePolyline(ctx, pts, this.routeHighlightStyle.visual.coreBorderColor, thickness, 0.3)
+
+        // 2. 流光跑马灯效果（虚线 + dashOffset 动画）
+        this.drawDashedFlowLine(ctx, pts, thickness)
       }
       this.drawPlacedMarkerFlowBorders(ctx)
     } catch (e) {

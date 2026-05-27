@@ -126,7 +126,14 @@ export class FrameSourceManager {
         return
       }
 
-      this.store.setLivePixelMap(pm)
+      try {
+        this.store.setLivePixelMap(pm)
+      } catch (e) {
+        bengkuiMasterError('FrameSourceManager.loopOnce.setLivePixelMap', e)
+        try { pm.release() } catch (_) {}
+        throw e
+      }
+
       this.store.markFrame(true, 'http ok')
       this.consecutiveHttpOkCount += 1
       this.consecutiveHttpFailCount = 0
@@ -136,7 +143,13 @@ export class FrameSourceManager {
       fetchOk = true
 
       const cb = this.onFrame
-      if (cb) cb(frame, pm)
+      if (cb) {
+        try {
+          cb(frame, pm)
+        } catch (e) {
+          bengkuiMasterError('FrameSourceManager.loopOnce.onFrame', e, `bytes=${frame.jpeg.byteLength}`)
+        }
+      }
     } catch (e) {
       if (!this.isSessionActive(token)) return
       const msg: string = e instanceof Error ? e.message : 'http frame failed'
@@ -157,15 +170,19 @@ export class FrameSourceManager {
       this.maybeLogFrameFail(msg)
       this.notifyFrameHealth(false, msg)
     } finally {
-      if (this.inFlightSession === token) {
-        this.inFlightSession = -1
-      }
-      if (this.isSessionActive(token)) {
-        const elapsedMs: number = Date.now() - loopStartAtMs
-        const nextDelayMs: number = fetchOk
-          ? Math.max(12, this.dynamicIntervalMs - elapsedMs)
-          : this.resolveFailRetryDelayMs(elapsedMs)
-        this.scheduleNextLoop(url, token, nextDelayMs)
+      try {
+        if (this.inFlightSession === token) {
+          this.inFlightSession = -1
+        }
+        if (this.isSessionActive(token)) {
+          const elapsedMs: number = Date.now() - loopStartAtMs
+          const nextDelayMs: number = fetchOk
+            ? Math.max(12, this.dynamicIntervalMs - elapsedMs)
+            : this.resolveFailRetryDelayMs(elapsedMs)
+          this.scheduleNextLoop(url, token, nextDelayMs)
+        }
+      } catch (e) {
+        bengkuiMasterError('FrameSourceManager.loopOnce.finally', e, `token=${token}`)
       }
     }
   }

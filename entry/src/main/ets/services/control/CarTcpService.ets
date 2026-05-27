@@ -62,6 +62,10 @@ export class CarTcpService {
   // 心跳内容，当前协议用单字节 0x00
   private readonly heartbeatData: Uint8Array = new Uint8Array([0x00])
 
+  // 接收缓冲：处理分片帧重组
+  private rxBuffer: Uint8Array = new Uint8Array(0)
+  private readonly rxBufferMaxSize: number = 65536
+
   private currentIp: string = ''
   private currentPort: number = CAR_TCP_PORT
 
@@ -337,27 +341,27 @@ export class CarTcpService {
     })
 
     tcp.on('message', (msg: TcpMessageLike | ArrayBuffer | Uint8Array) => {
-      if (!this.isCurrentSocket(seq, tcp)) {
-        this.logWarn(TAG_CONNECTSS, '收到 message 事件，但不是当前 socket，忽略')
-        return
-      }
+      try {
+        if (!this.isCurrentSocket(seq, tcp)) {
+          this.logWarn(TAG_CONNECTSS, '收到 message 事件，但不是当前 socket，忽略')
+          return
+        }
 
-      const data: Uint8Array = this.extractRxBytes(msg)
-      if (data.length <= 0) {
-        const shape: string = this.describeMessageShape(msg)
-        this.logWarn(TAG_SENDAMSTER, `message 事件收到空数据或未知字段 | shape=${shape}`)
-        return
-      }
+        const data: Uint8Array = this.extractRxBytes(msg)
+        if (data.length <= 0) {
+          const shape: string = this.describeMessageShape(msg)
+          this.logWarn(TAG_SENDAMSTER, `message 事件收到空数据或未知字段 | shape=${shape}`)
+          return
+        }
 
-      this.logInfo(TAG_CONNECTSS, '进入 message 回调，开始持续读取数据')
-      this.logRxFrame(data)
+        this.logInfo(TAG_CONNECTSS, '进入 message 回调，开始持续读取数据')
+        this.logRxFrame(data)
 
-      // 仅负责把原始字节上抛，不在 TCP 层做协议解析
-      const cb: CarTcpCallbacks | undefined = this.callbacks
-      if (cb) {
-        cb.onData(data)
-      } else {
-        this.logWarn(TAG_CONNECTSS, 'callbacks 未绑定，数据未上抛')
+        // 缓冲接收数据，处理分片帧
+        this.appendRxBuffer(data)
+      } catch (e) {
+        bengkuiMasterError('CarTcpService.tcp.onMessage', e, `seq=${seq}`)
+        this.logError(TAG_CONNECTSS, `message 回调异常: ${e instanceof Error ? e.message : String(e)}`)
       }
     })
 
@@ -410,6 +414,7 @@ export class CarTcpService {
     this.logInfo(TAG_CONNECTSS, 'disconnect 主动断开开始')
     this.stopHeartbeat()
     this.cancelReconnect()
+    this.rxBuffer = new Uint8Array(0)
     await this.disposeSocket()
     this.updateState(CarConnectionState.IDLE, '已断开')
     this.logInfo(TAG_CONNECTSS, 'disconnect 主动断开完成')
@@ -435,11 +440,26 @@ export class CarTcpService {
         this.logInfo(TAG_SENDAMSTER, `发送16进制：${this.toHex(data)}`)
         this.logInfo(TAG_SENDAMSTER, `发送数据长度：${data.length}字节`)
       }
-      await this.tcp.send(opt)
+      this.logInfo(TAG_CONNECTSS, `send 开始，字节数=${data.byteLength}`)
+
+      // 分块发送大数据，避免缓冲区溢出
+      const chunkSize: number = 4096
+      let offset: number = 0
+      while (offset < data.length) {
+        const end: number = Math.min(offset + chunkSize, data.length)
+        const chunk: Uint8Array = data.slice(offset, end)
+        const chunkOpt: socket.TCPSendOptions = {
+          data: this.toArrayBuffer(chunk)
+        }
+        await this.tcp.send(chunkOpt)
+        offset = end
+      }
+
+      this.logInfo(TAG_CONNECTSS, `send 完成，字节数=${data.byteLength}`)
     } catch (e) {
       this.lastErrorText = this.formatSocketError(e, '发送失败')
       this.logError(TAG_CONNECTSS, this.lastErrorText)
-      bengkuiMasterError('CarTcpService.send', e, `bytes=${data.byteLength}`)
+      bengkuiMasterError('CarTcpService.send', e, `bytes=${data.byteLength},state=${this.state}`)
       await this.disposeSocket()
       this.tryReconnect()
     }
@@ -472,15 +492,20 @@ export class CarTcpService {
     this.logInfo(TAG_CONNECTSS, '启动心跳保活')
 
     this.heartbeatTimerId = setInterval(() => {
-      if (!this.tcp || this.state !== CarConnectionState.CONNECTED) {
-        this.logWarn(TAG_CONNECTSS, '心跳检测到未连接，跳过本次发送')
-        return
-      }
+      try {
+        if (!this.tcp || this.state !== CarConnectionState.CONNECTED) {
+          this.logWarn(TAG_CONNECTSS, '心跳检测到未连接，跳过本次发送')
+          return
+        }
 
-      this.logInfo(TAG_CONNECTSS, '发送心跳包')
-      void this.send(this.heartbeatData).catch((e: Object): void => {
-        bengkuiMasterError('CarTcpService.heartbeat.send', e)
-      })
+        this.logInfo(TAG_CONNECTSS, '发送心跳包')
+        void this.send(this.heartbeatData).catch((e: Object): void => {
+          bengkuiMasterError('CarTcpService.heartbeat.send', e)
+        })
+      } catch (e) {
+        bengkuiMasterError('CarTcpService.heartbeat.interval', e, `state=${this.state}`)
+        this.logError(TAG_CONNECTSS, `心跳定时器异常: ${e instanceof Error ? e.message : String(e)}`)
+      }
     }, this.heartbeatIntervalMs) as number
   }
 
@@ -583,14 +608,12 @@ export class CarTcpService {
         OOBInline: true,
         TCPNoDelay: true,
         socketLinger: { on: true, linger: 10 },
-        // 8192 bytes: 支持连续多帧突发，避免 1000 bytes 默认值导致缓冲阻塞
-        receiveBufferSize: 8192,
-        sendBufferSize: 8192,
+        // 16384 bytes: 支持连续多帧突发，避免缓冲阻塞
+        receiveBufferSize: 16384,
+        sendBufferSize: 16384,
         reuseAddress: true,
-        // socketTimeout:
-        // - 调大：弱网容忍更强，但失败感知更慢
-        // - 调小：失败暴露更快，但误判超时概率更高
-        socketTimeout: 10000
+        // socketTimeout: 15000ms 给弱网更多容忍度
+        socketTimeout: 15000
       })
       this.logInfo(TAG_CONNECTSS, 'setExtraOptions 成功')
     } catch (e) {
@@ -655,6 +678,80 @@ export class CarTcpService {
 
   private toArrayBuffer(data: Uint8Array): ArrayBuffer {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+  }
+
+  private appendRxBuffer(data: Uint8Array): void {
+    // 合并新数据到缓冲
+    const newBuffer: Uint8Array = new Uint8Array(this.rxBuffer.length + data.length)
+    newBuffer.set(this.rxBuffer, 0)
+    newBuffer.set(data, this.rxBuffer.length)
+    this.rxBuffer = newBuffer
+
+    // 防止缓冲无限增长
+    if (this.rxBuffer.length > this.rxBufferMaxSize) {
+      this.logWarn(TAG_CONNECTSS, `接收缓冲超限(${this.rxBuffer.length}>${this.rxBufferMaxSize})，清空缓冲`)
+      this.rxBuffer = new Uint8Array(0)
+      return
+    }
+
+    // 尝试从缓冲提取完整帧
+    this.drainRxBuffer()
+  }
+
+  private drainRxBuffer(): void {
+    const cb: CarTcpCallbacks | undefined = this.callbacks
+    if (!cb) {
+      this.logWarn(TAG_CONNECTSS, 'callbacks 未绑定，数据未上抛')
+      return
+    }
+
+    // 简单策略：如果缓冲中有数据且包含完整帧标记（0xCC 0xF5），则上抛
+    // 否则等待更多数据到达
+    while (this.rxBuffer.length > 0) {
+      // 查找帧头 0xCC 0xF5
+      let frameStart: number = -1
+      for (let i: number = 0; i < this.rxBuffer.length - 1; i++) {
+        if ((this.rxBuffer[i] & 0xff) === 0xCC && (this.rxBuffer[i + 1] & 0xff) === 0xF5) {
+          frameStart = i
+          break
+        }
+      }
+
+      if (frameStart < 0) {
+        // 没找到帧头，清空缓冲（可能是垃圾数据）
+        if (this.rxBuffer.length > 100) {
+          this.logWarn(TAG_CONNECTSS, `缓冲中未找到帧头，清空${this.rxBuffer.length}字节`)
+          this.rxBuffer = new Uint8Array(0)
+        }
+        return
+      }
+
+      if (frameStart > 0) {
+        // 丢弃帧头前的数据
+        this.rxBuffer = this.rxBuffer.slice(frameStart)
+      }
+
+      // 尝试提取完整帧（假设帧格式：0xCC 0xF5 [长度2字节] [数据] [校验1字节]）
+      if (this.rxBuffer.length < 5) {
+        // 数据不足，等待更多
+        return
+      }
+
+      const lenHi: number = this.rxBuffer[2] & 0xff
+      const lenLo: number = this.rxBuffer[3] & 0xff
+      const frameLen: number = (lenHi << 8) | lenLo
+      const totalLen: number = 4 + frameLen + 1 // 头(2) + 长度(2) + 数据 + 校验(1)
+
+      if (this.rxBuffer.length < totalLen) {
+        // 帧不完整，等待更多数据
+        return
+      }
+
+      // 提取完整帧并上抛
+      const frame: Uint8Array = this.rxBuffer.slice(0, totalLen)
+      this.rxBuffer = this.rxBuffer.slice(totalLen)
+      cb.onData(frame)
+    }
   }
 }
 

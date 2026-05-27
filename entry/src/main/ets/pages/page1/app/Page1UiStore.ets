@@ -1596,15 +1596,11 @@ export class Page1UiStore {
   }
 
   batteryPct: number = 68
-  logs: Array<string> = []
-
-  // 统一日志入口：带毫秒时间戳，最多保留最近 60 条
+  // 日志仅输出到 hilog，不在 @State 中保留，避免频繁触发 UI 重新渲染
   pushLog(line: string): void {
     const ts: number = Date.now()
     const item: string = `${ts} | ${line}`
     hilog.info(BIZLOG_DOMAIN, BIZLOG_TAG, 'page1: %{public}s', item)
-    // 普通业务日志改为仅输出到 hilog，UI 面板不再保留。
-    if (this.logs.length > 0) this.logs = []
   }
 }
 
