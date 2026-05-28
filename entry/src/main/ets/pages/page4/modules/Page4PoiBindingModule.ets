@@ -7,6 +7,11 @@ export type Page4PlaceRole = 'home' | 'company'
 export interface Page4PlaceBindingPayload {
   homeNodeId?: string
   companyNodeId?: string
+  homeAlias?: string
+  companyAlias?: string
+  updateTsMs?: number
+  updateSeq?: number
+  source?: string
 }
 
 export interface Page4PlaceBindingPlan {

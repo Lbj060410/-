@@ -187,6 +187,8 @@ export struct Page4View {
   private homeNodeId: string = ''
   private companyNodeId: string = ''
   private placeBindingTraceText: string = 'placeBinding.idle'
+  private placeBindingTsMs: number = Date.now()
+  private placeBindingChangeSeq: number = 0
   private readonly routeArrivalTimeoutMs: number = 180000
   private readonly routeArrivalPollMs: number = 300
   private outboundOrders: Array<OutboundOrder> = []
@@ -2723,7 +2725,7 @@ export struct Page4View {
       f = fs.openSync(bindingPath, fs.OpenMode.READ_ONLY)
       const st: fs.Stat = fs.statSync(bindingPath)
       const size: number = Number(st.size)
-      if (!Number.isFinite(size) || size <= 0 || size > 4096) {
+      if (!Number.isFinite(size) || size <= 0 || size > 8192) {
         return
       }
       const buf: ArrayBuffer = new ArrayBuffer(Math.trunc(size))
@@ -2738,6 +2740,8 @@ export struct Page4View {
       const company: string = String(parsed.companyNodeId ?? '').trim().toUpperCase()
       this.homeNodeId = GridIdCodec.isValidId(home) ? home : ''
       this.companyNodeId = GridIdCodec.isValidId(company) ? company : ''
+      this.placeBindingTsMs = Number(parsed.updateTsMs ?? Date.now())
+      this.placeBindingChangeSeq = Number(parsed.updateSeq ?? 0)
     } catch (e) {
       hilog.warn(PAGE4_LOG_DOMAIN, PAGE4_LOG_TAG, '加载点位绑定失败，使用空配置: %{public}s',
         e instanceof Error ? e.message : String(e))
@@ -2749,7 +2753,9 @@ export struct Page4View {
       }
     }
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
-    this.updatePlaceBindingTrace(`bind.load -> ${this.placeBindingTraceStateText()}`)
+    this.placeBindingTsMs = Date.now()
+    this.placeBindingChangeSeq += 1
+    this.updatePlaceBindingTrace(`bind.load#${this.placeBindingChangeSeq} -> ${this.placeBindingTraceStateText()}`)
   }
 
   private persistPlaceBindings(): boolean {
@@ -2757,7 +2763,12 @@ export struct Page4View {
     try {
       const payload: Page4PlaceBindingPayload = {
         homeNodeId: this.homeNodeId,
-        companyNodeId: this.companyNodeId
+        companyNodeId: this.companyNodeId,
+        homeAlias: this.getNodeAliasName(this.homeNodeId),
+        companyAlias: this.getNodeAliasName(this.companyNodeId),
+        updateTsMs: Date.now(),
+        updateSeq: this.placeBindingChangeSeq,
+        source: 'app'
       }
       const txt: string = JSON.stringify(payload)
       const bindingPath: string = `${this.getFilesDir()}/${PAGE4_PLACE_BINDING_FILE}`
@@ -2810,10 +2821,25 @@ export struct Page4View {
     this.placeBindingTraceText = Page4PromptContextModule.compactMethodTraceText(body)
   }
 
+  private getNodeAliasName(nodeId: string): string {
+    if (!GridIdCodec.isValidId(nodeId)) return '未设置'
+    const up: string = nodeId.trim().toUpperCase()
+    const mappings: Array<{ node: string, aliases: Array<string> }> = this.getPoiMappings()
+    for (let i: number = 0; i < mappings.length; i++) {
+      if (mappings[i].node.trim().toUpperCase() === up) {
+        return mappings[i].aliases.length > 0 ? mappings[i].aliases[0] : up
+      }
+    }
+    return up
+  }
+
   private placeBindingTraceStateText(): string {
     const home: string = GridIdCodec.isValidId(this.homeNodeId) ? this.homeNodeId : '-'
     const company: string = GridIdCodec.isValidId(this.companyNodeId) ? this.companyNodeId : '-'
-    return `home=${home} company=${company}`
+    const homeAlias: string = this.getNodeAliasName(home)
+    const companyAlias: string = this.getNodeAliasName(company)
+    const ts: string = this.formatTime(this.placeBindingTsMs)
+    return `home=${home}|${homeAlias} company=${company}|${companyAlias} @${ts} seq=${this.placeBindingChangeSeq}`
   }
 
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
@@ -2826,7 +2852,7 @@ export struct Page4View {
       const parts: Array<string> = []
       if (query.askHome) parts.push(this.formatPlaceBinding('home'))
       if (query.askCompany) parts.push(this.formatPlaceBinding('company'))
-      this.updatePlaceBindingTrace(`bind.query -> ${this.placeBindingTraceStateText()}`)
+      this.updatePlaceBindingTrace(`bind.query#${this.placeBindingChangeSeq} -> ${this.placeBindingTraceStateText()}`)
       this.pushAssistant(parts.length > 0 ? parts.join('，') : `${this.formatPlaceBinding('home')}，${this.formatPlaceBinding('company')}`)
       return true
     }
@@ -2845,7 +2871,7 @@ export struct Page4View {
     if (!GridIdCodec.isValidId(node)) {
       const roleText: string = this.placeRoleText(req.role)
       await this.ensureQueryThinkingShown()
-      this.updatePlaceBindingTrace(`bind.fail -> ${parseMethodName} role=${roleText}`)
+      this.updatePlaceBindingTrace(`bind.fail#${this.placeBindingChangeSeq} -> ${parseMethodName} role=${roleText} text=${req.placeText}`)
       this.pushAssistant(Page4ReplyText.placeBindingUnresolved(roleText))
       return true
     }
@@ -2853,12 +2879,14 @@ export struct Page4View {
     const roleText: string = this.placeRoleText(req.role)
     if (req.role === 'home') this.homeNodeId = node
     else this.companyNodeId = node
+    this.placeBindingTsMs = Date.now()
+    this.placeBindingChangeSeq += 1
     this.setQueryThinkingProgress(Page4ReplyText.QUERY_PREPARING, 72)
     page1Store.setPlaceConfigured(this.homeNodeId, this.companyNodeId)
     const ok: boolean = this.persistPlaceBindings()
     await this.ensureQueryThinkingShown()
     this.updatePlaceBindingTrace(
-      `bind.ok -> ${parseMethodName} save=${ok ? 'ok' : 'fail'} ${this.placeBindingTraceStateText()}`
+      `bind.ok#${this.placeBindingChangeSeq} -> ${parseMethodName} save=${ok ? 'ok' : 'fail'} ${this.placeBindingTraceStateText()}`
     )
     if (ok) {
       this.pushAssistant(

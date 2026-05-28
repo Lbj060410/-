@@ -1,7 +1,8 @@
 ﻿import { OpenClawChatMessage } from '../../../services/assistant/OpenClawGatewayClient'
 
 export class Page4PromptContextModule {
-  private static readonly OPENCLAW_TRACE_MAX_CHARS: number = 50
+  // 增大容量以容纳中文别名、时间戳等丰富的方法轨迹数据
+  private static readonly OPENCLAW_TRACE_MAX_CHARS: number = 150
 
   static normalizePlaceInput(text: string): string {
     return text.trim().toUpperCase().replace(/[，。！？、；：,.!?\-_/\\()\[\]\s]/g, '')
