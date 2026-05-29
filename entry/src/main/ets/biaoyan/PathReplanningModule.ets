@@ -250,14 +250,14 @@ export class PathReplanningModule {
 
       //2.[规划]失败时
       if (plannerOutput.selectedPath.length <= 0) {
-        return this.guihuaReplanFailure(guard)
+        return
 
       }
 
       guard.newPath = plannerOutput.selectedPath
       guard.strategyId = plannerOutput.selectedStrategy
       //3.[规划]成功时
-      return this.guihuaReplanFailure(guard)
+      return
 
     } finally {
       this.isReplanning = false

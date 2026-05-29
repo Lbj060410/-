@@ -187,14 +187,12 @@ export class LocationMappingModule {
     const localnode =undefined
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)
     /* 3.若本地匹配未命中*/
-   this.Realtime=realtime
 
     const reverse = this.callBaiduReverseGeocode(traceId, realtime)
     const pois = this.callBaiduNearbySearch(traceId, text, realtime)
 
 
     const decision = this.fuseLocationSignals(traceId, text, localnode, reverse, pois, realtime)
-    // OpenClaw 智能体返回失败状态并清空无效结果
     if (!decision.chosenNode || decision.confidence < 0.35) {
       this.recordFusion(
         traceId,
@@ -208,7 +206,6 @@ export class LocationMappingModule {
       return this.failResult('未找到可落地的网格点位')
     }
   //将映射结果传递至扩散策略路径规划模块
-
     const result = this.success(decision.chosenNode)
     this.recordFusion(
       traceId,

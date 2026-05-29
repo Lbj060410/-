@@ -159,12 +159,12 @@ export class AStarPathPlanner {
           continue
         }
         //2.在过滤掉阻塞邻居后，调用距离方法
-        this.distance(distanceMap,neighbor,currentDistance)
+
         queue.push(neighbor)
       }
     }
     //检查起点是否被BFS覆盖
-    this.cover(distanceMap,start,expandedCount)
+
     // 回溯路径
     const path: Array<string> = [start]
     let current = start
@@ -204,7 +204,7 @@ export class AStarPathPlanner {
       const nextDistance = distanceMap.get(next) ?? Number.MAX_SAFE_INTEGER
 
       // 严格下降判断方法
-      this.decrease(nextDistance,currentDistance)
+
       path.push(next)
       current = next
     }
