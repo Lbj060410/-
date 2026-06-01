@@ -182,7 +182,6 @@ export class LocationMappingModule {
       this.recordFusion(traceId, text, directNode, `节点直达:${directNode}`, 0.99, 'DIRECT_NODE', [])
       return result
     }
-
     // 2.若非节点编码，系统则通过本地别名配置,进行低延迟匹配，命中后直接返回对应节点
     const localnode =undefined
     const realtime = this.fetchRealtimeLocationFromBaidu(traceId)

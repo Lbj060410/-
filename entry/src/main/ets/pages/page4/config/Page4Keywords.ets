@@ -1,7 +1,7 @@
 export class Page4Keywords {
   static readonly PLACE_NAME_HOME: string = '物流中心'
   static readonly PLACE_NAME_COMPANY: string = '快递点'
-  static readonly PLACE_NAME_COMPANY_ALT: string = '公司仓库'
+  static readonly PLACE_NAME_COMPANY_ALT: string = ''
 
   static readonly MULTI_TASK_CONNECTORS: Array<string> = [
     '然后', '接着', '随后', '并且', '并且再', '同时', '接下来', '再去', '再到'
@@ -57,22 +57,22 @@ export class Page4Keywords {
     '前往物流中心', '去物流中心', '到物流中心', '返回物流中心', '回物流中心',
     '返仓', '回仓', '返航', '回基地', '返回基地', '回中心'
   ]
-  static readonly ROUTE_HOME_SHORTCUT_LOWER: Array<string> = ['go home', 'to home']
+  static readonly ROUTE_HOME_SHORTCUT_LOWER: Array<string> = []
   static readonly ROUTE_COMPANY_SHORTCUT_RAW: Array<string> = [
     '前往快递点', '去快递点', '到快递点', '返回快递点', '回快递点',
-    '前往公司仓库', '去公司仓库', '到公司仓库', '返回公司仓库', '回公司仓库'
+    '前往快递网点', '去快递网点', '到快递网点', '返回快递网点', '回快递网点'
   ]
-  static readonly ROUTE_COMPANY_SHORTCUT_LOWER: Array<string> = ['go company', 'to company']
+  static readonly ROUTE_COMPANY_SHORTCUT_LOWER: Array<string> = []
   static readonly ROUTE_WAREHOUSE_SHORTCUT_RAW: Array<string> = ['前往仓库', '去仓库', '到仓库', '回仓库', '返回仓库']
 
   static readonly ROUTE_TARGET_DISPLAY_HOME_RAW: Array<string> = [
     '物流中心', '回仓', '返仓', '返航', '回基地', '回中心'
   ]
-  static readonly ROUTE_TARGET_DISPLAY_HOME_LOWER: Array<string> = ['go home', 'to home']
+  static readonly ROUTE_TARGET_DISPLAY_HOME_LOWER: Array<string> = []
   static readonly ROUTE_TARGET_DISPLAY_COMPANY_RAW: Array<string> = [
-    '快递点', '公司仓库', '回快递点', '返回快递点'
+    '快递点', '快递网点', '回快递点', '返回快递点'
   ]
-  static readonly ROUTE_TARGET_DISPLAY_COMPANY_LOWER: Array<string> = ['go company', 'to company']
+  static readonly ROUTE_TARGET_DISPLAY_COMPANY_LOWER: Array<string> = []
 
   static readonly CONTROL_INTENT: Array<string> = [
     '导航', '前往', '去', '到',
@@ -92,15 +92,15 @@ export class Page4Keywords {
   static readonly POI_MAPPING_QUERY: Array<string> = ['所有点位', '点位映射', '映射名称', '点位列表', '全部点位', '查看所有映射点位']
   static readonly EXPORT_POI_QUERY: Array<string> = ['导出点位映射', '导出映射', '导出点位', '导出json', '导出为json']
 
-  static readonly PLACE_ROLE_HOME_TOKENS: Array<string> = ['home', '物流中心']
-  static readonly PLACE_ROLE_COMPANY_TOKENS: Array<string> = ['company', '快递点', '公司仓库']
-  static readonly PLACE_BINDING_ROLE_TOKENS: Array<string> = ['物流中心', '快递点', '公司仓库', 'home', 'company']
+  static readonly PLACE_ROLE_HOME_TOKENS: Array<string> = ['物流中心']
+  static readonly PLACE_ROLE_COMPANY_TOKENS: Array<string> = ['快递点', '快递网点']
+  static readonly PLACE_BINDING_ROLE_TOKENS: Array<string> = ['物流中心', '快递点', '快递网点']
   static readonly PLACE_BINDING_SETTERS: Array<string> = ['设置为', '设为', '改为', '改成', '定义为', '记为', '当成', '作为']
-  static readonly PLACE_BINDING_QUERY_ROLES: Array<string> = ['物流中心', '快递点', '公司仓库']
+  static readonly PLACE_BINDING_QUERY_ROLES: Array<string> = ['物流中心', '快递点', '快递网点']
   static readonly PLACE_BINDING_QUERY_VERBS: Array<string> = ['在哪', '是什么', '查询', '查看', '配置', '设置了吗', '有没有设置', '是否设置']
   static readonly PLACE_BINDING_INTENT_BLOCKERS: Array<string> = ['映射', '点位', '查询', '查看', '有没有', '是否']
-  static readonly PLACE_BINDING_QUERY_HOME: Array<string> = ['物流中心', 'home']
-  static readonly PLACE_BINDING_QUERY_COMPANY: Array<string> = ['快递点', 'company', '公司仓库']
+  static readonly PLACE_BINDING_QUERY_HOME: Array<string> = ['物流中心']
+  static readonly PLACE_BINDING_QUERY_COMPANY: Array<string> = ['快递点', '快递网点']
 
   static readonly ALIAS_LEARN_PATTERNS: Array<RegExp> = [
     /(?:把|将)?\s*([^，。；;,\s]{1,16})\s*(?:记为|设为|设置为|定义为)\s*([A-Ga-g]\d{1,2})/,
@@ -137,10 +137,10 @@ export class Page4Keywords {
   }
 
   static buildPlaceBindingRoleFirstRegex(): RegExp {
-    return /(?:把|将)?\s*(物流中心|快递点|公司仓库|home|company)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(.+)$/i
+    return /(?:把|将)?\s*(物流中心|快递点|快递网点)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(.+)$/i
   }
 
   static buildPlaceBindingPlaceFirstRegex(): RegExp {
-    return /(?:把|将)?\s*(.+?)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(物流中心|快递点|公司仓库|home|company)\s*$/i
+    return /(?:把|将)?\s*(.+?)\s*(?:设置为|设为|改为|改成|定义为|记为)\s*(物流中心|快递点|快递网点)\s*$/i
   }
 }

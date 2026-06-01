@@ -141,10 +141,10 @@ export class Page4OpenClawChatModule {
       return undefined
     }
     if (!obj) return undefined
-    const roleRaw: string = String(obj['role'] ?? '').trim().toLowerCase()
+    const roleRaw: string = String(obj['role'] ?? '').trim()
     let role: 'home' | 'company' | '' = ''
-    if (roleRaw === 'home' || roleRaw === '物流中心') role = 'home'
-    if (roleRaw === 'company' || roleRaw === '快递点' || roleRaw === '公司仓库') role = 'company'
+    if (roleRaw === '物流中心') role = 'home'
+    if (roleRaw === '快递点' || roleRaw === '快递网点') role = 'company'
     if (role.length <= 0) return undefined
     const placeText: string = String(obj['place'] ?? obj['target'] ?? obj['location'] ?? '').trim()
     if (placeText.length <= 0) return undefined
@@ -164,4 +164,3 @@ export class Page4OpenClawChatModule {
     return s.trim()
   }
 }
-

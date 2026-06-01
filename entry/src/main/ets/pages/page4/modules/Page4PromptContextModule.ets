@@ -23,7 +23,7 @@ export class Page4PromptContextModule {
     placeBindingTraceText: string
   ): string {
     const traceText: string = this.compactMethodTraceText(placeBindingTraceText)
-    return `系统上下文：默认地址=江西省南昌市；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n方法轨迹：${traceText}\n语义约定：home=物流中心，company=快递点。`
+    return `系统上下文：默认地址=江西省；当前可用点位为A1-G7；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；业务类型=无人物流车。\n${mappingText}\n方法轨迹：${traceText}\n语义约定：固定业务点位包含物流中心与快递点。`
   }
 
   static buildOpenClawRuntimeContextPromptLite(
@@ -36,7 +36,7 @@ export class Page4PromptContextModule {
     placeBindingTraceText: string
   ): string {
     const traceText: string = this.compactMethodTraceText(placeBindingTraceText)
-    return `系统上下文：默认地址=江西省南昌市；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；链路=${connStateText}；当前小车电量=${batteryPct}%；物流中心=${homeBindingText}；快递点=${companyBindingText}；方法轨迹=${traceText}。`
+    return `系统上下文：默认地址=江西省；当前模式=${mode}；自动跟随=${autoFollowEnabled ? 'ON' : 'OFF'}；链路=${connStateText}；当前小车电量=${batteryPct}%；物流中心=${homeBindingText}；快递点=${companyBindingText}；方法轨迹=${traceText}。`
   }
 
   static buildOpenClawMessages(

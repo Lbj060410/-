@@ -111,11 +111,11 @@ export class Page4PoiBindingModule {
 
   static parsePlaceRoleToken(raw: string): '' | Page4PlaceRole {
     const x: string = raw.trim().toLowerCase()
-    if (x.indexOf('home') >= 0 || x.indexOf(Page4Keywords.PLACE_NAME_HOME) >= 0) return 'home'
+    if (x.indexOf(Page4Keywords.PLACE_NAME_HOME) >= 0) return 'home'
+    const companyAlt: string = Page4Keywords.PLACE_NAME_COMPANY_ALT.trim().toLowerCase()
     if (
-      x.indexOf('company') >= 0 ||
       x.indexOf(Page4Keywords.PLACE_NAME_COMPANY) >= 0 ||
-      x.indexOf(Page4Keywords.PLACE_NAME_COMPANY_ALT) >= 0
+      (companyAlt.length > 0 && x.indexOf(companyAlt) >= 0)
     ) return 'company'
     return ''
   }

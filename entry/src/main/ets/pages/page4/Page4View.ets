@@ -165,7 +165,7 @@ export struct Page4View {
     'hostname'
   ]
   private readonly openClawSystemPrompt: string =
-    '你是无人物流车的车控与调度助手。默认地址=江西省南昌市。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。' +
+    '你是无人物流车的车控与调度助手。默认地址=江西省。优先使用简洁中文回复；涉及行驶、安全、货物操作时先给出明确、安全、可执行的步骤。' +
     '如果进入AI问答，请按固定格式回复：第一行“思考过程：”用1到2句简短说明判断依据；第二行“最终回答：”给出结论与建议。不要使用省略号。'
   private promptQueueTail: Promise<void> = Promise.resolve()
   private queuedPromptCount: number = 0
@@ -1927,36 +1927,24 @@ export struct Page4View {
 
   private getPoiMappings(): Array<{ node: string, aliases: Array<string> }> {
     return [
-      { node: 'B1', aliases: ['海昏侯', '海昏侯国遗址', '海昏侯国遗址公园','快递点'] },
-      { node: 'D1', aliases: ['江西省博物馆', '省博物馆'] },
-      { node: 'F1', aliases: ['青山湖风景区', '青山湖'] },
-      { node: 'A2', aliases: ['梅岭风景区', '梅岭'] },
-      /*B2对应滕王阁*/
-      { node: 'B2', aliases: ['滕王阁'] },
-      { node: 'F2', aliases: ['八一广场'] },
-      { node: 'G2', aliases: ['高新区住宅群', '艾溪湖东岸小区', '艾溪湖东岸', '艾溪湖'] },
-      { node: 'A4', aliases: ['南昌之星摩天轮', '南昌之星', '摩天轮'] },
-      { node: 'B4', aliases: ['万寿宫历史文化街区', '万寿宫'] },
-      { node: 'F4', aliases: ['八一起义纪念馆'] },
-      /*G4对应南昌火车站*/
-      { node: 'G4', aliases: ['南昌火车站', '铁路社区', '火车站'] },
-      { node: 'A6', aliases: ['赣江风光带', '风光带'] },
-      { node: 'B6', aliases: ['绳金塔'] },
-      { node: 'F6', aliases: ['青云谱小区群', '三店西路社区', '青云谱'] },
-      { node: 'G6', aliases: ['象湖湿地公园', '象湖新城小区', '象湖新城', '象湖'] },
-      { node: 'B7', aliases: ['秋水广场', '昌南体育中心'] },
-      { node: 'D7', aliases: ['八大山人纪念馆', '八大山人'] },
-      { node: 'F7', aliases: ['小蓝工业园', '莲塘住宅区', '莲塘','物流中心'] },
-      // crash_hilog.txt 中的黑线/道路参考，映射到代表点位
-      { node: 'D1', aliases: ['英雄大道'] },
-      { node: 'F1', aliases: ['扬子洲大桥'] },
-      { node: 'B2', aliases: ['阳明路', '八一大桥', '中山路'] },
-      { node: 'B4', aliases: ['南昌大桥', '站前路'] },
-      { node: 'F4', aliases: ['抚河路', '象山路'] },
-      { node: 'B6', aliases: ['昌南大道'] },
-      { node: 'A4', aliases: ['枫生快速路'] },
-      { node: 'B2', aliases: ['赣江', '八一桥', '南昌桥'] },
-      { node: 'G4', aliases: ['洪都大道'] }
+      { node: 'B1', aliases: ['赣州通天岩', '通天岩', '赣州景区集散点', '快递点', '赣州快递点'] },
+      { node: 'D1', aliases: ['庐山西海', '西海', '庐山西海风景区', '葛仙村'] },
+      { node: 'F1', aliases: ['三百山', '安远三百山', '三百山景区'] },
+      { node: 'A2', aliases: ['庐山', '庐山风景区', '九江庐山'] },
+      { node: 'B2', aliases: ['三清山', '上饶三清山', '三清山景区'] },
+      { node: 'F2', aliases: ['龙虎山', '鹰潭龙虎山', '天师府'] },
+      { node: 'G2', aliases: ['婺源篁岭', '篁岭', '婺源'] },
+      { node: 'A4', aliases: ['井冈山', '井冈山风景区', '黄洋界'] },
+      { node: 'B4', aliases: ['武功山', '萍乡武功山', '武功山景区'] },
+      { node: 'F4', aliases: ['明月山', '宜春明月山', '明月山景区'] },
+      { node: 'G4', aliases: ['仙女湖', '新余仙女湖', '仙女湖景区'] },
+      { node: 'A6', aliases: ['滕王阁', '南昌滕王阁', '滕王阁景区'] },
+      { node: 'B6', aliases: ['景德镇古窑民俗博览区', '景德镇古窑', '瑶里古镇'] },
+      { node: 'F6', aliases: ['望仙谷', '上饶望仙谷', '望仙谷景区'] },
+      { node: 'G6', aliases: ['龟峰', '上饶龟峰', '弋阳龟峰'] },
+      { node: 'B7', aliases: ['大觉山', '抚州大觉山', '大觉山景区'] },
+      { node: 'D7', aliases: ['鄱阳湖国家湿地公园', '鄱阳湖湿地', '鄱阳湖'] },
+      { node: 'F7', aliases: ['南昌向塘物流中心', '向塘物流中心', '江西物流中心', '物流中心'] }
     ]
   }
 
@@ -2839,7 +2827,7 @@ export struct Page4View {
     const homeAlias: string = this.getNodeAliasName(home)
     const companyAlias: string = this.getNodeAliasName(company)
     const ts: string = this.formatTime(this.placeBindingTsMs)
-    return `home=${home}|${homeAlias} company=${company}|${companyAlias} @${ts} seq=${this.placeBindingChangeSeq}`
+    return `物流中心=${home}|${homeAlias} 快递点=${company}|${companyAlias} @${ts} seq=${this.placeBindingChangeSeq}`
   }
 
   private async handlePlaceBindingPrompt(text: string, lower: string): Promise<boolean> {
@@ -2931,8 +2919,8 @@ export struct Page4View {
         role: 'system',
         content:
           '你是无人物流车位置映射解析器。把用户话语解析为严格JSON，不要解释。' +
-          '输出格式：{"role":"home|company","place":"地点原文"}。' +
-          '语义约定：home 表示物流中心，company 表示快递点。' +
+          '输出格式：{"role":"物流中心|快递点","place":"地点原文"}。' +
+          '语义约定：role=物流中心 表示物流中心；role=快递点 表示快递点。' +
           '如果无法确定，输出：{"role":"","place":""}。'
       },
       {

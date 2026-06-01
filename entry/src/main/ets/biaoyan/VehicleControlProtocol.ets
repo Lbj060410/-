@@ -176,7 +176,7 @@ export class VehicleControlProtocol {
     this.logSystemEvent(
       `[0x02] Step3 识别结果 type=${recognitionResult.detectedType}, confidence=${recognitionResult.confidence}`
     )
-    //4.系统[记录]日志、将信息[上传]云端
+    //4.系统记录日志、将信息上传云端
 
     this.logSystemEvent('[0x02] Step5 上传障碍事件到云端队列')
     this.uploadToCloud({

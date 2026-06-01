@@ -248,7 +248,7 @@ export class PathReplanningModule {
         diagnostics: plannerOutput.diagnostics
       }
 
-      //2.[规划]失败时
+      //2.规划失败时
       if (plannerOutput.selectedPath.length <= 0) {
         return
 
@@ -256,7 +256,7 @@ export class PathReplanningModule {
 
       guard.newPath = plannerOutput.selectedPath
       guard.strategyId = plannerOutput.selectedStrategy
-      //3.[规划]成功时
+      //3.规划成功时
       return
 
     } finally {

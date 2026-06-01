@@ -185,10 +185,10 @@ export class AIAssistantModule {
       if (normalizedInput.length <= 0) {
         return this.buildErrorResponse(startTime, 'EMPTY_INPUT', '输入为空，请重新描述需求')
       }
-      //若判定为[导航]意图
+      //若判定为导航意图
       const parseResult = this.parseText(normalizedInput)
 
-      //若判定为[车辆]控制意图
+      //若判定为车辆控制意图
       const intentResult = this.recognizeIntent(normalizedInput)
 
       this.lastIntent = intentResult.intentType
@@ -196,7 +196,7 @@ export class AIAssistantModule {
         parseResult: parseResult,
         intentResult: intentResult
       })
-      //降级至[openclaw]
+      //降级至openclaw
       const llmReply = this.invokeDeepSeekModelSimulated(traceId, normalizedInput, parseResult, intentResult)
 
       // Step4: 执行工具调用并生成业务结果
