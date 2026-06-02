@@ -1997,6 +1997,42 @@ export struct Page4View {
     return Page4PromptContextModule.normalizePlaceInput(text)
   }
 
+  private normalizeVoiceNodeInput(text: string): string {
+    const src: string = text.trim().toUpperCase()
+    if (src.length <= 0) return ''
+
+    let s: string = src
+      .replace(/\s+/g, '')
+      .replace(/[：:，,。！？、；;（）()\[\]【】]/g, '')
+
+    s = s
+      .replace(/第([A-G])(?:行|列|排)?/g, '$1')
+      .replace(/地([A-G])(?:行|列|排)?/g, '$1')
+      .replace(/滴([A-G])(?:行|列|排)?/g, '$1')
+      .replace(/得([A-G])(?:行|列|排)?/g, '$1')
+      .replace(/的([A-G])(?:行|列|排)?/g, '$1')
+      .replace(/弟([A-G])(?:行|列|排)?/g, '$1')
+
+    s = s
+      .replace(/([A-G])(?:行|列|排)?第?([1-7])/g, '$1$2')
+      .replace(/([A-G])(?:行|列|排)?第?(一|二|三|四|五|六|七)/g, '$1$2')
+      .replace(/([A-G])(?:行|列|排)?第?(壹|贰|叁|肆|伍|陆|柒)/g, '$1$2')
+
+    const zhMap: Record<string, string> = {
+      '一': '1', '二': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7',
+      '壹': '1', '贰': '2', '叁': '3', '肆': '4', '伍': '5', '陆': '6', '柒': '7',
+      '1': '1', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7'
+    }
+    const m: RegExpMatchArray | null = s.match(/([A-G])(一|二|三|四|五|六|七|壹|贰|叁|肆|伍|陆|柒|[1-7])/)
+    if (!m || m.length < 3) return ''
+    const col: string = String(m[1] ?? '').trim().toUpperCase()
+    const rowRaw: string = String(m[2] ?? '').trim()
+    const row: string = String(zhMap[rowRaw] ?? '')
+    if (row.length <= 0) return ''
+    const node: string = `${col}${row}`
+    return GridIdCodec.isValidId(node) ? node : ''
+  }
+
   private extractDestNode(input: string): string {
     const aliasNode: string = this.resolveAliasNode(input)
     if (aliasNode.length > 0) return aliasNode
@@ -2006,6 +2042,9 @@ export struct Page4View {
 
     const fromShortcut: string = this.resolveFastDestShortcut(input)
     if (fromShortcut.length > 0) return fromShortcut
+
+    const voiceNode: string = this.normalizeVoiceNodeInput(input)
+    if (voiceNode.length > 0) return voiceNode
 
     const upper: string = input.trim().toUpperCase()
     const m1: RegExpMatchArray | null = upper.match(Page4Keywords.buildRouteTargetRegex())
