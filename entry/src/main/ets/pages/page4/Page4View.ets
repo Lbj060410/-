@@ -46,6 +46,7 @@ import util from '@ohos.util'
 import resourceManager from '@ohos.resourceManager'
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
 import type common from '@ohos.app.ability.common'
+import { bengkuiMasterError } from '../../utils/BengkuiMasterLogger'
 import { AssistantMessage as SessionAssistantMessage, HistorySession as SessionHistorySession, Page4SessionModule } from './modules/Page4SessionModule'
 import { Page4InputQueueModule } from './modules/Page4InputQueueModule'
 import { Page4LocalIntentModule } from './modules/Page4LocalIntentModule'
@@ -370,6 +371,9 @@ export struct Page4View {
   }
 
   private onVoicePressDown(): void {
+    // 按住说话按钮时，停止播报旧的回答
+    page4TencentLocalTtsService.stop()
+
     const rs = Page4VoiceFlowModule.onVoicePressDown({
       longPressTimerId: this.longPressTimerId,
       longPressThresholdMs: this.longPressThresholdMs,
@@ -425,8 +429,8 @@ export struct Page4View {
       this.voiceRecording = true
     } catch (e) {
       this.voiceRecording = false
-      const msg: string = e instanceof Error ? e.message : 'unknown error'
-      this.pushAssistant(Page4ReplyText.voiceInputStartFail(msg))
+      bengkuiMasterError('Page4View.startVoiceListening', e)
+      this.pushAssistant('当前网络波动，请重新输入')
     }
   }
 
@@ -439,8 +443,13 @@ export struct Page4View {
       const text: string = await Promise.resolve(adapter.stopListening())
       return typeof text === 'string' ? text : ''
     } catch (e) {
-      const msg: string = e instanceof Error ? e.message : 'unknown error'
-      this.pushAssistant(Page4ReplyText.voiceRecognizeFail(msg))
+      bengkuiMasterError('Page4View.stopVoiceListening', e)
+      const msg: string = e instanceof Error ? e.message : String(e)
+      if (msg.indexOf('no match') >= 0 || msg.indexOf('empty') >= 0) {
+        this.pushAssistant('未识别到语音，请重新输入')
+      } else {
+        this.pushAssistant('当前网络波动，请重新输入')
+      }
       return ''
     }
   }
@@ -656,9 +665,7 @@ export struct Page4View {
       this.logInfo('sendAutoSpeakRequest', `chars=${content.length}`)
       await page4TencentLocalTtsService.speak(content)
     } catch (e) {
-      const msg: string = this.errorToText(e)
-      this.logError('autoSpeakFail', msg)
-      this.showToast(Page4ReplyText.toastAutoSpeakFail(msg))
+      bengkuiMasterError('Page4View.maybeAutoSpeakAssistantText', e)
     }
   }
 
@@ -670,9 +677,7 @@ export struct Page4View {
         await page4TencentLocalTtsService.speak(latestAssistant)
       }
     } catch (e) {
-      const msg: string = this.errorToText(e)
-      this.logError('previewVoiceReplyAfterEnableFail', msg)
-      this.showToast(Page4ReplyText.toastVoiceReplyUnavailable(msg))
+      bengkuiMasterError('Page4View.previewVoiceReplyAfterEnable', e)
     }
   }
 
@@ -682,6 +687,11 @@ export struct Page4View {
 
   private errorToText(e: Object): string {
     return Page4RuntimeDiagnosticsModule.errorToText(e)
+  }
+
+  private handleErrorFriendly(e: Object, context: string): void {
+    bengkuiMasterError(`Page4View.${context}`, e)
+    this.pushAssistant('当前网络波动，请重新输入')
   }
 
   private isCurrentNewChat(): boolean {
@@ -781,14 +791,14 @@ export struct Page4View {
       this.lastAction = Page1Action.STOP
       receipts.push(this.buildReceipt(Page4ReplyText.stopActionText(), true, true))
     } catch (e) {
-      const msg: string = e instanceof Error ? e.message : 'stop failed'
-      receipts.push(this.buildReceipt(Page4ReplyText.stopActionFail(msg), false, false))
+      bengkuiMasterError('Page4View.undoLastActionToSafePoint.stop', e)
+      receipts.push(this.buildReceipt('停止失败', false, false))
     }
     if (GridIdCodec.isValidId(target)) {
       const backReceipts: Array<Page4ExecutionReceipt> = await this.routeWithReplanAndWaitArrival(target)
       for (let i: number = 0; i < backReceipts.length; i++) receipts.push(backReceipts[i])
     } else {
-      receipts.push(this.buildReceipt(Page4ReplyText.undoNoSafePoint('fallback'), false, false))
+      receipts.push(this.buildReceipt('未记录安全点', false, false))
     }
     this.pushAssistant(Page4ReplyText.undoResult(this.renderReceiptsSummary(receipts)))
   }
@@ -901,15 +911,15 @@ export struct Page4View {
         }
         return { ok: true, receipt: this.buildReceipt(taskText, true, true), appliedDest: goal }
       } catch (e) {
-        const msg: string = e instanceof Error ? e.message : 'route failed'
-        if (firstErr.length <= 0) firstErr = msg
-        this.lastRouteFailureReason = msg
+        bengkuiMasterError('Page4View.routeWithReplanAndWaitArrival.startManualRoute', e, `goal=${goal}`)
+        if (firstErr.length <= 0) firstErr = '导航失败'
+        this.lastRouteFailureReason = '导航失败'
       }
     }
-    const detail: string = firstErr.length > 0 ? firstErr : '规划失败'
+    const detail: string = firstErr.length > 0 ? firstErr : '导航失败'
     this.lastRouteFailureReason = detail
     this.lastReplanSummary = `原目标${dest}失败，未找到可替代方案`
-    return { ok: false, receipt: this.buildReceipt(Page4ReplyText.routeFailReceipt(dest, detail), false, false), appliedDest: '' }
+    return { ok: false, receipt: this.buildReceipt('导航失败', false, false), appliedDest: '' }
   }
 
   private async sleepMs(delayMs: number): Promise<void> {
@@ -1043,8 +1053,8 @@ export struct Page4View {
         out.push(this.buildReceipt('撤销-停止', true, true))
         stopOk = true
       } catch (e) {
-        const msg: string = e instanceof Error ? e.message : 'stop failed'
-        out.push(this.buildReceipt(`撤销-停止失败(${msg})`, false, false))
+        bengkuiMasterError('Page4View.executeMethod.undoToSafePoint.stop', e)
+        out.push(this.buildReceipt('撤销-停止失败', false, false))
       }
       const target: string = GridIdCodec.isValidId(this.prevSafeNodeId) ? this.prevSafeNodeId : this.lastSafeNodeId
       if (stopOk && GridIdCodec.isValidId(target)) {

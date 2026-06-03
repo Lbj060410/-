@@ -1032,12 +1032,18 @@ export class Page1UiStore {
    * 1) 开启吸附时，优先吸附到最近节点；
    * 2) 未命中吸附阈值则自由放置；
    * 3) 最终统一调用 applyManualPlacementPose 同步位姿。
+   * 4) 清除所有目的地相关状态，防止已到达的目的地图标再次显示。
    */
   moveCarByClick(x: number, y: number): void {
     if (this.mapW <= 0 || this.mapH <= 0) return
 
     const nx: number = this.clamp01(x / this.mapW)
     const ny: number = this.clamp01(y / this.mapH)
+
+    // 清除所有目的地状态，防止旧目的地图标显示
+    this.destDraft = ''
+    this.destApplied = ''
+    this.mapTargetPendingSend = false
 
     if (this.gridSnapEnabled) {
       const nearest: GridNode | undefined = this.findNearestNodeByNorm(nx, ny)

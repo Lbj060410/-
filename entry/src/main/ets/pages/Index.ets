@@ -120,7 +120,6 @@ struct Index {
         Stack() {
           Video({
             src: $rawfile('开屏动画.mp4'),
-            previewUri: $rawfile('开屏画面.png')
           })
             .width('100%')
             .height('100%')
@@ -128,15 +127,25 @@ struct Index {
             .controls(false)
             .autoPlay(true)
             .onFinish((): void => {
-              this.clearSplashHardTimeout()
-              this.clearSplashFinishDelay()
-              this.splashFinishDelayId = setTimeout((): void => {
-                this.splashFinishDelayId = -1
+              try {
+                this.clearSplashHardTimeout()
+                this.clearSplashFinishDelay()
+                this.splashFinishDelayId = setTimeout((): void => {
+                  this.splashFinishDelayId = -1
+                  this.showSplash = false
+                }, 500) as number
+              } catch (e) {
+                bengkuiMasterError('Index.splash.onFinish', e)
                 this.showSplash = false
-              }, 1000) as number
+              }
             })
             .onError((): void => {
-              this.skipSplashNow()
+              try {
+                this.skipSplashNow()
+              } catch (e) {
+                bengkuiMasterError('Index.splash.onError', e)
+                this.showSplash = false
+              }
             })
         }
         .width('100%')
@@ -144,7 +153,12 @@ struct Index {
         .backgroundColor('#000000')
         .zIndex(999)
         .onClick((): void => {
-          this.skipSplashNow()
+          try {
+            this.skipSplashNow()
+          } catch (e) {
+            bengkuiMasterError('Index.splash.onClick', e)
+            this.showSplash = false
+          }
         })
       }
     }

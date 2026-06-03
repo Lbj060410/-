@@ -122,6 +122,7 @@ export async function maybeHandleMotionArrive(ctx: IPage1CoordinatorOps, toId: s
   if (s.pathNodes.length > 0 && s.pathIndex >= s.pathNodes.length - 1) {
     await ctx.sendDriveActionDirect(Page1Action.STOP)
     s.setAction('到达终点，停止')
+    s.clearPath()
     replayArchiveService.closeActive('到达终点')
     return
   }
