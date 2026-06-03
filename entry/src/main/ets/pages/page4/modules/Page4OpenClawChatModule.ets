@@ -29,18 +29,18 @@ export class Page4OpenClawChatModule {
 
   private static normalizeOpenClawErrorText(raw: string): string {
     const text: string = raw.trim()
-    if (text.length <= 0) return '请求失败'
+    if (text.length <= 0) return '当前网络波动，请重试'
     const low: string = text.toLowerCase()
     if (low.indexOf('401') >= 0 || low.indexOf('unauthorized') >= 0 || low.indexOf('forbidden') >= 0) {
-      return `鉴权失败（token 无效或与网关不一致）：${text}`
+      return '鉴权失败，请检查网络设置'
     }
     if (low.indexOf('timeout') >= 0 || low.indexOf('timed out') >= 0) {
-      return `网关超时：${text}`
+      return '网络波动，请稍后重试'
     }
     if (low.indexOf('couldn\'t connect to server') >= 0 || low.indexOf('connect') >= 0) {
-      return `网关连接失败：${text}`
+      return '网络连接失败，请检查网络'
     }
-    return text
+    return '当前网络波动，请重试'
   }
 
   static async answerByOpenClaw(deps: Page4OpenClawAnswerDeps): Promise<boolean> {
@@ -60,7 +60,7 @@ export class Page4OpenClawChatModule {
     deps.setAssistantBusy(true)
     const timeoutId: number = deps.setManagedTimeout((): void => {
       deps.setAssistantBusy(false)
-      deps.pushAssistant('查询超时（45秒），请稍后重试。')
+      deps.pushAssistant('当前网络波动，请稍后重试')
     }, 60000)
     let streamMsgId: string = ''
     let streamUpdated: boolean = false
@@ -107,13 +107,14 @@ export class Page4OpenClawChatModule {
       if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
       const errText: string = rs.error.length > 0
         ? this.normalizeOpenClawErrorText(rs.error)
-        : 'OpenClaw 请求失败（未知错误）'
+        : '当前网络波动，请重试'
       deps.logError('sendOpenClawAllFailed', errText)
-      deps.pushAssistant(`OpenClaw 调用失败：${errText}`)
+      deps.pushAssistant(errText)
     } catch (e) {
       if (streamMsgId.length > 0 && deps.cancelStreamingAssistant) deps.cancelStreamingAssistant(streamMsgId)
       const msg: string = e instanceof Error ? e.message : 'unknown error'
       deps.logError('sendOpenClawException', msg)
+      deps.pushAssistant('当前网络波动，请重试')
     } finally {
       deps.clearManagedTimer(timeoutId)
       deps.setAssistantBusy(false)

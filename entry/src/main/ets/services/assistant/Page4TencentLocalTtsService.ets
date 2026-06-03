@@ -6,6 +6,7 @@
  */
 import http from '@ohos.net.http'
 import media from '@ohos.multimedia.media'
+import audio from '@ohos.multimedia.audio'
 import fs from '@ohos.file.fs'
 import util from '@ohos.util'
 import {
@@ -236,6 +237,44 @@ export class Page4TencentLocalTtsService {
   private readonly ttsReadTimeoutMs: number = 45000
   private readonly ttsRequestRetryTimes: number = 1
   private readonly ttsPlayRetryTimes: number = 1
+  private volumeLevel: number = 3
+  private maxMediaVolume: number = 15
+
+  constructor() {
+    this.initMaxMediaVolume()
+  }
+
+  private initMaxMediaVolume(): void {
+    try {
+      const audioManager: audio.AudioManager = audio.getAudioManager()
+      const maxVol: Promise<number> = audioManager.getMaxVolume(audio.AudioVolumeType.MEDIA)
+      maxVol.then((vol: number): void => {
+        if (vol > 0) this.maxMediaVolume = vol
+      }).catch((): void => {
+        this.logInfo('initMaxMediaVolumeFailed', 'use default value 15')
+      })
+    } catch (e) {
+      this.logInfo('initMaxMediaVolumeFailed', this.errorToText(e))
+    }
+  }
+
+  setVolume(level: number): void {
+    this.volumeLevel = Math.max(0, Math.min(10, Math.trunc(level)))
+    try {
+      const audioManager: audio.AudioManager = audio.getAudioManager()
+      // 使用缓存的最大音量，如果没有则用默认值 15
+      const maxVol: number = this.maxMediaVolume > 0 ? this.maxMediaVolume : 15
+      const targetVol: number = Math.round((this.volumeLevel / 10) * maxVol)
+      audioManager.setVolume(audio.AudioVolumeType.MEDIA, Math.max(0, Math.min(maxVol, targetVol)))
+    } catch (e) {
+      this.logInfo('setVolumeFailed', `level=${level}, err=${this.errorToText(e)}`)
+    }
+  }
+
+  private mapVolumeLevel(level: number): number {
+    // 将 0-10 映射到 AVPlayer 的 0.0-1.0 范围
+    return Math.max(0, Math.min(1, level / 10))
+  }
 
   speak(text: string): Promise<void> {
     const content: string = this.normalizeText(text)
@@ -245,7 +284,7 @@ export class Page4TencentLocalTtsService {
     this.logInfo('speakStart', `seq=${seq}, chars=${content.length}`)
     this.queue = this.queue.catch((): void => {}).then(async (): Promise<void> => {
       if (stopTokenAtEnqueue !== this.stopToken) return
-      // 队列是串行的，新播报不应主动打断上一条；只在显式 stop() 时取消。
+      // 队列是串行的，多句话依次播报；只在显式 stop() 时取消。
       const chunks: Array<string> = this.splitToSpeakChunks(content)
       this.logInfo('speakChunks', `seq=${seq}, chunks=${chunks.length}`)
       await this.speakPipeline(chunks, seq, stopTokenAtEnqueue)
@@ -256,6 +295,8 @@ export class Page4TencentLocalTtsService {
   stop(): void {
     this.stopToken += 1
     this.interruptActivePlayback()
+    // 直接重置队列，不等待当前播报完成
+    this.queue = Promise.resolve()
   }
 
   private async speakPipeline(chunks: Array<string>, seq: number, stopTokenAtEnqueue: number): Promise<void> {
@@ -371,7 +412,7 @@ export class Page4TencentLocalTtsService {
       SampleRate: 16000,
       Codec: 'mp3',
       Speed: 0,
-      Volume: 3
+      Volume: this.volumeLevel
     }
     const body: string = JSON.stringify(bodyObj)
     const timestamp: number = Math.floor(Date.now() / 1000)

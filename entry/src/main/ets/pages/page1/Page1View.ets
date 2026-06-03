@@ -19,6 +19,8 @@ import { ReplayReviewPanel } from './components/ReplayReviewPanel'
 
 import { DiagnosticsPanel } from '../../components/diagnostics/DiagnosticsPanel'
 import { CarProtocolService } from '../../services/control/CarProtocolService'
+import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl'
+import type common from '@ohos.app.ability.common'
 
 @Component
 export struct Page1View {
@@ -31,11 +33,30 @@ export struct Page1View {
   aboutToAppear(): void {
     page1Coordinator.bind(this.store)
     this.clearDeferredStart()
-    // 先完成首帧渲染，再启动 Page1 后台任务（TCP / 调度循环），缩短“打开即卡顿”体感。
+
+    // 请求麦克风权限
+    this.requestMicrophonePermission()
+
+    // 先完成首帧渲染，再启动 Page1 后台任务（TCP / 调度循环），缩短”打开即卡顿”体感。
     this.startDeferredTimerId = setTimeout((): void => {
       this.startDeferredTimerId = -1
       void page1Coordinator.start()
     }, 220) as number
+  }
+
+  private requestMicrophonePermission(): void {
+    try {
+      const atManager: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager()
+      atManager.requestPermissionsFromUser(getContext(this) as common.UIAbilityContext, ['ohos.permission.MICROPHONE'])
+        .then((): void => {
+          // 权限请求完成，无需额外处理
+        })
+        .catch((): void => {
+          // 权限请求失败，也无需处理，用户后续使用语音功能时会再次请求
+        })
+    } catch (_) {
+      // 权限请求异常，不影响主流程
+    }
   }
 
   aboutToDisappear(): void {

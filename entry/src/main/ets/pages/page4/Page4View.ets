@@ -371,8 +371,9 @@ export struct Page4View {
   }
 
   private onVoicePressDown(): void {
-    // 按住说话按钮时，停止播报旧的回答
+    // 按下时停止当前播报，等待下一个回答
     page4TencentLocalTtsService.stop()
+    page4TencentLocalTtsService.setVolume(1)
 
     const rs = Page4VoiceFlowModule.onVoicePressDown({
       longPressTimerId: this.longPressTimerId,
@@ -413,6 +414,10 @@ export struct Page4View {
       stopVoiceListening: async (): Promise<string> => await this.stopVoiceListening(),
       voiceHintText: (): string => Page4VoiceUiModule.voiceHintText()
     })
+
+    // 说话完成，恢复正常播报音量
+    page4TencentLocalTtsService.setVolume(3)
+
     this.voicePressing = rs.voicePressing ?? this.voicePressing
     this.voiceRecording = rs.voiceRecording ?? this.voiceRecording
     this.voiceHintShown = rs.voiceHintShown ?? this.voiceHintShown
@@ -430,7 +435,7 @@ export struct Page4View {
     } catch (e) {
       this.voiceRecording = false
       bengkuiMasterError('Page4View.startVoiceListening', e)
-      this.pushAssistant('当前网络波动，请重新输入')
+      // 开始监听失败不显示提示，等待用户重试
     }
   }
 
@@ -445,10 +450,11 @@ export struct Page4View {
     } catch (e) {
       bengkuiMasterError('Page4View.stopVoiceListening', e)
       const msg: string = e instanceof Error ? e.message : String(e)
+      // 只显示一个友好提示
       if (msg.indexOf('no match') >= 0 || msg.indexOf('empty') >= 0) {
-        this.pushAssistant('未识别到语音，请重新输入')
+        this.pushAssistant('未识别到语音内容，请重试')
       } else {
-        this.pushAssistant('当前网络波动，请重新输入')
+        this.pushAssistant('当前网络波动，请重试')
       }
       return ''
     }

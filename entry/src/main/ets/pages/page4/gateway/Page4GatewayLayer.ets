@@ -39,12 +39,12 @@ export class Page4GatewayLayer {
 
   static normalizeGatewayErrorText(raw: string): string {
     const text: string = raw.trim()
-    if (text.length <= 0) return 'unknown'
-    if (text.indexOf('ECONNREFUSED') >= 0) return '连接被拒绝'
-    if (text.indexOf('ETIMEDOUT') >= 0 || text.indexOf('timeout') >= 0) return '连接超时'
+    if (text.length <= 0) return '网络波动，请重试'
+    if (text.indexOf('ECONNREFUSED') >= 0) return '网络连接失败'
+    if (text.indexOf('ETIMEDOUT') >= 0 || text.indexOf('timeout') >= 0) return '网络波动'
     if (text.indexOf('401') >= 0 || text.indexOf('Unauthorized') >= 0) return '鉴权失败'
     if (text.indexOf('403') >= 0 || text.indexOf('Forbidden') >= 0) return '权限不足'
-    return text
+    return '网络波动，请重试'
   }
 
   static isOpenClawHostCooling(state: Page4GatewayState, host: string, nowMs: number): boolean {
