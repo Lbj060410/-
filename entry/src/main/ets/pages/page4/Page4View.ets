@@ -1937,24 +1937,24 @@ export struct Page4View {
 
   private getPoiMappings(): Array<{ node: string, aliases: Array<string> }> {
     return [
-      { node: 'B1', aliases: ['赣州通天岩', '通天岩', '赣州景区集散点', '快递点', '赣州快递点'] },
-      { node: 'D1', aliases: ['庐山西海', '西海', '庐山西海风景区', '葛仙村'] },
-      { node: 'F1', aliases: ['三百山', '安远三百山', '三百山景区'] },
-      { node: 'A2', aliases: ['庐山', '庐山风景区', '九江庐山'] },
-      { node: 'B2', aliases: ['三清山', '上饶三清山', '三清山景区'] },
-      { node: 'F2', aliases: ['龙虎山', '鹰潭龙虎山', '天师府'] },
-      { node: 'G2', aliases: ['婺源篁岭', '篁岭', '婺源'] },
-      { node: 'A4', aliases: ['井冈山', '井冈山风景区', '黄洋界'] },
-      { node: 'B4', aliases: ['武功山', '萍乡武功山', '武功山景区'] },
-      { node: 'F4', aliases: ['明月山', '宜春明月山', '明月山景区'] },
-      { node: 'G4', aliases: ['仙女湖', '新余仙女湖', '仙女湖景区'] },
-      { node: 'A6', aliases: ['滕王阁', '南昌滕王阁', '滕王阁景区'] },
-      { node: 'B6', aliases: ['景德镇古窑民俗博览区', '景德镇古窑', '瑶里古镇'] },
-      { node: 'F6', aliases: ['望仙谷', '上饶望仙谷', '望仙谷景区'] },
-      { node: 'G6', aliases: ['龟峰', '上饶龟峰', '弋阳龟峰'] },
-      { node: 'B7', aliases: ['大觉山', '抚州大觉山', '大觉山景区'] },
-      { node: 'D7', aliases: ['鄱阳湖国家湿地公园', '鄱阳湖湿地', '鄱阳湖'] },
-      { node: 'F7', aliases: ['南昌向塘物流中心', '向塘物流中心', '江西物流中心', '物流中心'] }
+      { node: 'B1', aliases: ['故宫', '北京'] },
+      { node: 'D1', aliases: ['长城', '北京长城'] },
+      { node: 'F1', aliases: ['天坛', '北京天坛'] },
+      { node: 'A2', aliases: ['东方明珠', '上海'] },
+      { node: 'B2', aliases: ['豫园', '上海豫园'] },
+      { node: 'F2', aliases: ['外滩', '上海外滩'] },
+      { node: 'G2', aliases: ['兵马俑', '陕西'] },
+      { node: 'A4', aliases: ['华山', '陕西华山'] },
+      { node: 'B4', aliases: ['大雁塔', '陕西大雁塔'] },
+      { node: 'F4', aliases: ['峨眉山', '四川'] },
+      { node: 'G4', aliases: ['乐山大佛', '四川乐山'] },
+      { node: 'A6', aliases: ['都江堰', '四川都江堰'] },
+      { node: 'B6', aliases: ['西湖', '浙江'] },
+      { node: 'F6', aliases: ['乌镇', '浙江乌镇'] },
+      { node: 'G6', aliases: ['黄山', '安徽'] },
+      { node: 'B7', aliases: ['庐山', '江西'] },
+      { node: 'D7', aliases: ['井冈山', '江西井冈山'] },
+      { node: 'F7', aliases: ['三清山', '江西三清山'] }
     ]
   }
 
